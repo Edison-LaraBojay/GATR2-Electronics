@@ -27,5 +27,6 @@ add_executable(common_tests
 
 target_link_libraries(common_tests GTest::gtest_main)
 
+enable_testing()
 include(GoogleTest)
 gtest_discover_tests(common_tests)
