@@ -5,7 +5,8 @@
 #pragma once
 #include <stdint.h>
 
-namespace gatr2 {
+namespace gatr2
+{
 
 // ---------------------------------------------------------------------------
 // Framing
@@ -109,4 +110,4 @@ inline uint8_t checksum(const uint8_t* data, uint16_t len) {
     return x;
 }
 
-}  // namespace gatr2
+} // namespace gatr2

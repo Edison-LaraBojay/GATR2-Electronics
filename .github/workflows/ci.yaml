@@ -24,3 +24,22 @@ jobs:
 
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install clang-format
+        run: pip install clang-format==22.1.8
+
+      - name: Check formatting
+        run: |
+          files=$(find common brain pico -type f \( -name '*.h' -o -name '*.cpp' \))
+          echo "checking:"
+          echo "$files"
+          clang-format --dry-run --Werror $files
