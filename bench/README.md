@@ -1,4 +1,4 @@
-# bringup
+# bench
 
 Standalone hardware bring-up tests. Each one proves a single piece of hardware
 works on its own, before anything is built on top of it.

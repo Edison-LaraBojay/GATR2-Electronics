@@ -106,7 +106,7 @@ Pull later updates with:
 
 ## Run a bring-up test
 
-    cd bringup/rs485_link
+    cd bench/rs485_link
     python3 pi_transmit.py
 
 See that test's README for wiring and the one-time UART setup.
