@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "MagnetEncoderFootprint")(type "KiCad")(uri "${KIPRJMOD}/MagnetEncoderFootprint.pretty")(options "")(descr ""))
+)

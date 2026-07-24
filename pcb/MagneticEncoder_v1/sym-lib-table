@@ -1,0 +1,5 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "ASM")(type "KiCad")(uri "${KIPRJMOD}/ASM.kicad_sym")(options "")(descr ""))
+  (lib (name "AS5047P-ATSM")(type "KiCad")(uri "C:/Users/mbes1/OneDrive/Desktop/CustomVexElectronics/MagneticEncoder48mm/AS5047P-ATSM/AS5047P-ATSM.kicad_sym")(options "")(descr ""))
+)

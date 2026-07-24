@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "ASM330")(type "KiCad")(uri "${KIPRJMOD}/ASM330.kicad_sym")(options "")(descr ""))
+)
