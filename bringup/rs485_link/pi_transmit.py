@@ -32,7 +32,7 @@ import time
 
 # ----- edit these -----
 MESSAGE = "Hello World"
-SERIAL_PORT = "/dev/ttyAMA1"  # UART5 (GPIO12/13) after dtoverlay=uart5
+SERIAL_PORT = "/dev/ttyAMA5"  # UART5 (GPIO12/13) after dtoverlay=uart5
 BAUD = 115200
 EN_GPIO = 6                   # drives transceiver DE + /RE high for transmit
 INTERVAL_S = 1.0

@@ -24,7 +24,8 @@ drives EN high to transmit.
 GPIO12/13 is UART5. Enable it once:
 
 1. Add `dtoverlay=uart5` to `/boot/firmware/config.txt` and reboot.
-2. Find the device: `ls -l /dev/ttyAMA*`, set `SERIAL_PORT` in the script.
+2. Confirm the device: `ls -l /dev/ttyAMA*`. On the Pi 4 it is `/dev/ttyAMA5`.
+   Set `SERIAL_PORT` in the script if your board names it differently.
 
 Then:
 

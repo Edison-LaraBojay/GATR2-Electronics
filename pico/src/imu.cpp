@@ -1,5 +1,5 @@
 // imu.cpp
-// ASM330LHHG1 over SPI. Only the gyro Z axis is read.
+// ASM330LHHG1 over SPI1. Only the gyro Z axis is read.
 // Datasheet: https://www.st.com/resource/en/datasheet/asm330lhhg1.pdf
 
 #include "imu.h"
@@ -42,6 +42,7 @@ constexpr int32_t kMdpsPerLsb = 70;
 
 constexpr uint8_t kStatusGyroReady = 0x02;
 
+// GP8/9/10/11 are the SPI1 pin group, so the bus is SPI1, not SPI.
 SPISettings g_spi(10000000, MSBFIRST, SPI_MODE3);
 bool        g_ready = false;
 
@@ -49,32 +50,32 @@ void select() { digitalWrite(cfg::kImuCsPin, LOW); }
 void deselect() { digitalWrite(cfg::kImuCsPin, HIGH); }
 
 uint8_t readReg(uint8_t reg) {
-    SPI.beginTransaction(g_spi);
+    SPI1.beginTransaction(g_spi);
     select();
-    SPI.transfer(static_cast<uint8_t>(kReadBit | reg));
-    const uint8_t v = SPI.transfer(0x00);
+    SPI1.transfer(static_cast<uint8_t>(kReadBit | reg));
+    const uint8_t v = SPI1.transfer(0x00);
     deselect();
-    SPI.endTransaction();
+    SPI1.endTransaction();
     return v;
 }
 
 void writeReg(uint8_t reg, uint8_t val) {
-    SPI.beginTransaction(g_spi);
+    SPI1.beginTransaction(g_spi);
     select();
-    SPI.transfer(reg);
-    SPI.transfer(val);
+    SPI1.transfer(reg);
+    SPI1.transfer(val);
     deselect();
-    SPI.endTransaction();
+    SPI1.endTransaction();
 }
 
 int16_t readGyroZRaw() {
-    SPI.beginTransaction(g_spi);
+    SPI1.beginTransaction(g_spi);
     select();
-    SPI.transfer(static_cast<uint8_t>(kReadBit | kRegOutZLG));
-    const uint8_t lo = SPI.transfer(0x00);
-    const uint8_t hi = SPI.transfer(0x00);
+    SPI1.transfer(static_cast<uint8_t>(kReadBit | kRegOutZLG));
+    const uint8_t lo = SPI1.transfer(0x00);
+    const uint8_t hi = SPI1.transfer(0x00);
     deselect();
-    SPI.endTransaction();
+    SPI1.endTransaction();
     return static_cast<int16_t>(static_cast<uint16_t>(lo | (hi << 8)));
 }
 
@@ -84,10 +85,10 @@ void begin() {
     pinMode(cfg::kImuCsPin, OUTPUT);
     deselect();
 
-    SPI.setSCK(cfg::kImuSckPin);
-    SPI.setTX(cfg::kImuMosiPin);
-    SPI.setRX(cfg::kImuMisoPin);
-    SPI.begin();
+    SPI1.setSCK(cfg::kImuSckPin);
+    SPI1.setTX(cfg::kImuMosiPin);
+    SPI1.setRX(cfg::kImuMisoPin);
+    SPI1.begin();
 
     if (readReg(kRegWhoAmI) != kWhoAmIValue) {
         g_ready = false;

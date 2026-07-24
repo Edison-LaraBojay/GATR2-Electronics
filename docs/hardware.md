@@ -99,11 +99,83 @@ them past the ground, which is why they slip far less than drive motor encoders.
 | mm | Calibrated from counts using measured wheel diameter |
 | mg | Accelerometer full scale, unused |
 
+## RS-485 link to the brain
+
+| Field | Value |
+|-------|-------|
+| Part | ST3485ECDR |
+| Vendor | STMicroelectronics |
+| Role | Pi UART to RS-485 differential, into a V5 smart port |
+| Interface | Standard 8-pin 485 pinout, 3.3V, half duplex |
+| Datasheet | https://www.st.com/resource/en/datasheet/st3485e.pdf |
+
+The Pi transmits over UART5 (GPIO12/13). The transceiver converts that to the
+A/B differential pair, which plugs into a V5 smart port. V5 smart port data
+lines are RS-485, so no extra hardware is needed on the brain side and Chomp
+reads it as generic serial.
+
+| Transceiver pin | Connects to | Note |
+|-----------------|-------------|------|
+| DI (4) | Pi GPIO12 / TXD5 (RSTX) | driver input |
+| RO (1) | Pi GPIO13 / RXD5 (RSRX) | receiver output, unused, link is one way |
+| DE (3) and /RE (2) | Pi GPIO6 (EN) | tied together, 10k pulldown to GND |
+| A (6), B (7) | V5 smart port | differential pair |
+| VCC (8) | +3.3V | |
+| GND (5) | GND | |
+
+DE and /RE share one EN line, so the idle state (pulled low) is receive and
+driver disabled. The Pi drives EN high to transmit. The link is one way, Pi to
+brain, so EN stays high in operation. The pulldown means a dead or unbooted Pi
+leaves the bus idle instead of jamming it.
+
+Any 3.3V standard-pinout 485 transceiver is interchangeable here, the pinout is
+the common MAX485 layout.
+
+## Camera
+
+| Field | Value |
+|-------|-------|
+| Part | IMX296 (intended, not finalized) |
+| Interface | CSI |
+| Type | Global shutter, monochrome |
+
+Global shutter avoids the rolling-shutter skew a moving robot would put into tag
+corners, and bearing accuracy depends on corner positions. Monochrome is enough
+for AprilTags, the detector runs on grayscale, and it is cheaper and lower
+bandwidth than color. See the Pi platform note for why the vision workload is
+light on memory.
+
+## Pi platform
+
+| Field | Value |
+|-------|-------|
+| Board | Raspberry Pi 4 |
+| RAM | 2 GB |
+| OS | Pi OS Bookworm, headless (Lite) |
+
+2GB is enough. The vision plus fusion app is a few hundred MB resident: OpenCV
+and Python are the bulk, one mono frame is about 1.6 MB, the EKF is negligible.
+AprilTag detection is classical computer vision with no model weights, so it is
+memory light. The real constraint is CPU time per frame, tuned with resolution
+and frame rate, not RAM. 4GB was considered but the runtime never needs it, and
+the things that could (source builds, a desktop) are avoided by using prebuilt
+packages and developing on a laptop. RAM is soldered, so the only argument for
+4GB is reuse in a heavier future project.
+
+### Pi GPIO usage
+
+| GPIO | Pin | Use |
+|------|-----|-----|
+| 12 | 32 | UART5 TXD, RSTX to transceiver DI |
+| 13 | 33 | UART5 RXD, RSRX from transceiver RO (unused) |
+| 6 | 31 | RS-485 EN (DE + /RE), 10k pulldown |
+
+UART5 needs `dtoverlay=uart5` and presents as `/dev/ttyAMA5`. See
+`docs/pi_setup.md`.
+
 ## To be filled in
 
-Parts not yet selected. Add a row and the reasoning as each is chosen.
+Add a section and the reasoning as each is chosen.
 
-- Camera module (IMX296 global shutter mono is the intended sensor)
-- RS-485 transceiver for the Pi to brain link
 - Regulators and protection on the Pi HAT
 - Connectors for the encoder harness
