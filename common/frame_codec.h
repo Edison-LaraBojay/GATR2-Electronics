@@ -12,8 +12,11 @@ namespace gatr2
 
 // Fixed header sizes, sync through the last field before the variable part.
 constexpr uint16_t kSensorHeaderLen = 10;
-constexpr uint16_t kPoseHeaderLen   = 22;
+constexpr uint16_t kPoseHeaderLen   = 36;
 constexpr uint16_t kLandmarkLen     = 8;
+
+// Command frames have no variable part.
+constexpr uint16_t kCommandFrameLen = 21;
 
 // True if every set bit in the mask has a width entry.
 bool sensorMaskValid(uint16_t mask);
@@ -29,11 +32,13 @@ uint16_t poseFrameLen(uint8_t n_landmarks);
 // or would not fit in cap.
 uint16_t encodeSensorFrame(const SensorSample& in, uint8_t* buf, uint16_t cap);
 uint16_t encodePoseFrame(const PoseFrame& in, uint8_t* buf, uint16_t cap);
+uint16_t encodeCommandFrame(const CommandFrame& in, uint8_t* buf, uint16_t cap);
 
 // Decode one whole frame. False on bad sync, wrong length, unknown type,
 // unknown mask bit, too many landmarks, or checksum mismatch.
 bool decodeSensorFrame(const uint8_t* buf, uint16_t len, SensorSample& out);
 bool decodePoseFrame(const uint8_t* buf, uint16_t len, PoseFrame& out);
+bool decodeCommandFrame(const uint8_t* buf, uint16_t len, CommandFrame& out);
 
 // Byte stream reader. Scans for the sync pair, buffers one frame, validates
 // the checksum, and re-locks on a later sync pair after garbage.

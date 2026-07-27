@@ -1,0 +1,113 @@
+<?xml version="1.0"?>
+<!-- Full robot configuration. The pipeline skeleton is fixed; XML is the
+     complete declaration of which implementations comprise the running
+     system. Ids are opaque identities matched by reference. -->
+<System>
+
+    <Loop rate_hz="100"/>
+
+    <Resources>
+        <Resource id="pico_uart" type="resource/linux_serial_link">
+            <Device path="/dev/ttyAMA0"/>
+            <Baud value="921600"/>
+        </Resource>
+
+        <Resource id="pico_telemetry" type="resource/pico_telemetry">
+            <Serial resource_id="pico_uart"/>
+        </Resource>
+
+        <Resource id="brain_uart" type="resource/linux_serial_link">
+            <Device path="/dev/ttyAMA2"/>
+            <Baud value="115200"/>
+        </Resource>
+
+        <Resource id="override_field" type="resource/field_map">
+            <Landmark id="center_goal">
+                <NominalPose x_m="1.8" y_m="1.8" heading_deg="0"/>
+            </Landmark>
+        </Resource>
+    </Resources>
+
+    <Sensors>
+        <Sensor id="tracking_encoder_a" type="sensor/pico_encoder_channel">
+            <Source resource_id="pico_telemetry" channel="0"/>
+            <Calibration counts_per_revolution="4000" invert="false"/>
+        </Sensor>
+
+        <Sensor id="tracking_encoder_b" type="sensor/pico_encoder_channel">
+            <Source resource_id="pico_telemetry" channel="1"/>
+            <Calibration counts_per_revolution="4000" invert="false"/>
+        </Sensor>
+
+        <Sensor id="tracking_encoder_c" type="sensor/pico_encoder_channel">
+            <Source resource_id="pico_telemetry" channel="2"/>
+            <Calibration counts_per_revolution="4000" invert="false"/>
+        </Sensor>
+
+        <Sensor id="robot_imu" type="sensor/pico_imu_channel">
+            <Source resource_id="pico_telemetry" channel="imu"/>
+        </Sensor>
+    </Sensors>
+
+    <Pipeline>
+
+        <CommandCollection type="commands/vex_brain_serial">
+            <Serial resource_id="brain_uart"/>
+        </CommandCollection>
+
+        <Preprocessing type="preprocessing/configured_collection">
+            <Preprocessor id="tracking_motion"
+                          type="preprocessor/tracking_wheel_odometry">
+                <TrackingWheel sensor_id="tracking_encoder_a" label="left"
+                               radius_m="0.0254"
+                               position_x_m="0.000" position_y_m="0.130"
+                               measurement_angle_deg="0" direction="positive"/>
+                <TrackingWheel sensor_id="tracking_encoder_b" label="right"
+                               radius_m="0.0254"
+                               position_x_m="0.000" position_y_m="-0.130"
+                               measurement_angle_deg="0" direction="positive"/>
+                <TrackingWheel sensor_id="tracking_encoder_c" label="rear"
+                               radius_m="0.0254"
+                               position_x_m="-0.120" position_y_m="0.000"
+                               measurement_angle_deg="90" direction="positive"/>
+                <Output artifact_id="tracking_motion_delta"/>
+            </Preprocessor>
+
+            <Preprocessor id="imu_normalization"
+                          type="preprocessor/imu_normalization">
+                <Input sensor_id="robot_imu"/>
+                <Calibration bias_samples="200"/>
+                <Output artifact_id="imu_orientation"/>
+            </Preprocessor>
+        </Preprocessing>
+
+        <LocalizationPrediction type="localization/wheel_imu_prediction">
+            <Motion artifact_id="tracking_motion_delta"/>
+            <Orientation artifact_id="imu_orientation"/>
+        </LocalizationPrediction>
+
+        <Perception type="perception/noop"/>
+
+        <Association type="association/noop"/>
+
+        <PoseCorrection type="pose_correction/noop"/>
+
+        <WorldPrediction type="world_prediction/landmark_map">
+            <FieldMap resource_id="override_field"/>
+        </WorldPrediction>
+
+        <Publishing type="publishing/vex_brain">
+            <Serial resource_id="brain_uart"/>
+            <Health fresh_ms="150">
+                <Encoder sensor_id="tracking_encoder_a"/>
+                <Encoder sensor_id="tracking_encoder_b"/>
+                <Encoder sensor_id="tracking_encoder_c"/>
+                <Gyro sensor_id="robot_imu"/>
+                <BiasCal artifact_id="imu_orientation"/>
+            </Health>
+            <WorldObject object_id="center_goal" wire_id="1"/>
+        </Publishing>
+
+    </Pipeline>
+
+</System>

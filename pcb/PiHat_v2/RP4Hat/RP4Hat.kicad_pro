@@ -638,6 +638,10 @@
     [
       "48e8712f-9e83-40b5-843b-6f1e3e03f403",
       "Root"
+    ],
+    [
+      "f3ef1434-28ca-440b-bf4f-425c3a27f7c4",
+      "LinearRegulator"
     ]
   ],
   "text_variables": {}

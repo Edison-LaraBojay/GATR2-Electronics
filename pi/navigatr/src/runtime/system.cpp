@@ -1,0 +1,381 @@
+// system.cpp
+
+#include "runtime/system.h"
+
+#include <fstream>
+#include <set>
+#include <sstream>
+
+#include "config/config_node.h"
+#include "impl/resources/serial_links.h"
+#include "tinyxml2/tinyxml2.h"
+
+namespace navigatr
+{
+
+namespace
+{
+
+bool readFile(const std::string& path, std::string& out, std::string& err) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        err = "cannot open " + path;
+        return false;
+    }
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    out = ss.str();
+    return true;
+}
+
+// Carries a factory signature type into the generic slot builder.
+template <typename T>
+struct Tag {
+    using type = T;
+};
+
+// Only the listed children may appear, each at most once for singular ones.
+bool checkChildren(const ConfigNode& parent, const std::set<std::string>& allowed,
+                   const std::set<std::string>& repeatable, std::string& err) {
+    std::set<std::string> seen;
+    for (ConfigNode c = parent.child(); c.valid(); c = c.next()) {
+        const std::string name = c.name();
+        if (allowed.find(name) == allowed.end()) {
+            err = parent.path() + " has unknown element " + name;
+            return false;
+        }
+        if (repeatable.find(name) == repeatable.end() && !seen.insert(name).second) {
+            err = parent.path() + " has more than one " + name;
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+std::unique_ptr<System> System::buildFromFile(const std::string& path,
+                                              const FunctionRegistry& functions,
+                                              std::string& err, const BuildOptions& options) {
+    std::string xml;
+    if (!readFile(path, xml, err)) {
+        return nullptr;
+    }
+    return buildFromString(xml.c_str(), functions, err, options);
+}
+
+std::unique_ptr<System> System::buildFromString(const char*             xml,
+                                                const FunctionRegistry& functions,
+                                                std::string&            err,
+                                                const BuildOptions&     options) {
+    std::unique_ptr<System> system(new System());
+    if (!system->build(xml, functions, options, err)) {
+        return nullptr;   // atomic: the partial candidate dies here
+    }
+    return system;
+}
+
+bool System::build(const char* xml, const FunctionRegistry& functions,
+                   const BuildOptions& options, std::string& err) {
+    tinyxml2::XMLDocument doc;
+    if (doc.Parse(xml) != tinyxml2::XML_SUCCESS) {
+        err = std::string("cannot parse xml: ") + doc.ErrorStr();
+        return false;
+    }
+    const tinyxml2::XMLElement* root_e = doc.FirstChildElement("System");
+    if (root_e == nullptr) {
+        err = "root element must be System";
+        return false;
+    }
+    const ConfigNode root{root_e};
+
+    if (!checkChildren(root, {"Loop", "Resources", "Sensors", "Pipeline"}, {}, err)) {
+        return false;
+    }
+
+    const ConfigNode loop = root.child("Loop");
+    if (loop.valid()) {
+        if (!loop.getDouble("rate_hz", loop_rate_hz_, loop_rate_hz_, err)) {
+            return false;
+        }
+        if (loop_rate_hz_ <= 0.0) {
+            err = loop.path() + ": rate_hz must be positive";
+            return false;
+        }
+    }
+
+    // Resources: index everything, apply replay overrides, then build with
+    // dependency resolution so declaration order never matters.
+    ResourceStoreBuilder resource_builder(functions, &warnings_);
+    const ConfigNode     resources_node = root.child("Resources");
+    if (resources_node.valid()) {
+        if (!checkChildren(resources_node, {"Resource"}, {"Resource"}, err)) {
+            return false;
+        }
+        bool ok = true;
+        resources_node.forEach("Resource", [&](const ConfigNode& r) {
+            if (ok) {
+                ok = resource_builder.index(r, err);
+            }
+        });
+        if (!ok) {
+            return false;
+        }
+    }
+    for (const auto& kv : options.replay) {
+        if (!resource_builder.overrideFactory(ResourceId{kv.first},
+                                              fileReplayFactoryForPath(kv.second), err)) {
+            return false;
+        }
+    }
+    if (!resource_builder.buildAll(err)) {
+        return false;
+    }
+    resources_ = resource_builder.take();
+
+    // Sensors: generic builder owns id/type/duplicates; the selected factory
+    // owns everything else in its subtree.
+    const ConfigNode sensors_node = root.child("Sensors");
+    if (sensors_node.valid()) {
+        if (!checkChildren(sensors_node, {"Sensor"}, {"Sensor"}, err)) {
+            return false;
+        }
+        SensorInitializationContext context;
+        context.resources = &resources_;
+        context.functions = &functions;
+        context.warnings  = &warnings_;
+
+        bool ok = true;
+        sensors_node.forEach("Sensor", [&](const ConfigNode& s) {
+            if (!ok) {
+                return;
+            }
+            const SensorId    id{s.attr("id")};
+            const FunctionKey type{s.attr("type")};
+            if (id.empty() || type.empty()) {
+                err = s.path() + ": Sensor needs id and type";
+                ok  = false;
+                return;
+            }
+            for (const SensorEntry& seen : sensors_) {
+                if (seen.id == id) {
+                    err = s.path() + ": duplicate Sensor id " + id.value;
+                    ok  = false;
+                    return;
+                }
+            }
+            const SensorMakeFunction* factory =
+                functions.find<SensorMakeFunction>(type, err);
+            if (factory == nullptr) {
+                err = s.path() + ": " + err;
+                ok  = false;
+                return;
+            }
+            auto built = (*factory)(s, context, err);
+            if (built == nullptr) {
+                ok = false;
+                return;
+            }
+            catalog_.add(id, built->outputPayload());
+            sensor_results_[id] = SensorRecord{};
+            sensors_.push_back(SensorEntry{id, std::move(built), "Sensor/" + id.value});
+        });
+        if (!ok) {
+            return false;
+        }
+    }
+
+    const ConfigNode pipeline = root.child("Pipeline");
+    if (!pipeline.valid()) {
+        err = root.path() + ": missing Pipeline section";
+        return false;
+    }
+    if (!checkChildren(pipeline,
+                       {"CommandCollection", "Preprocessing", "LocalizationPrediction",
+                        "Perception", "Association", "PoseCorrection", "WorldPrediction",
+                        "Publishing"},
+                       {}, err)) {
+        return false;
+    }
+
+    SlotInitializationContext slot_context;
+    slot_context.resources = &resources_;
+    slot_context.sensors   = &catalog_;
+    slot_context.functions = &functions;
+    slot_context.warnings  = &warnings_;
+
+    // Every slot must be present exactly once and explicitly typed. An
+    // intentionally unused slot selects its category noop; omission is an
+    // error, never an implicit default.
+    const auto slotNode = [&](const char* slot_name, ConfigNode& out_node,
+                              FunctionKey& out_type) {
+        const ConfigNode node = pipeline.child(slot_name);
+        if (!node.valid()) {
+            err = pipeline.path() + " is missing " + slot_name +
+                  "; select an implementation or the category noop";
+            return false;
+        }
+        out_type = FunctionKey{node.attr("type")};
+        if (out_type.empty()) {
+            err = node.path() + ": needs an explicit type";
+            return false;
+        }
+        out_node = node;
+        return true;
+    };
+
+    const auto buildSlot = [&](const char* slot_name, auto& target, auto make_tag,
+                               auto& context, std::string& label) {
+        using MakeFunction = typename decltype(make_tag)::type;
+        ConfigNode  node;
+        FunctionKey type;
+        if (!slotNode(slot_name, node, type)) {
+            return false;
+        }
+        const MakeFunction* factory = functions.find<MakeFunction>(type, err);
+        if (factory == nullptr) {
+            err = node.path() + ": " + err;
+            return false;
+        }
+        label  = std::string(slot_name) + "/" + type.value;
+        target = (*factory)(node, context, err);
+        return target != nullptr;
+    };
+
+    if (!buildSlot("CommandCollection", commands_, Tag<CommandsMakeFunction>{},
+                   slot_context, slot_labels_[0])) {
+        return false;
+    }
+
+    PreprocessorInitializationContext preprocessing_context;
+    preprocessing_context.sensors   = &catalog_;
+    preprocessing_context.functions = &functions;
+    preprocessing_context.warnings  = &warnings_;
+    if (!buildSlot("Preprocessing", preprocessing_, Tag<PreprocessingMakeFunction>{},
+                   preprocessing_context, slot_labels_[1])) {
+        return false;
+    }
+    slot_context.artifacts = preprocessing_->produces();
+
+    if (!buildSlot("LocalizationPrediction", localization_, Tag<LocalizationMakeFunction>{},
+                   slot_context, slot_labels_[2])) {
+        return false;
+    }
+    if (!buildSlot("Perception", perception_, Tag<PerceptionMakeFunction>{}, slot_context,
+                   slot_labels_[3])) {
+        return false;
+    }
+    slot_context.observations = perception_->produces();
+
+    if (!buildSlot("Association", association_, Tag<AssociationMakeFunction>{},
+                   slot_context, slot_labels_[4])) {
+        return false;
+    }
+    slot_context.associations = association_->produces();
+
+    if (!buildSlot("PoseCorrection", pose_correction_, Tag<PoseCorrectionMakeFunction>{},
+                   slot_context, slot_labels_[5])) {
+        return false;
+    }
+    if (!buildSlot("WorldPrediction", world_prediction_, Tag<WorldPredictionMakeFunction>{},
+                   slot_context, slot_labels_[6])) {
+        return false;
+    }
+    if (!buildSlot("Publishing", publishing_, Tag<PublishingMakeFunction>{}, slot_context,
+                   slot_labels_[7])) {
+        return false;
+    }
+    return true;
+}
+
+void System::step(MonotonicTime now) {
+    ++cycle_;
+    ++diagnostics_.cycles;
+
+    // Sensor Collection: the framework owns record bookkeeping; sensors only
+    // report state and publications.
+    SensorExecutionInput sensor_input;
+    sensor_input.now         = now;
+    sensor_input.cycle       = cycle_;
+    sensor_input.diagnostics = &diagnostics_;
+
+    for (SensorEntry& entry : sensors_) {
+        const SensorPollResult poll   = entry.sensor->poll(sensor_input);
+        SensorRecord&          record = sensor_results_[entry.id];
+        record.state                  = poll.state;
+        record.lastPolledAt           = now;
+        record.diagnostic             = poll.diagnostic;
+        if (poll.publication.has_value()) {
+            StoredSensorSample stored;
+            stored.measuredAt = poll.publication->measuredAt;
+            stored.receivedAt = now;
+            stored.sequence =
+                record.latest.has_value() ? record.latest->sequence + 1 : 1;
+            stored.payload = poll.publication->payload;
+            record.latest  = std::move(stored);
+        }
+        FunctionStatus s = FunctionStatus::kOk;
+        if (poll.state == SensorState::kFault) {
+            s = FunctionStatus::kFault;
+        } else if (poll.state != SensorState::kValid) {
+            s = FunctionStatus::kNoData;
+        }
+        diagnostics_.note(entry.label, s);
+    }
+
+    CommandsOutput commands_out = commands_->run({command_, now, &diagnostics_});
+    command_                    = commands_out.command;
+    diagnostics_.note(slot_labels_[0], commands_out.status);
+
+    PreprocessingOutput pre_out =
+        preprocessing_->run({sensor_results_, now, cycle_, &diagnostics_});
+    diagnostics_.note(slot_labels_[1], pre_out.status);
+
+    LocalizationOutput loc_out =
+        localization_->run({sensor_results_, pre_out.artifacts, command_, robot_, now});
+    robot_ = loc_out.robot;
+    diagnostics_.note(slot_labels_[2], loc_out.status);
+
+    PerceptionOutput per_out = perception_->run({sensor_results_, pre_out.artifacts, now});
+    diagnostics_.note(slot_labels_[3], per_out.status);
+
+    AssociationOutput assoc_out =
+        association_->run({per_out.observations, robot_, world_, now});
+    diagnostics_.note(slot_labels_[4], assoc_out.status);
+
+    PoseCorrectionOutput corr_out = pose_correction_->run(
+        {pre_out.artifacts, per_out.observations, assoc_out.associations, robot_, now});
+    robot_ = corr_out.robot;
+    diagnostics_.note(slot_labels_[5], corr_out.status);
+
+    WorldPredictionOutput world_out = world_prediction_->run(
+        {per_out.observations, assoc_out.associations, robot_, world_, now});
+    world_ = world_out.world;
+    diagnostics_.note(slot_labels_[6], world_out.status);
+
+    PublishingOutput pub_out =
+        publishing_->run({sensor_results_, pre_out.artifacts, per_out.observations,
+                          assoc_out.associations, robot_, world_, command_, now});
+    diagnostics_.note(slot_labels_[7], pub_out.status);
+}
+
+void System::reset() {
+    for (SensorEntry& entry : sensors_) {
+        entry.sensor->reset();
+        sensor_results_[entry.id] = SensorRecord{};
+    }
+    commands_->reset();
+    preprocessing_->reset();
+    localization_->reset();
+    perception_->reset();
+    association_->reset();
+    pose_correction_->reset();
+    world_prediction_->reset();
+    publishing_->reset();
+
+    robot_   = RobotState{};
+    world_   = WorldState{};
+    command_ = CommandState{};
+}
+
+} // namespace navigatr

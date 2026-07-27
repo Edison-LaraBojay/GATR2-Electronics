@@ -14,14 +14,16 @@ handshake.
 
 ```
 sensors --> Pico --> Pi --> brain --> motors
-              |        |
-        sensor frame   pose frame
-         (type 0x01)   (type 0x02)
+              |        |  ^
+        sensor frame   |  | command frame (type 0x03)
+         (type 0x01)   pose frame
+                       (type 0x02)
 ```
 
-Sensor frames travel Pico to Pi. Pose frames travel Pi to brain. Both directions
-are one way. A receiver never acknowledges, never requests retransmission, and
-never blocks waiting on its upstream.
+Sensor frames travel Pico to Pi. Pose frames travel Pi to brain. Command frames
+travel brain to Pi. Every link is one way. A receiver never acknowledges, never
+requests retransmission, and never blocks waiting on its upstream. A command
+that is lost is simply resent by the brain on its own schedule.
 
 ## Global rules
 
@@ -75,6 +77,7 @@ Every frame has the same envelope:
 |------|------|-----------|----------|
 | 0x01 | Sensor frame | Pico to Pi | `kFrameSensor` |
 | 0x02 | Pose frame | Pi to brain | `kFramePose` |
+| 0x03 | Command frame | Brain to Pi | `kFrameCommand` |
 
 ### Checksum
 
@@ -181,14 +184,19 @@ The trailing `CD` is the XOR of the preceding 22 bytes.
 
 ## Pose frame (type 0x02)
 
-Pi to brain. Carries the fused pose plus any live landmark observations. Pose is
-relative to the zero point. There is no z.
+Pi to brain. Carries the fused pose, the absolute pose of the one world object
+the brain requested, and any live landmark observations. Pose is relative to
+the zero point. There is no z.
 
 ```
-+------+------+------+-----+----------+-------+-------+--------------+--------+-------------+-----------+-----+
-| 0xAA | 0x55 | 0x02 | seq | stamp_ms | x_mm  | y_mm  | heading_cdeg | status | n_landmarks | landmarks | xor |
-|      |      |      | u8  | u32      | i32   | i32   | i32          | u8     | u8          | n entries |     |
-+------+------+------+-----+----------+-------+-------+--------------+--------+-------------+-----------+-----+
++------+------+------+-----+----------+-------+-------+--------------+--------+
+| 0xAA | 0x55 | 0x02 | seq | stamp_ms | x_mm  | y_mm  | heading_cdeg | status |
+|      |      |      | u8  | u32      | i32   | i32   | i32          | u16    |
++------+------+------+-----+----------+-------+-------+--------------+--------+
++-----------+----------+----------+------------------+-------------+-----------+-----+
+| object_id | obj_x_mm | obj_y_mm | obj_heading_cdeg | n_landmarks | landmarks | xor |
+| u8        | i32      | i32      | i32              | u8          | n entries |     |
++-----------+----------+----------+------------------+-------------+-----------+-----+
 ```
 
 | Offset | Field | Type | Size | Description |
@@ -201,14 +209,23 @@ relative to the zero point. There is no z.
 | 8 | x_mm | i32 | 4 | Position x, relative to the zero point |
 | 12 | y_mm | i32 | 4 | Position y, relative to the zero point |
 | 16 | heading_cdeg | i32 | 4 | Heading in centidegrees |
-| 20 | status | u8 | 1 | Health and validity bits, see the status table |
-| 21 | n_landmarks | u8 | 1 | Number of landmark entries that follow, 0 to 8 |
-| 22 | landmarks | varies | 8 each | `n_landmarks` entries, see the entry layout |
+| 20 | status | u16 | 2 | Health and validity bits, see the status table |
+| 22 | object_id | u8 | 1 | Id of the requested world object |
+| 23 | obj_x_mm | i32 | 4 | Object absolute x |
+| 27 | obj_y_mm | i32 | 4 | Object absolute y |
+| 31 | obj_heading_cdeg | i32 | 4 | Object absolute heading in centidegrees |
+| 35 | n_landmarks | u8 | 1 | Number of landmark entries that follow, 0 to 8 |
+| 36 | landmarks | varies | 8 each | `n_landmarks` entries, see the entry layout |
 | last | xor | u8 | 1 | Frame checksum |
 
-### Status byte
+The object fields are always present so the frame layout is stable. The brain
+reads them only when `kStatusObjValid` is set. An object can be valid without
+being currently observed: a map or last-seen estimate keeps `kStatusObjValid`
+set while `kStatusObjObserved` is clear.
 
-The brain reads this byte for `isValid` and for health gating. Each bit is
+### Status word
+
+The brain reads this word for `isValid` and for health gating. Each bit is
 independent.
 
 | Bit | Constant | Set when |
@@ -218,6 +235,10 @@ independent.
 | 2 | `kStatusGyroHealthy` | Gyro is reporting and sane |
 | 3 | `kStatusVisionAlive` | Vision is producing detections |
 | 4 | `kStatusBiasCal` | Init gyro bias calibration completed cleanly |
+| 5 | `kStatusLocInit` | Localization was initialized from a commanded pose |
+| 6 | `kStatusObjRequested` | The brain has an active object request |
+| 7 | `kStatusObjValid` | Object fields hold a usable estimate |
+| 8 | `kStatusObjObserved` | The object was seen this cycle, not just mapped |
 
 ### Landmark entry
 
@@ -240,7 +261,8 @@ threshold on the wire.
 
 ### Pose frame example
 
-A valid pose with all health bits set and no landmarks.
+A valid pose, all health bits set, object 3 held as a valid map estimate, no
+landmarks in view.
 
 | Field | Value | Bytes on the wire |
 |-------|-------|-------------------|
@@ -249,21 +271,95 @@ A valid pose with all health bits set and no landmarks.
 | x_mm | 1500 | `DC 05 00 00` |
 | y_mm | -250 | `06 FF FF FF` |
 | heading_cdeg | 9000 (90.00 deg) | `28 23 00 00` |
-| status | 0x1F (bits 0 to 4) | `1F` |
+| status | 0x00FF (bits 0 to 7) | `FF 00` |
+| object_id | 3 | `03` |
+| obj_x_mm | 2000 | `D0 07 00 00` |
+| obj_y_mm | 1000 | `E8 03 00 00` |
+| obj_heading_cdeg | 0 | `00 00 00 00` |
 | n_landmarks | 0 | `00` |
 
-Full frame (23 bytes):
+Full frame (37 bytes):
 
 ```
-AA 55 02 2A 88 13 00 00 DC 05 00 00 06 FF FF FF 28 23 00 00 1F 00 78
+AA 55 02 2A 88 13 00 00 DC 05 00 00 06 FF FF FF 28 23 00 00 FF 00 03 D0
+07 00 00 E8 03 00 00 00 00 00 00 00 A7
 ```
 
-The trailing `78` is the XOR of the preceding 22 bytes.
+The trailing `A7` is the XOR of the preceding 36 bytes.
+
+## Command frame (type 0x03)
+
+Brain to Pi. Carries autonomous intent: initialize localization, select the
+world object to track, control streaming. Fixed length, 21 bytes. Fields a
+command does not use are zero on the wire.
+
+```
++------+------+------+-----+---------+-------+-------+--------------+------+-----------+-------+-----+
+| 0xAA | 0x55 | 0x03 | seq | command | x_mm  | y_mm  | heading_cdeg | mode | object_id | flags | xor |
+|      |      |      | u8  | u8      | i32   | i32   | i32          | u8   | u8        | u8    |     |
++------+------+------+-----+---------+-------+-------+--------------+------+-----------+-------+-----+
+```
+
+| Offset | Field | Type | Size | Description |
+|--------|-------|------|------|-------------|
+| 0 | sync0 | u8 | 1 | `0xAA` |
+| 1 | sync1 | u8 | 1 | `0x55` |
+| 2 | type | u8 | 1 | `0x03` |
+| 3 | seq | u8 | 1 | Sequence counter, increments per frame, wraps 255 to 0 |
+| 4 | command | u8 | 1 | Command code, see the command table |
+| 5 | x_mm | i32 | 4 | Expected pose x, `kCmdInitPose` only |
+| 9 | y_mm | i32 | 4 | Expected pose y, `kCmdInitPose` only |
+| 13 | heading_cdeg | i32 | 4 | Expected heading, `kCmdInitPose` only |
+| 17 | mode | u8 | 1 | Localization configuration selector |
+| 18 | object_id | u8 | 1 | Requested world object, `kCmdSelectObject` only |
+| 19 | flags | u8 | 1 | Command flag bits |
+| 20 | xor | u8 | 1 | Frame checksum |
+
+### Command codes
+
+| Code | Constant | Meaning |
+|------|----------|---------|
+| 0x01 | `kCmdInitPose` | Reset localization to the given field pose |
+| 0x02 | `kCmdSelectObject` | Request `object_id`, or clear the request when the flag is off |
+| 0x03 | `kCmdSetStream` | Turn pose streaming on or off |
+
+An unknown command code decodes fine and is ignored by the Pi, so a newer brain
+can talk to an older Pi without breaking the link.
+
+### Command flags
+
+| Bit | Constant | Meaning |
+|-----|----------|---------|
+| 0 | `kCmdFlagObjectRequested` | With `kCmdSelectObject`: set requests the object, clear cancels |
+| 1 | `kCmdFlagStreamOn` | With `kCmdSetStream`: set starts streaming, clear stops |
+
+### Command frame example
+
+Initialize localization at (610 mm, 457 mm, 90.00 deg).
+
+| Field | Value | Bytes on the wire |
+|-------|-------|-------------------|
+| seq | 9 | `09` |
+| command | 0x01 init pose | `01` |
+| x_mm | 610 | `62 02 00 00` |
+| y_mm | 457 | `C9 01 00 00` |
+| heading_cdeg | 9000 | `28 23 00 00` |
+| mode | 0 | `00` |
+| object_id | 0 | `00` |
+| flags | 0 | `00` |
+
+Full frame (21 bytes):
+
+```
+AA 55 03 09 01 62 02 00 00 C9 01 00 00 28 23 00 00 00 00 00 57
+```
+
+The trailing `57` is the XOR of the preceding 20 bytes.
 
 ## Structs are not the wire
 
-The structs in `frames.h` (`SensorSample`, `PoseFrame`, `LandmarkObs`) are
-in-memory conveniences. Their byte layout differs from the wire because of
+The structs in `frames.h` (`SensorSample`, `PoseFrame`, `LandmarkObs`,
+`CommandFrame`) are in-memory conveniences. Their byte layout differs from the wire because of
 padding and fixed-size arrays. Only the codec maps between structs and bytes.
 Never copy a struct onto the wire, and never overlay a struct on received bytes.
 
@@ -276,7 +372,8 @@ mismatches.
 
 ## Language parity
 
-The Pi is Python. `common/frames.py` is generated from `common/frames.h` by a
-generator script, so C++ is the single source of truth and the two never drift.
-`frames.py` is never edited by hand. A cross-language test feeds both
-implementations the same byte strings and asserts they agree.
+All three devices are C++ and share `common/frames.h` and the codec directly,
+so there is one implementation of the wire format in production code. Python
+appears only in host-side tooling (bench scripts, log analysis); any Python
+that speaks frames is checked against the C++ codec with shared byte vectors,
+never trusted on its own.

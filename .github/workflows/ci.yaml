@@ -25,6 +25,25 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
 
+  navigatr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gtest
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtest-dev cmake
+
+      - name: Configure
+        run: cmake -S pi/navigatr -B build-navigatr
+
+      - name: Build
+        run: cmake --build build-navigatr -j
+
+      - name: Run tests
+        run: ctest --test-dir build-navigatr --output-on-failure
+
   format:
     runs-on: ubuntu-latest
     # Advisory for now. clang-format does not run on the current dev machine,
@@ -42,7 +61,8 @@ jobs:
 
       - name: Check formatting
         run: |
-          files=$(find common brain pico -type f \( -name '*.h' -o -name '*.cpp' \))
+          files=$(find common brain pico pi -type f \( -name '*.h' -o -name '*.cpp' \) \
+            -not -path '*/third_party/*' -not -path '*/.pio/*')
           echo "checking:"
           echo "$files"
           clang-format --dry-run --Werror $files

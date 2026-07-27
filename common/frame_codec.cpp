@@ -159,8 +159,12 @@ uint16_t encodePoseFrame(const PoseFrame& in, uint8_t* buf, uint16_t cap) {
     wr32(buf + 8, static_cast<uint32_t>(in.x_mm));
     wr32(buf + 12, static_cast<uint32_t>(in.y_mm));
     wr32(buf + 16, static_cast<uint32_t>(in.heading_cdeg));
-    buf[20] = in.status;
-    buf[21] = in.n_landmarks;
+    wr16(buf + 20, in.status);
+    buf[22] = in.object_id;
+    wr32(buf + 23, static_cast<uint32_t>(in.obj_x_mm));
+    wr32(buf + 27, static_cast<uint32_t>(in.obj_y_mm));
+    wr32(buf + 31, static_cast<uint32_t>(in.obj_heading_cdeg));
+    buf[35] = in.n_landmarks;
 
     uint16_t at = kPoseHeaderLen;
     for (uint8_t i = 0; i < in.n_landmarks; ++i) {
@@ -184,7 +188,7 @@ bool decodePoseFrame(const uint8_t* buf, uint16_t len, PoseFrame& out) {
     if (buf[0] != kSync0 || buf[1] != kSync1 || buf[2] != kFramePose) {
         return false;
     }
-    const uint8_t n = buf[21];
+    const uint8_t n = buf[35];
     if (n > kMaxLandmarks || poseFrameLen(n) != len) {
         return false;
     }
@@ -192,14 +196,18 @@ bool decodePoseFrame(const uint8_t* buf, uint16_t len, PoseFrame& out) {
         return false;
     }
 
-    out              = PoseFrame{};
-    out.seq          = buf[3];
-    out.stamp_ms     = rd32(buf + 4);
-    out.x_mm         = static_cast<int32_t>(rd32(buf + 8));
-    out.y_mm         = static_cast<int32_t>(rd32(buf + 12));
-    out.heading_cdeg = static_cast<int32_t>(rd32(buf + 16));
-    out.status       = buf[20];
-    out.n_landmarks  = n;
+    out                  = PoseFrame{};
+    out.seq              = buf[3];
+    out.stamp_ms         = rd32(buf + 4);
+    out.x_mm             = static_cast<int32_t>(rd32(buf + 8));
+    out.y_mm             = static_cast<int32_t>(rd32(buf + 12));
+    out.heading_cdeg     = static_cast<int32_t>(rd32(buf + 16));
+    out.status           = rd16(buf + 20);
+    out.object_id        = buf[22];
+    out.obj_x_mm         = static_cast<int32_t>(rd32(buf + 23));
+    out.obj_y_mm         = static_cast<int32_t>(rd32(buf + 27));
+    out.obj_heading_cdeg = static_cast<int32_t>(rd32(buf + 31));
+    out.n_landmarks      = n;
 
     uint16_t at = kPoseHeaderLen;
     for (uint8_t i = 0; i < n; ++i) {
@@ -211,6 +219,50 @@ bool decodePoseFrame(const uint8_t* buf, uint16_t len, PoseFrame& out) {
         L.quality      = buf[at + 7];
         at             = static_cast<uint16_t>(at + kLandmarkLen);
     }
+    return true;
+}
+
+uint16_t encodeCommandFrame(const CommandFrame& in, uint8_t* buf, uint16_t cap) {
+    if (kCommandFrameLen > cap) {
+        return 0;
+    }
+
+    buf[0] = kSync0;
+    buf[1] = kSync1;
+    buf[2] = kFrameCommand;
+    buf[3] = in.seq;
+    buf[4] = in.command;
+    wr32(buf + 5, static_cast<uint32_t>(in.x_mm));
+    wr32(buf + 9, static_cast<uint32_t>(in.y_mm));
+    wr32(buf + 13, static_cast<uint32_t>(in.heading_cdeg));
+    buf[17] = in.mode;
+    buf[18] = in.object_id;
+    buf[19] = in.flags;
+
+    buf[20] = checksum(buf, 20);
+    return kCommandFrameLen;
+}
+
+bool decodeCommandFrame(const uint8_t* buf, uint16_t len, CommandFrame& out) {
+    if (len != kCommandFrameLen) {
+        return false;
+    }
+    if (buf[0] != kSync0 || buf[1] != kSync1 || buf[2] != kFrameCommand) {
+        return false;
+    }
+    if (checksum(buf, len) != 0) {
+        return false;
+    }
+
+    out              = CommandFrame{};
+    out.seq          = buf[3];
+    out.command      = buf[4];
+    out.x_mm         = static_cast<int32_t>(rd32(buf + 5));
+    out.y_mm         = static_cast<int32_t>(rd32(buf + 9));
+    out.heading_cdeg = static_cast<int32_t>(rd32(buf + 13));
+    out.mode         = buf[17];
+    out.object_id    = buf[18];
+    out.flags        = buf[19];
     return true;
 }
 
@@ -235,8 +287,11 @@ uint16_t FrameReader::expectedLen() const {
         if (len_ < kPoseHeaderLen) {
             return 0;
         }
-        const uint8_t n = buf_[21];
+        const uint8_t n = buf_[35];
         return n <= kMaxLandmarks ? poseFrameLen(n) : reject;
+    }
+    if (buf_[2] == kFrameCommand) {
+        return kCommandFrameLen;
     }
     return reject;
 }

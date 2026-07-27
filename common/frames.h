@@ -19,8 +19,9 @@ constexpr uint8_t kSync1 = 0x55;
 constexpr uint16_t kMaxFrameLen = 128;
 
 enum FrameType : uint8_t {
-    kFrameSensor = 0x01,  // Pico -> Pi
-    kFramePose   = 0x02,  // Pi   -> brain
+    kFrameSensor  = 0x01,  // Pico  -> Pi
+    kFramePose    = 0x02,  // Pi    -> brain
+    kFrameCommand = 0x03,  // brain -> Pi
 };
 
 // ---------------------------------------------------------------------------
@@ -65,20 +66,28 @@ struct SensorSample {
 //
 //   sync0 sync1 | type | seq u8 | stamp_ms u32
 //   | x_mm i32 | y_mm i32 | heading_cdeg i32
-//   | status u8 | n_landmarks u8
+//   | status u16
+//   | object_id u8 | obj_x_mm i32 | obj_y_mm i32 | obj_heading_cdeg i32
+//   | n_landmarks u8
 //   | n x { id u8, dx_mm i16, dy_mm i16, bearing_cdeg i16, quality u8 }
 //   | xor u8
 //
-// Pose is relative to the zero point. Landmark entries are the live relative
-// transform, for closing the loop directly on a target.
+// Pose is relative to the zero point. The object fields carry the absolute
+// pose of the world object the brain requested; the brain ignores them unless
+// kStatusObjValid is set. Landmark entries are the live relative transform,
+// for closing the loop directly on a target.
 // ---------------------------------------------------------------------------
 
-enum StatusBit : uint8_t {
-    kStatusPoseValid   = 1u << 0,
-    kStatusEncHealthy  = 1u << 1,
-    kStatusGyroHealthy = 1u << 2,
-    kStatusVisionAlive = 1u << 3,
-    kStatusBiasCal     = 1u << 4,  // init bias calibration completed cleanly
+enum StatusBit : uint16_t {
+    kStatusPoseValid    = 1u << 0,
+    kStatusEncHealthy   = 1u << 1,
+    kStatusGyroHealthy  = 1u << 2,
+    kStatusVisionAlive  = 1u << 3,
+    kStatusBiasCal      = 1u << 4,  // init bias calibration completed cleanly
+    kStatusLocInit      = 1u << 5,  // pose was initialized from a command
+    kStatusObjRequested = 1u << 6,
+    kStatusObjValid     = 1u << 7,  // object fields hold a usable estimate
+    kStatusObjObserved  = 1u << 8,  // object was seen this cycle, not just mapped
 };
 
 constexpr uint8_t kMaxLandmarks = 8;
@@ -97,9 +106,48 @@ struct PoseFrame {
     int32_t     x_mm;
     int32_t     y_mm;
     int32_t     heading_cdeg;
-    uint8_t     status;
+    uint16_t    status;
+    uint8_t     object_id;
+    int32_t     obj_x_mm;
+    int32_t     obj_y_mm;
+    int32_t     obj_heading_cdeg;
     uint8_t     n_landmarks;
     LandmarkObs landmarks[kMaxLandmarks];
+};
+
+// ---------------------------------------------------------------------------
+// Command frame (brain -> Pi)
+//
+//   sync0 sync1 | type | seq u8 | command u8
+//   | x_mm i32 | y_mm i32 | heading_cdeg i32
+//   | mode u8 | object_id u8 | flags u8
+//   | xor u8
+//
+// Fixed length. Fields a command does not use are zero. Unknown command
+// values decode fine and are ignored by the consumer, so the brain can be
+// newer than the Pi.
+// ---------------------------------------------------------------------------
+
+enum CommandType : uint8_t {
+    kCmdInitPose     = 0x01,  // reset localization to x, y, heading; mode selects config
+    kCmdSelectObject = 0x02,  // request object_id, or clear when the flag is off
+    kCmdSetStream    = 0x03,  // stream flag on or off
+};
+
+enum CommandFlagBit : uint8_t {
+    kCmdFlagObjectRequested = 1u << 0,
+    kCmdFlagStreamOn        = 1u << 1,
+};
+
+struct CommandFrame {
+    uint8_t seq;
+    uint8_t command;
+    int32_t x_mm;
+    int32_t y_mm;
+    int32_t heading_cdeg;
+    uint8_t mode;
+    uint8_t object_id;
+    uint8_t flags;
 };
 
 // ---------------------------------------------------------------------------

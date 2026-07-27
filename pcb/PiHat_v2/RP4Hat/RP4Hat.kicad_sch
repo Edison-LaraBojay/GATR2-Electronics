@@ -3693,6 +3693,16 @@
 			(embedded_fonts no)
 		)
 	)
+	(text "Linear Regulator\n"
+		(exclude_from_sim no)
+		(at 184.15 107.442 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "5a6c398e-e7fe-42ce-9055-74464d74aabe")
+	)
 	(text "MAGNETIC ENCODER CONNECTORS"
 		(exclude_from_sim no)
 		(at 92.964 113.538 0)
@@ -6658,7 +6668,7 @@
 			)
 		)
 		(pin "1"
-			(uuid "d62e5a27-4b05-4abb-aa7e-bc6dd40fc187")
+			(uuid "d62e5a27-4b05-4abb-aa7e-bc6dd40fc188")
 		)
 		(instances
 			(project ""
@@ -7988,10 +7998,10 @@
 			)
 		)
 		(pin "1"
-			(uuid "b43fd755-c400-4d94-acde-9946d82cb1db")
+			(uuid "b43fd755-c400-4d94-acde-9946d82cb1dc")
 		)
 		(pin "2"
-			(uuid "69265900-2a9b-4dc1-b3cf-aaf4048fe71c")
+			(uuid "69265900-2a9b-4dc1-b3cf-aaf4048fe71d")
 		)
 		(instances
 			(project ""
@@ -8610,7 +8620,7 @@
 			)
 		)
 		(pin "1"
-			(uuid "747a2e9e-27db-4370-9a0f-7c39a79b3a80")
+			(uuid "747a2e9e-27db-4370-9a0f-7c39a79b3a81")
 		)
 		(instances
 			(project ""
@@ -11336,6 +11346,48 @@
 				(path "/48e8712f-9e83-40b5-843b-6f1e3e03f403"
 					(reference "#PWR024")
 					(unit 1)
+				)
+			)
+		)
+	)
+	(sheet
+		(at 219.964 122.936)
+		(size 16.002 12.192)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "f3ef1434-28ca-440b-bf4f-425c3a27f7c4")
+		(property "Sheetname" "LinearRegulator"
+			(at 219.964 122.2244 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "LinearRegulator.kicad_sch"
+			(at 219.964 135.7126 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "RP4Hat"
+				(path "/48e8712f-9e83-40b5-843b-6f1e3e03f403"
+					(page "2")
 				)
 			)
 		)
