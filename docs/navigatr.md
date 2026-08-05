@@ -33,8 +33,8 @@ Resources initialize before runtime; they are not a pipeline step. The order
 is the framework's, not the document's: slots may appear in any order in XML
 and execute in this sequence (there is a test that proves it). A selected
 implementation may contain a nested configurable collection, as
-`preprocessing/configured_collection` does, but the top-level sequence never
-changes and never becomes a user-defined graph.
+`configured_collection` does with its PreprocessingMap of preprocessors, but
+the top-level sequence never changes and never becomes a user-defined graph.
 
 Each step has a standard input and output contract (`contracts/`); the only
 cross-step data path is the standard result maps. Localization prediction
@@ -47,7 +47,7 @@ Every slot names its implementation with `type`, including intentional
 absence:
 
 ```xml
-<Perception type="perception/noop"/>
+<Perception type="noop"/>
 ```
 
 Configuration errors, never silent behavior: missing slot, missing type,
@@ -62,7 +62,7 @@ successfully, command collection carries the previous state forward).
 
 | Concept | Purpose | Example |
 |---------|---------|---------|
-| type | selects a registered factory | `sensor/pico_encoder_channel` |
+| type | selects a registered factory | `pico_encoder_channel` |
 | id | one configured instance | `tracking_encoder_a` |
 | sensor_id / resource_id / artifact_id / association_id | reference to an existing producer | `tracking_encoder_a` |
 | label | local human-readable diagnostics | `left` |
@@ -76,14 +76,23 @@ be passed where a sensor id belongs.
 
 ## One FunctionRegistry
 
-All factories, every category, live in one typed registry under namespaced
-keys (`resource/linux_serial_link`, `preprocessor/tracking_wheel_odometry`,
-`perception/noop`). Registration happens through explicit `register_*` calls
-at startup, aggregated by `registerAll`; nothing depends on static
-initializer order. Unknown keys, duplicate registrations, and retrieval with
-the wrong signature all fail loudly, and holding the registry grants no
-execution authority: the coordinator decides which category it retrieves and
-when the result runs.
+All factories, every category, live in one typed registry under opaque
+registered names (`linux_serial_link`, `pico_encoder_channel`,
+`tracking_wheel_odometry`, `noop`). A name is scoped by the factory
+signature, which is what lets every category register its own `noop` while a
+duplicate within a category stays impossible. Registration happens through
+explicit `register_*` calls that live beside their implementations
+(`impl/sensors/register_sensors.cpp`, ...), aggregated by `registerAll`;
+nothing depends on static initializer order, and a registration collision
+aborts at startup instead of silently keeping the first function. Unknown
+keys and wrong-signature retrieval fail loudly, and holding the registry
+grants no execution authority: the coordinator decides which category it
+retrieves and when the result runs.
+
+The runtime collections are the settled names: `ResourceMap` owns initialized
+`ResourceInstance`s, `SensorMap` owns the id-keyed sensor executables in
+deterministic order, `SensorResultsMap` owns the latest records, and the
+configured preprocessing collection owns a `PreprocessingMap`.
 
 ## Lifecycle
 
@@ -131,15 +140,25 @@ sample, `Valid` without one is a healthy quiet cycle, and the stored record
 keeps `measuredAt` (device clock), `receivedAt` (host clock, assigned by
 Sensor Collection), and a sequence that increments only on new publications.
 Nothing erases history; a slow camera does not disappear between frames.
-Clock domains are typed and never compared across; camera fusion requires an
-explicit conversion service before it lands.
+Freshness is policy, not accident: a channel sensor whose link stays open but
+goes silent turns `Unavailable` after its configured `stale_after_ms`, and
+preprocessing consumes only currently healthy sources, with IMU integration
+reseeding across outages longer than `max_gap_ms` instead of integrating
+garbage. Clock domains are typed and never compared across; camera fusion
+requires an explicit conversion service before it lands.
+
+One fusion rule worth stating: when wheels can solve rotation themselves,
+gyro fusion belongs in the solve (`HeadingConstraint`, which conditions the
+translation on the gyro heading) rather than overriding heading after the
+fact; the prediction-slot `Orientation` input exists for motion sources that
+carry no heading of their own.
 
 ## What stays implementation-specific
 
 The generic runtime does not privilege AprilTags, wheel counts, left/right
 names, a camera, an IMU, a field map, VEX wire ids, a publisher protocol, or
 one world estimator. Field maps are a typed resource
-(`resource/field_map`) consumed only by implementations that reference them.
+(`field_map`) consumed only by implementations that reference them.
 Brain wire object ids live in publisher and command configuration, not in
 `WorldState`. Frame math (`T_a_b` compose/inverse, `FramedPose2D`) is shared
 infrastructure; how it is used belongs to the selected implementations.

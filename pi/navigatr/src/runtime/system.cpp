@@ -106,7 +106,7 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
 
     // Resources: index everything, apply replay overrides, then build with
     // dependency resolution so declaration order never matters.
-    ResourceStoreBuilder resource_builder(functions, &warnings_);
+    ResourceMapBuilder resource_builder(functions, &warnings_);
     const ConfigNode     resources_node = root.child("Resources");
     if (resources_node.valid()) {
         if (!checkChildren(resources_node, {"Resource"}, {"Resource"}, err)) {
@@ -157,12 +157,10 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
                 ok  = false;
                 return;
             }
-            for (const SensorEntry& seen : sensors_) {
-                if (seen.id == id) {
-                    err = s.path() + ": duplicate Sensor id " + id.value;
-                    ok  = false;
-                    return;
-                }
+            if (sensors_.find(id) != nullptr) {
+                err = s.path() + ": duplicate Sensor id " + id.value;
+                ok  = false;
+                return;
             }
             const SensorMakeFunction* factory =
                 functions.find<SensorMakeFunction>(type, err);
@@ -171,14 +169,17 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
                 ok  = false;
                 return;
             }
-            auto built = (*factory)(s, context, err);
-            if (built == nullptr) {
+            std::optional<SensorExecutable> built = (*factory)(s, context, err);
+            if (!built.has_value() || !built->execute) {
+                if (err.empty()) {
+                    err = s.path() + ": factory produced no executable";
+                }
                 ok = false;
                 return;
             }
-            catalog_.add(id, built->outputPayload());
+            catalog_.add(id, built->outputPayload);
             sensor_results_[id] = SensorRecord{};
-            sensors_.push_back(SensorEntry{id, std::move(built), "Sensor/" + id.value});
+            sensors_.add(id, std::move(*built), "Sensor/" + id.value);
         });
         if (!ok) {
             return false;
@@ -299,8 +300,8 @@ void System::step(MonotonicTime now) {
     sensor_input.cycle       = cycle_;
     sensor_input.diagnostics = &diagnostics_;
 
-    for (SensorEntry& entry : sensors_) {
-        const SensorPollResult poll   = entry.sensor->poll(sensor_input);
+    for (SensorMap::Entry& entry : sensors_.executionOrder()) {
+        const SensorPollResult poll   = entry.sensor.execute(sensor_input);
         SensorRecord&          record = sensor_results_[entry.id];
         record.state                  = poll.state;
         record.lastPolledAt           = now;
@@ -360,8 +361,10 @@ void System::step(MonotonicTime now) {
 }
 
 void System::reset() {
-    for (SensorEntry& entry : sensors_) {
-        entry.sensor->reset();
+    for (SensorMap::Entry& entry : sensors_.executionOrder()) {
+        if (entry.sensor.reset) {
+            entry.sensor.reset();
+        }
         sensor_results_[entry.id] = SensorRecord{};
     }
     commands_->reset();

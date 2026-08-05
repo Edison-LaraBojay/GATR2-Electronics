@@ -24,17 +24,17 @@
 #include "config/config_node.h"
 #include "core/function_registry.h"
 #include "core/ids.h"
-#include "resources/resource_value.h"
+#include "resources/resource_instance.h"
 
 namespace navigatr
 {
 
-class ResourceStoreBuilder;
+class ResourceMapBuilder;
 
 // What a resource factory receives. resources resolves dependencies on other
 // declared resources, building them on demand.
 struct ResourceInitializationContext {
-    ResourceStoreBuilder*     resolver  = nullptr;
+    ResourceMapBuilder*     resolver  = nullptr;
     const FunctionRegistry*   functions = nullptr;
     std::vector<std::string>* warnings  = nullptr;
 
@@ -43,15 +43,15 @@ struct ResourceInitializationContext {
 };
 
 // signature stored in the FunctionRegistry under resource/* keys
-using ResourceMakeFunction = std::function<ResourceValue(
+using ResourceMakeFunction = std::function<ResourceInstance(
     const ConfigNode&, ResourceInitializationContext&, std::string& err)>;
 
-class ResourceStore
+class ResourceMap
 {
 public:
     template <typename Contract>
     std::shared_ptr<Contract> require(const ResourceId& id, std::string& err) const {
-        const ResourceValue* value = findValue(id);
+        const ResourceInstance* value = findValue(id);
         if (value == nullptr) {
             err = "unknown resource id " + id.value;
             return nullptr;
@@ -64,27 +64,27 @@ public:
         return handle;
     }
 
-    const ResourceValue* findValue(const ResourceId& id) const;
+    const ResourceInstance* findValue(const ResourceId& id) const;
 
     struct Record {
         ResourceId    id;
         FunctionKey   implementationType;
-        ResourceValue value;
+        ResourceInstance value;
     };
 
     const std::vector<Record>& records() const { return records_; }
 
 private:
-    friend class ResourceStoreBuilder;
+    friend class ResourceMapBuilder;
     std::vector<Record> records_;   // build order; destroyed in reverse
 };
 
 // Two-pass construction: index every definition first, then build each one,
 // resolving references through the builder so order never matters.
-class ResourceStoreBuilder
+class ResourceMapBuilder
 {
 public:
-    ResourceStoreBuilder(const FunctionRegistry& functions,
+    ResourceMapBuilder(const FunctionRegistry& functions,
                          std::vector<std::string>* warnings)
         : functions_(functions), warnings_(warnings) {}
 
@@ -100,13 +100,13 @@ public:
     bool declared(const ResourceId& id) const;
 
     // Dependency-resolving lookup used by factories mid-build.
-    const ResourceValue* resolve(const ResourceId& id, std::string& err);
+    const ResourceInstance* resolve(const ResourceId& id, std::string& err);
 
     // Force construction of every indexed definition.
     bool buildAll(std::string& err);
 
     // Valid after buildAll succeeded.
-    ResourceStore take() { return std::move(store_); }
+    ResourceMap take() { return std::move(store_); }
 
 private:
     enum class State { kUnbuilt, kBuilding, kBuilt, kFailed };
@@ -125,7 +125,7 @@ private:
     std::vector<std::string>* warnings_;
     std::vector<Definition>   definitions_;
     std::vector<std::string>  build_stack_;   // for cycle reporting
-    ResourceStore             store_;
+    ResourceMap             store_;
 };
 
 template <typename Contract>
@@ -135,7 +135,7 @@ std::shared_ptr<Contract> ResourceInitializationContext::require(const ResourceI
         err = "no resource resolver available";
         return nullptr;
     }
-    const ResourceValue* value = resolver->resolve(id, err);
+    const ResourceInstance* value = resolver->resolve(id, err);
     if (value == nullptr) {
         return nullptr;
     }

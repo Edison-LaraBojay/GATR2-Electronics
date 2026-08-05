@@ -23,11 +23,14 @@ std::unique_ptr<PreprocessorExecutable> ImuNormalization::create(
         return nullptr;
     }
 
-    if (!node.child("Calibration").getInt("bias_samples", 200, fn->bias_samples_, err)) {
+    const ConfigNode calibration = node.child("Calibration");
+    if (!calibration.getInt("bias_samples", 200, fn->bias_samples_, err) ||
+        !calibration.getInt("max_gap_ms", 250, fn->max_gap_ms_, err)) {
         return nullptr;
     }
-    if (fn->bias_samples_ < 0) {
-        err = node.path() + ": bias_samples cannot be negative";
+    if (fn->bias_samples_ < 0 || fn->max_gap_ms_ <= 0) {
+        err = node.path() +
+              ": bias_samples cannot be negative and max_gap_ms must be positive";
         return nullptr;
     }
     fn->calibrated_ = fn->bias_samples_ == 0;
@@ -55,7 +58,8 @@ void ImuNormalization::reset() {
 }
 
 FunctionStatus ImuNormalization::run(const PreprocessingInput& in, ArtifactMap& out) {
-    const StoredSensorSample* stored = binding_.stored(in.sensorResults);
+    // only a currently healthy source is consumed
+    const StoredSensorSample* stored = binding_.freshStored(in.sensorResults);
     if (stored == nullptr || stored->sequence == last_sequence_) {
         return FunctionStatus::kNoData;
     }
@@ -83,10 +87,18 @@ FunctionStatus ImuNormalization::run(const PreprocessingInput& in, ArtifactMap& 
         return FunctionStatus::kOk;
     }
 
+    const double dt_s = secondsBetween(stored->measuredAt, prev_stamp_);
+    if (dt_s * 1000.0 > static_cast<double>(max_gap_ms_)) {
+        // rate integration across an outage is garbage; reseed instead
+        prev_rate_  = rate;
+        prev_stamp_ = stored->measuredAt;
+        return FunctionStatus::kOk;
+    }
+
     ImuDelta delta;
-    delta.dt_s      = secondsBetween(stored->measuredAt, prev_stamp_);
+    delta.dt_s       = dt_s;
     delta.rate_rad_s = rate;
-    delta.delta_rad = 0.5 * (prev_rate_ + rate) * delta.dt_s;
+    delta.delta_rad  = 0.5 * (prev_rate_ + rate) * delta.dt_s;
 
     prev_rate_  = rate;
     prev_stamp_ = stored->measuredAt;

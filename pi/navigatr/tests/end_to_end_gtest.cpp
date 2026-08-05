@@ -27,41 +27,41 @@ const char* kFullConfig = R"(
 <System>
     <Loop rate_hz="200"/>
     <Resources>
-        <Resource id="pico_uart" type="resource/memory_link"/>
-        <Resource id="pico_telemetry" type="resource/pico_telemetry">
+        <Resource id="pico_uart" type="memory_link"/>
+        <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
         </Resource>
-        <Resource id="brain_uart" type="resource/memory_link"/>
-        <Resource id="override_field" type="resource/field_map">
+        <Resource id="brain_uart" type="memory_link"/>
+        <Resource id="override_field" type="field_map">
             <Landmark id="center_goal">
                 <NominalPose x_m="1.8" y_m="1.8" heading_deg="0"/>
             </Landmark>
         </Resource>
     </Resources>
     <Sensors>
-        <Sensor id="tracking_encoder_a" type="sensor/pico_encoder_channel">
+        <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
             <Source resource_id="pico_telemetry" channel="0"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
-        <Sensor id="tracking_encoder_b" type="sensor/pico_encoder_channel">
+        <Sensor id="tracking_encoder_b" type="pico_encoder_channel">
             <Source resource_id="pico_telemetry" channel="1"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
-        <Sensor id="tracking_encoder_c" type="sensor/pico_encoder_channel">
+        <Sensor id="tracking_encoder_c" type="pico_encoder_channel">
             <Source resource_id="pico_telemetry" channel="2"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
-        <Sensor id="robot_imu" type="sensor/pico_imu_channel">
+        <Sensor id="robot_imu" type="pico_imu_channel">
             <Source resource_id="pico_telemetry" channel="imu"/>
         </Sensor>
     </Sensors>
     <Pipeline>
-        <CommandCollection type="commands/vex_brain_serial">
+        <CommandCollection type="vex_brain_serial">
             <Serial resource_id="brain_uart"/>
         </CommandCollection>
-        <Preprocessing type="preprocessing/configured_collection">
+        <Preprocessing type="configured_collection">
             <Preprocessor id="tracking_motion"
-                          type="preprocessor/tracking_wheel_odometry">
+                          type="tracking_wheel_odometry">
                 <TrackingWheel sensor_id="tracking_encoder_a" label="left"
                                radius_m="0.0254" position_x_m="0"
                                position_y_m="0.13" measurement_angle_deg="0"/>
@@ -74,22 +74,22 @@ const char* kFullConfig = R"(
                 <Output artifact_id="tracking_motion_delta"/>
             </Preprocessor>
             <Preprocessor id="imu_normalization"
-                          type="preprocessor/imu_normalization">
+                          type="imu_normalization">
                 <Input sensor_id="robot_imu"/>
                 <Calibration bias_samples="200"/>
                 <Output artifact_id="imu_orientation"/>
             </Preprocessor>
         </Preprocessing>
-        <LocalizationPrediction type="localization/wheel_imu_prediction">
+        <LocalizationPrediction type="wheel_imu_prediction">
             <Motion artifact_id="tracking_motion_delta"/>
         </LocalizationPrediction>
-        <Perception type="perception/noop"/>
-        <Association type="association/noop"/>
-        <PoseCorrection type="pose_correction/noop"/>
-        <WorldPrediction type="world_prediction/landmark_map">
+        <Perception type="noop"/>
+        <Association type="noop"/>
+        <PoseCorrection type="noop"/>
+        <WorldPrediction type="landmark_map">
             <FieldMap resource_id="override_field"/>
         </WorldPrediction>
-        <Publishing type="publishing/vex_brain">
+        <Publishing type="vex_brain">
             <Serial resource_id="brain_uart"/>
             <Health fresh_ms="150">
                 <Encoder sensor_id="tracking_encoder_a"/>

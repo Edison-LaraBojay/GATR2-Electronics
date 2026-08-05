@@ -20,7 +20,7 @@
 
 #include "common/frame_codec.h"
 #include "core/time.h"
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 #include "resources/serial_link.h"
 
 namespace navigatr
@@ -72,7 +72,7 @@ private:
     bool     link_dead_       = false;
 };
 
-ResourceValue make_pico_telemetry(const ConfigNode& node,
+ResourceInstance make_pico_telemetry(const ConfigNode& node,
                                   ResourceInitializationContext& context,
                                   std::string& err);
 

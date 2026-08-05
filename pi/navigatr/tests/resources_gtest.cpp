@@ -1,5 +1,5 @@
 // resources_gtest.cpp
-// ResourceStore construction, typed retrieval, sharing, dependency
+// ResourceMap construction, typed retrieval, sharing, dependency
 // resolution, lifetimes, and atomic SPI transactions through a fake bus.
 // Fake implementations register through the same explicit startup calls as
 // real ones, which is itself the extension path under test.
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 #include "resources/spi_bus.h"
 #include "runtime/register_all.h"
 #include "tinyxml2/tinyxml2.h"
@@ -96,59 +96,59 @@ struct Fixture {
         register_resources(functions);
 
         functions.add<ResourceMakeFunction>(
-            FunctionKey{"resource/fake_spi_bus"},
+            FunctionKey{"fake_spi_bus"},
             [state = spi_state](const ConfigNode&, ResourceInitializationContext&,
-                                std::string&) -> ResourceValue {
+                                std::string&) -> ResourceInstance {
                 ++state->init_count;
-                return ResourceValue::asContract<SpiBus>(
+                return ResourceInstance::asContract<SpiBus>(
                     std::make_shared<FakeSpiBus>(state));
             });
 
         functions.add<ResourceMakeFunction>(
-            FunctionKey{"resource/probe"},
+            FunctionKey{"probe"},
             [log = log](const ConfigNode&, ResourceInitializationContext&,
-                        std::string&) -> ResourceValue {
-                return ResourceValue::asContract<ProbeResource>(
+                        std::string&) -> ResourceInstance {
+                return ResourceInstance::asContract<ProbeResource>(
                     std::make_shared<ProbeResource>(log));
             });
 
         // a resource that depends on another declared resource
         functions.add<ResourceMakeFunction>(
-            FunctionKey{"resource/needs_bus"},
+            FunctionKey{"needs_bus"},
             [](const ConfigNode& node, ResourceInitializationContext& context,
-               std::string& err) -> ResourceValue {
+               std::string& err) -> ResourceInstance {
                 const ResourceId bus_id{node.child("Bus").attr("resource_id")};
                 auto             bus = context.require<SpiBus>(bus_id, err);
                 if (bus == nullptr) {
-                    return ResourceValue{};
+                    return ResourceInstance{};
                 }
-                return ResourceValue::asContract<SpiBus>(
+                return ResourceInstance::asContract<SpiBus>(
                     std::static_pointer_cast<FakeSpiBus>(bus));
             });
 
         // mutual dependency pair for cycle detection
         const auto depend_on = [](const char* attr) {
             return [attr](const ConfigNode& node, ResourceInitializationContext& context,
-                          std::string& err) -> ResourceValue {
+                          std::string& err) -> ResourceInstance {
                 const ResourceId other{node.child("Dep").attr(attr)};
                 auto             dep = context.require<SpiBus>(other, err);
                 if (dep == nullptr) {
-                    return ResourceValue{};
+                    return ResourceInstance{};
                 }
-                return ResourceValue{};
+                return ResourceInstance{};
             };
         };
-        functions.add<ResourceMakeFunction>(FunctionKey{"resource/cyclic"},
+        functions.add<ResourceMakeFunction>(FunctionKey{"cyclic"},
                                             depend_on("resource_id"));
     }
 
-    bool build(const char* xml, ResourceStore& out, std::string& err) {
+    bool build(const char* xml, ResourceMap& out, std::string& err) {
         doc.Clear();
         if (doc.Parse(xml) != tinyxml2::XML_SUCCESS) {
             err = "parse";
             return false;
         }
-        ResourceStoreBuilder builder(functions, &warnings);
+        ResourceMapBuilder builder(functions, &warnings);
         bool                 ok = true;
         ConfigNode{doc.RootElement()}.forEach("Resource", [&](const ConfigNode& r) {
             if (ok) {
@@ -167,11 +167,11 @@ struct Fixture {
 
 TEST(Resources, SharedBusInitializedOnceAndShared) {
     Fixture       f;
-    ResourceStore store;
+    ResourceMap store;
     std::string   err;
     ASSERT_TRUE(f.build(R"(
 <Resources>
-    <Resource id="bus" type="resource/fake_spi_bus"/>
+    <Resource id="bus" type="fake_spi_bus"/>
 </Resources>)",
                         store, err))
         << err;
@@ -187,11 +187,11 @@ TEST(Resources, SharedBusInitializedOnceAndShared) {
 
 TEST(Resources, UnknownIdAndWrongContractFail) {
     Fixture       f;
-    ResourceStore store;
+    ResourceMap store;
     std::string   err;
     ASSERT_TRUE(f.build(R"(
 <Resources>
-    <Resource id="bus" type="resource/fake_spi_bus"/>
+    <Resource id="bus" type="fake_spi_bus"/>
 </Resources>)",
                         store, err))
         << err;
@@ -206,20 +206,20 @@ TEST(Resources, UnknownIdAndWrongContractFail) {
 
 TEST(Resources, DuplicateIdAndUnknownTypeFail) {
     Fixture       f;
-    ResourceStore store;
+    ResourceMap store;
     std::string   err;
 
     EXPECT_FALSE(f.build(R"(
 <Resources>
-    <Resource id="bus" type="resource/fake_spi_bus"/>
-    <Resource id="bus" type="resource/fake_spi_bus"/>
+    <Resource id="bus" type="fake_spi_bus"/>
+    <Resource id="bus" type="fake_spi_bus"/>
 </Resources>)",
                          store, err));
     EXPECT_NE(err.find("duplicate Resource id"), std::string::npos);
 
     EXPECT_FALSE(f.build(R"(
 <Resources>
-    <Resource id="x" type="resource/carrier_pigeon"/>
+    <Resource id="x" type="carrier_pigeon"/>
 </Resources>)",
                          store, err));
     EXPECT_NE(err.find("carrier_pigeon"), std::string::npos);
@@ -227,15 +227,15 @@ TEST(Resources, DuplicateIdAndUnknownTypeFail) {
 
 TEST(Resources, DependenciesResolveRegardlessOfDeclarationOrder) {
     Fixture       f;
-    ResourceStore store;
+    ResourceMap store;
     std::string   err;
     // the dependent is declared before the bus it needs
     ASSERT_TRUE(f.build(R"(
 <Resources>
-    <Resource id="wrapper" type="resource/needs_bus">
+    <Resource id="wrapper" type="needs_bus">
         <Bus resource_id="bus"/>
     </Resource>
-    <Resource id="bus" type="resource/fake_spi_bus"/>
+    <Resource id="bus" type="fake_spi_bus"/>
 </Resources>)",
                         store, err))
         << err;
@@ -244,12 +244,12 @@ TEST(Resources, DependenciesResolveRegardlessOfDeclarationOrder) {
 
 TEST(Resources, DependencyCycleReportsTheCycle) {
     Fixture       f;
-    ResourceStore store;
+    ResourceMap store;
     std::string   err;
     EXPECT_FALSE(f.build(R"(
 <Resources>
-    <Resource id="a" type="resource/cyclic"><Dep resource_id="b"/></Resource>
-    <Resource id="b" type="resource/cyclic"><Dep resource_id="a"/></Resource>
+    <Resource id="a" type="cyclic"><Dep resource_id="b"/></Resource>
+    <Resource id="b" type="cyclic"><Dep resource_id="a"/></Resource>
 </Resources>)",
                          store, err));
     EXPECT_NE(err.find("cycle"), std::string::npos);
@@ -260,10 +260,10 @@ TEST(Resources, ResourcesOutliveCapturersAndCleanUpLast) {
     Fixture     f;
     std::string err;
     {
-        ResourceStore store;
+        ResourceMap store;
         ASSERT_TRUE(f.build(R"(
 <Resources>
-    <Resource id="probe" type="resource/probe"/>
+    <Resource id="probe" type="probe"/>
 </Resources>)",
                             store, err))
             << err;
@@ -288,11 +288,11 @@ TEST(Resources, ResourcesOutliveCapturersAndCleanUpLast) {
 
 TEST(Resources, SpiTransactionsApplyDeviceSettingsAtomically) {
     Fixture       f;
-    ResourceStore store;
+    ResourceMap store;
     std::string   err;
     ASSERT_TRUE(f.build(R"(
 <Resources>
-    <Resource id="bus" type="resource/fake_spi_bus"/>
+    <Resource id="bus" type="fake_spi_bus"/>
 </Resources>)",
                         store, err))
         << err;

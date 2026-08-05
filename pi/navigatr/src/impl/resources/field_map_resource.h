@@ -13,12 +13,12 @@
 
 #pragma once
 #include "config/field_map.h"
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 
 namespace navigatr
 {
 
-ResourceValue make_field_map(const ConfigNode& node,
+ResourceInstance make_field_map(const ConfigNode& node,
                              ResourceInitializationContext& context, std::string& err);
 
 } // namespace navigatr

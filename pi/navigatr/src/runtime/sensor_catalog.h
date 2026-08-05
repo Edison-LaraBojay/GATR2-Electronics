@@ -34,6 +34,17 @@ struct TypedSensorBinding {
         return &*rec->latest;
     }
 
+    // The latest sample only while the sensor currently reports healthy;
+    // consumers that must not act on faulted or stale sources read this.
+    const StoredSensorSample* freshStored(const SensorResultsMap& results) const {
+        const SensorRecord* rec = record(results);
+        if (rec == nullptr || rec->state != SensorState::kValid ||
+            !rec->latest.has_value()) {
+            return nullptr;
+        }
+        return &*rec->latest;
+    }
+
     const T* sample(const SensorResultsMap& results) const {
         const StoredSensorSample* s = stored(results);
         return s == nullptr ? nullptr : s->payload.get<T>();

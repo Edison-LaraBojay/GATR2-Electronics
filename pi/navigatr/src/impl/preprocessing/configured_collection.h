@@ -1,13 +1,13 @@
 // configured_collection.h
-// Composite preprocessing: runs the configured preprocessors in declaration
-// order. The outer pipeline sees one Preprocessing; only this implementation
-// knows it owns a collection. Duplicate preprocessor ids and duplicate
-// artifact output ids are configuration errors, and an empty collection must
-// be written as preprocessing/noop instead.
+// Composite preprocessing: runs the PreprocessingMap of configured
+// executables in declaration order. The outer pipeline sees one
+// Preprocessing; only this implementation knows it owns a collection.
+// Duplicate preprocessor ids and duplicate artifact output ids are
+// configuration errors, and an empty collection must be written as the
+// preprocessing noop instead.
 //
-//   <Preprocessing type="preprocessing/configured_collection">
-//       <Preprocessor id="tracking_motion"
-//                     type="preprocessor/tracking_wheel_odometry">
+//   <Preprocessing type="configured_collection">
+//       <Preprocessor id="tracking_motion" type="tracking_wheel_odometry">
 //           ...
 //       </Preprocessor>
 //   </Preprocessing>
@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "contracts/preprocessing.h"
+#include "impl/preprocessing/preprocessing_map.h"
 
 namespace navigatr
 {
@@ -35,7 +36,7 @@ public:
     void reset() override;
 
 private:
-    std::vector<std::unique_ptr<PreprocessorExecutable>> executables_;
+    PreprocessingMap executables_;
 };
 
 } // namespace navigatr

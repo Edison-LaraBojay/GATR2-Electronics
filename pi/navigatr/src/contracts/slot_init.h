@@ -18,7 +18,7 @@
 namespace navigatr
 {
 
-class ResourceStore;
+class ResourceMap;
 class SensorCatalog;
 
 struct ObservationOutputDecl {
@@ -32,7 +32,7 @@ struct AssociationOutputDecl {
 };
 
 struct SlotInitializationContext {
-    const ResourceStore*    resources = nullptr;
+    const ResourceMap*    resources = nullptr;
     const SensorCatalog*    sensors   = nullptr;
     const FunctionRegistry* functions = nullptr;
 

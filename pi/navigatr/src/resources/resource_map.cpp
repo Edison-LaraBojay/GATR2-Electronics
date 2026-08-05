@@ -1,11 +1,11 @@
-// resource_store.cpp
+// resource_map.cpp
 
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 
 namespace navigatr
 {
 
-const ResourceValue* ResourceStore::findValue(const ResourceId& id) const {
+const ResourceInstance* ResourceMap::findValue(const ResourceId& id) const {
     for (const Record& r : records_) {
         if (r.id == id) {
             return &r.value;
@@ -14,7 +14,7 @@ const ResourceValue* ResourceStore::findValue(const ResourceId& id) const {
     return nullptr;
 }
 
-ResourceStoreBuilder::Definition* ResourceStoreBuilder::findDefinition(
+ResourceMapBuilder::Definition* ResourceMapBuilder::findDefinition(
     const ResourceId& id) {
     for (Definition& d : definitions_) {
         if (d.id == id) {
@@ -24,7 +24,7 @@ ResourceStoreBuilder::Definition* ResourceStoreBuilder::findDefinition(
     return nullptr;
 }
 
-bool ResourceStoreBuilder::index(const ConfigNode& node, std::string& err) {
+bool ResourceMapBuilder::index(const ConfigNode& node, std::string& err) {
     Definition def;
     def.id   = ResourceId{node.attr("id")};
     def.type = FunctionKey{node.attr("type")};
@@ -37,7 +37,7 @@ bool ResourceStoreBuilder::index(const ConfigNode& node, std::string& err) {
         err = node.path() + ": duplicate Resource id " + def.id.value;
         return false;
     }
-    if (!functions_.has(def.type)) {
+    if (!functions_.has<ResourceMakeFunction>(def.type)) {
         err = node.path() + ": Resource " + def.id.value + " has unknown type " +
               def.type.value;
         return false;
@@ -46,7 +46,7 @@ bool ResourceStoreBuilder::index(const ConfigNode& node, std::string& err) {
     return true;
 }
 
-bool ResourceStoreBuilder::overrideFactory(const ResourceId& id,
+bool ResourceMapBuilder::overrideFactory(const ResourceId& id,
                                            ResourceMakeFunction factory,
                                            std::string&         err) {
     Definition* def = findDefinition(id);
@@ -58,7 +58,7 @@ bool ResourceStoreBuilder::overrideFactory(const ResourceId& id,
     return true;
 }
 
-bool ResourceStoreBuilder::declared(const ResourceId& id) const {
+bool ResourceMapBuilder::declared(const ResourceId& id) const {
     for (const Definition& d : definitions_) {
         if (d.id == id) {
             return true;
@@ -67,7 +67,7 @@ bool ResourceStoreBuilder::declared(const ResourceId& id) const {
     return false;
 }
 
-const ResourceValue* ResourceStoreBuilder::resolve(const ResourceId& id,
+const ResourceInstance* ResourceMapBuilder::resolve(const ResourceId& id,
                                                    std::string&      err) {
     Definition* def = findDefinition(id);
     if (def == nullptr) {
@@ -99,7 +99,7 @@ const ResourceValue* ResourceStoreBuilder::resolve(const ResourceId& id,
     context.functions = &functions_;
     context.warnings  = warnings_;
 
-    ResourceValue value;
+    ResourceInstance value;
     std::string   build_err;
     if (def->override_factory) {
         value = def->override_factory(def->node, context, build_err);
@@ -121,11 +121,11 @@ const ResourceValue* ResourceStoreBuilder::resolve(const ResourceId& id,
 
     def->state = State::kBuilt;
     store_.records_.push_back(
-        ResourceStore::Record{def->id, def->type, std::move(value)});
+        ResourceMap::Record{def->id, def->type, std::move(value)});
     return store_.findValue(id);
 }
 
-bool ResourceStoreBuilder::buildAll(std::string& err) {
+bool ResourceMapBuilder::buildAll(std::string& err) {
     for (Definition& def : definitions_) {
         if (def.state == State::kBuilt) {
             continue;

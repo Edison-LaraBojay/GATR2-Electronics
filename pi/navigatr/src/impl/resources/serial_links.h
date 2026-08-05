@@ -1,14 +1,20 @@
 // serial_links.h
 // SerialLink implementations and their resource factories.
 //
-//   resource/linux_serial_link   live serial device
-//       <Device path="/dev/ttyAMA0"/>
-//       <Baud value="921600"/>
+//   linux_serial_link   live serial device
+//       <Device path="/dev/ttyAMA5"/>
+//       <Baud value="115200"/>
+//       <DriverEnable gpio="6"/>        optional, e.g. RS-485 DE//RE
 //
-//   resource/memory_link         in-memory link for tests and loopback rigs
+//   memory_link         in-memory link for tests and loopback rigs
 //
-//   resource/file_replay_link    read-only capture replay
+//   file_replay_link    read-only capture replay
 //       <File path="capture.bin"/>
+//
+// DriverEnable drives the named GPIO high (sysfs) while the link exists and
+// low again on destruction, which is the RS-485 transceiver enable on the
+// HAT: idle pulled low keeps the bus released when the Pi is dead. Failure
+// to reach the GPIO is a build warning like an unopenable device.
 //
 // A live device that fails to open is a build warning and a dead link at
 // runtime (an unplugged cable must not stop the robot); a named capture file
@@ -20,7 +26,7 @@
 #include <memory>
 #include <string>
 
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 #include "resources/serial_link.h"
 #include "transport/byte_stream.h"
 #include "transport/file_stream.h"
@@ -32,13 +38,20 @@ namespace navigatr
 class LinuxSerialLink : public SerialLink
 {
 public:
+    ~LinuxSerialLink() override;
+
     SerialReadResult  readAvailable(MutableByteSpan destination) override;
     SerialWriteResult write(ByteSpan source) override;
 
     SerialPort& port() { return port_; }
 
+    // Drives the GPIO high now and low at destruction. False when the GPIO
+    // cannot be reached.
+    bool enableDriver(int gpio, std::string& err);
+
 private:
     SerialPort port_;
+    int        driver_enable_gpio_ = -1;
 };
 
 class MemoryLink : public SerialLink
@@ -70,12 +83,12 @@ private:
     FileByteSource source_;
 };
 
-ResourceValue make_linux_serial_link(const ConfigNode& node,
+ResourceInstance make_linux_serial_link(const ConfigNode& node,
                                      ResourceInitializationContext& context,
                                      std::string& err);
-ResourceValue make_memory_link(const ConfigNode& node,
+ResourceInstance make_memory_link(const ConfigNode& node,
                                ResourceInitializationContext& context, std::string& err);
-ResourceValue make_file_replay_link(const ConfigNode& node,
+ResourceInstance make_file_replay_link(const ConfigNode& node,
                                     ResourceInitializationContext& context,
                                     std::string& err);
 

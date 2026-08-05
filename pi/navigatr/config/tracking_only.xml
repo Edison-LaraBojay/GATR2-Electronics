@@ -1,43 +1,42 @@
 <?xml version="1.0"?>
-<!-- Bench rig: tracking wheels and IMU alone. Everything the camera or
-     brain would own is an explicit noop. -->
+<!-- Bench rig: two tracking wheels and the IMU heading constraint alone.
+     Everything the camera or brain would own is an explicit noop. -->
 <System>
 
     <Loop rate_hz="100"/>
 
     <Resources>
-        <Resource id="pico_uart" type="resource/linux_serial_link">
+        <Resource id="pico_uart" type="linux_serial_link">
             <Device path="/dev/ttyAMA0"/>
-            <Baud value="921600"/>
+            <Baud value="115200"/>
         </Resource>
 
-        <Resource id="pico_telemetry" type="resource/pico_telemetry">
+        <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
         </Resource>
     </Resources>
 
     <Sensors>
-        <Sensor id="tracking_encoder_a" type="sensor/pico_encoder_channel">
+        <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
             <Source resource_id="pico_telemetry" channel="0"/>
             <Calibration counts_per_revolution="4000" invert="false"/>
         </Sensor>
 
-        <Sensor id="tracking_encoder_b" type="sensor/pico_encoder_channel">
+        <Sensor id="tracking_encoder_b" type="pico_encoder_channel">
             <Source resource_id="pico_telemetry" channel="1"/>
             <Calibration counts_per_revolution="4000" invert="false"/>
         </Sensor>
 
-        <Sensor id="robot_imu" type="sensor/pico_imu_channel">
+        <Sensor id="robot_imu" type="pico_imu_channel">
             <Source resource_id="pico_telemetry" channel="imu"/>
         </Sensor>
     </Sensors>
 
     <Pipeline>
-        <CommandCollection type="commands/noop"/>
+        <CommandCollection type="noop"/>
 
-        <Preprocessing type="preprocessing/configured_collection">
-            <Preprocessor id="tracking_motion"
-                          type="preprocessor/tracking_wheel_odometry">
+        <Preprocessing type="configured_collection">
+            <Preprocessor id="tracking_motion" type="tracking_wheel_odometry">
                 <TrackingWheel sensor_id="tracking_encoder_a" label="forward"
                                radius_m="0.0254"
                                position_x_m="0.000" position_y_m="0.000"
@@ -51,15 +50,15 @@
             </Preprocessor>
         </Preprocessing>
 
-        <LocalizationPrediction type="localization/wheel_imu_prediction">
+        <LocalizationPrediction type="wheel_imu_prediction">
             <Motion artifact_id="tracking_motion_delta"/>
         </LocalizationPrediction>
 
-        <Perception type="perception/noop"/>
-        <Association type="association/noop"/>
-        <PoseCorrection type="pose_correction/noop"/>
-        <WorldPrediction type="world_prediction/noop"/>
-        <Publishing type="publishing/noop"/>
+        <Perception type="noop"/>
+        <Association type="noop"/>
+        <PoseCorrection type="noop"/>
+        <WorldPrediction type="noop"/>
+        <Publishing type="noop"/>
     </Pipeline>
 
 </System>

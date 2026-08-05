@@ -1,7 +1,7 @@
 # navigatr resources
 
 Registered resource types. A resource is an initialized live object owned by
-the ResourceStore: buses, links, shared decoders, shared data. Consumers hold
+the ResourceMap: buses, links, shared decoders, shared data. Consumers hold
 shared handles captured at initialization; the store's id mapping is frozen
 after startup and resources are destroyed after everything that captured
 them. A shared_ptr does not make hardware thread safe; each contract states
@@ -11,41 +11,49 @@ catalogs them.
 Stable PCB wiring is documented in `hardware.md`; the XML remains the
 executable configuration and there is no monolithic robot config header.
 
-## resource/linux_serial_link
+## linux_serial_link
 
 - Contract: `SerialLink` (readAvailable, write).
 - Schema:
 
 ```xml
-<Resource id="pico_uart" type="resource/linux_serial_link">
+<Resource id="pico_uart" type="linux_serial_link">
     <Device path="/dev/ttyAMA0"/>
-    <Baud value="921600"/>
+    <Baud value="115200"/>
+    <DriverEnable gpio="6"/>   <!-- optional, e.g. RS-485 DE//RE -->
 </Resource>
 ```
 
 - Dependencies: none.
 - Ownership: opens the device at initialization; open failure is a build
   warning and a dead link at runtime (an unplugged cable must not stop the
-  robot). Closed on destruction.
+  robot). Closed on destruction. `DriverEnable` drives the named GPIO high
+  (sysfs) while the link exists and low on destruction; on the HAT this is
+  the RS-485 transceiver enable on GPIO6, whose pulldown idles the bus when
+  the Pi is dead. GPIO failure is a build warning.
 - Thread safety: single threaded.
 - Failure behavior: reads report the link closed; consumers surface fault
   states.
+- Hardware alignment: the Pico transmits at 115200 (`pico/src/config.h`), the
+  brain link is UART5 at `/dev/ttyAMA5` (`dtoverlay=uart5`), and that link is
+  one way, Pi to brain, so command collection stays `noop` until a return
+  path exists.
 
-## resource/memory_link
+## memory_link
 
 - Contract: `SerialLink`.
-- Schema: `<Resource id="x" type="resource/memory_link"/>`.
+- Schema: `<Resource id="x" type="memory_link"/>`.
 - In-memory link for tests and loopback rigs. Input and output streams are
   separate, so a bidirectional link never reads its own writes.
 - Thread safety: single threaded.
 
-## resource/file_replay_link
+## file_replay_link
 
 - Contract: `SerialLink` (read only; writes fail).
 - Schema:
 
 ```xml
-<Resource id="pico_uart" type="resource/file_replay_link">
+<Resource id="pico_uart" type="file_replay_link">
     <File path="capture.bin"/>
 </Resource>
 ```
@@ -54,13 +62,13 @@ executable configuration and there is no monolithic robot config header.
   `--replay <resource_id>=<capture.bin>` swaps any declared resource for this
   implementation; naming an undeclared id is a build error.
 
-## resource/pico_telemetry
+## pico_telemetry
 
 - Contract: `PicoTelemetry`.
 - Schema:
 
 ```xml
-<Resource id="pico_telemetry" type="resource/pico_telemetry">
+<Resource id="pico_telemetry" type="pico_telemetry">
     <Serial resource_id="pico_uart"/>
 </Resource>
 ```
@@ -74,13 +82,13 @@ executable configuration and there is no monolithic robot config header.
 - Failure behavior: link death is reported per channel consumer; decoded
   history is retained.
 
-## resource/field_map
+## field_map
 
 - Contract: `const FieldMap`.
 - Schema:
 
 ```xml
-<Resource id="override_field" type="resource/field_map">
+<Resource id="override_field" type="field_map">
     <Landmark id="center_goal">
         <NominalPose x_m="1.8" y_m="1.8" heading_deg="0"/>
         <Tag instance="goal_front" family="tag36h11" observed_id="7"

@@ -4,7 +4,7 @@
 
 #include "impl/resources/pico_telemetry.h"
 #include "math/angles.h"
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 
 namespace navigatr
 {
@@ -12,173 +12,211 @@ namespace navigatr
 namespace
 {
 
-std::shared_ptr<PicoTelemetry> telemetryFrom(const ConfigNode& node,
-                                             SensorInitializationContext& context,
-                                             ConfigNode& source_out, std::string& err) {
+struct ChannelSetup {
+    std::shared_ptr<PicoTelemetry> telemetry;
+    long                           stale_after_ms = 250;   // 0 disables
+};
+
+bool setupFrom(const ConfigNode& node, SensorInitializationContext& context,
+               ConfigNode& source_out, ChannelSetup& out, std::string& err) {
     source_out = node.child("Source");
     const ResourceId telemetry_id{source_out.attr("resource_id")};
     if (telemetry_id.empty()) {
         err = node.path() + ": needs <Source resource_id=.../>";
-        return nullptr;
+        return false;
     }
     if (context.resources == nullptr) {
         err = node.path() + ": no resources available";
-        return nullptr;
+        return false;
     }
     std::string inner;
-    auto        telemetry = context.resources->require<PicoTelemetry>(telemetry_id, inner);
-    if (telemetry == nullptr) {
+    out.telemetry = context.resources->require<PicoTelemetry>(telemetry_id, inner);
+    if (out.telemetry == nullptr) {
         err = node.path() + ": " + inner;
+        return false;
     }
-    return telemetry;
+    if (!node.child("Freshness").getInt("stale_after_ms", 250, out.stale_after_ms, err)) {
+        return false;
+    }
+    if (out.stale_after_ms < 0) {
+        err = node.path() + ": stale_after_ms cannot be negative";
+        return false;
+    }
+    return true;
 }
+
+// Shared polling shell: refresh once per cycle, then classify freshness.
+// Returns true when the caller should decode a new sample from the channel.
+struct ChannelPollState {
+    uint64_t      last_updates = 0;
+    bool          has_new      = false;
+    MonotonicTime last_new_at;   // host clock
+
+    bool classify(const ChannelSetup& setup, const PicoTelemetry::Channel& channel,
+                  const SensorExecutionInput& input, SensorPollResult& result) {
+        if (channel.updates != last_updates) {
+            last_updates = channel.updates;
+            has_new      = true;
+            last_new_at  = input.now;
+            result.state = SensorState::kValid;
+            return true;
+        }
+        // data decoded before a link death still counted; the fault shows on
+        // the first poll with nothing new
+        if (setup.telemetry->linkDead()) {
+            result.state      = SensorState::kFault;
+            result.diagnostic = "telemetry link dead";
+            return false;
+        }
+        if (!channel.present) {
+            result.state = SensorState::kNoDataYet;
+            return false;
+        }
+        if (setup.stale_after_ms != 0 && has_new &&
+            (input.now - last_new_at) > setup.stale_after_ms) {
+            result.state      = SensorState::kUnavailable;
+            result.diagnostic = "no new data within stale_after_ms";
+            return false;
+        }
+        result.state = SensorState::kValid;   // healthy, no new sample
+        return false;
+    }
+};
 
 } // namespace
 
-std::unique_ptr<Sensor> PicoEncoderChannelSensor::create(
+std::optional<SensorExecutable> make_pico_encoder_channel(
     const ConfigNode& node, SensorInitializationContext& context, std::string& err) {
-    auto sensor = std::make_unique<PicoEncoderChannelSensor>();
-
-    ConfigNode source;
-    sensor->telemetry_ = telemetryFrom(node, context, source, err);
-    if (sensor->telemetry_ == nullptr) {
-        return nullptr;
+    ConfigNode   source;
+    ChannelSetup setup;
+    if (!setupFrom(node, context, source, setup, err)) {
+        return std::nullopt;
     }
 
     long channel = -1;
     if (!source.getInt("channel", -1, channel, err)) {
-        return nullptr;
+        return std::nullopt;
     }
     if (channel < 0 || channel >= PicoTelemetry::kEncoderChannels) {
         err = source.path() + ": channel must be 0.." +
               std::to_string(PicoTelemetry::kEncoderChannels - 1);
-        return nullptr;
+        return std::nullopt;
     }
-    sensor->channel_ = static_cast<int>(channel);
 
     const ConfigNode calibration = node.child("Calibration");
     double           cpr         = 0.0;
     bool             invert      = false;
     if (!calibration.getDouble("counts_per_revolution", 0.0, cpr, err) ||
         !calibration.getBool("invert", false, invert, err)) {
-        return nullptr;
+        return std::nullopt;
     }
     if (cpr <= 0.0) {
         err = node.path() + ": Calibration needs positive counts_per_revolution";
-        return nullptr;
+        return std::nullopt;
     }
-    sensor->radians_per_count_ = (2.0 * kPi / cpr) * (invert ? -1.0 : 1.0);
+    const double radians_per_count = (2.0 * kPi / cpr) * (invert ? -1.0 : 1.0);
 
-    sensor->payload_ =
+    struct State {
+        ChannelSetup     setup;
+        int              channel = -1;
+        double           radians_per_count = 0.0;
+        ChannelPollState poll;
+        bool             have_prev   = false;
+        int32_t          prev_counts = 0;
+        double           angle_rad   = 0.0;
+    };
+    auto state               = std::make_shared<State>();
+    state->setup             = std::move(setup);
+    state->channel           = static_cast<int>(channel);
+    state->radians_per_count = radians_per_count;
+
+    SensorExecutable executable;
+    executable.outputPayload =
         PayloadDescriptor::of<EncoderSample>(payload_names::kEncoderSample);
-    return sensor;
-}
-
-void PicoEncoderChannelSensor::reset() {
-    have_prev_    = false;
-    angle_rad_    = 0.0;
-    last_updates_ = 0;
-    if (telemetry_ != nullptr) {
-        telemetry_->reset();
-    }
-}
-
-SensorPollResult PicoEncoderChannelSensor::poll(const SensorExecutionInput& input) {
-    telemetry_->refresh(input.cycle, input.diagnostics);
-
-    SensorPollResult result;
-
-    const PicoTelemetry::Channel& channel = telemetry_->encoder(channel_);
-    if (channel.updates == last_updates_) {
-        // data decoded before a link death still counts; the fault shows on
-        // the first poll with nothing new
-        if (telemetry_->linkDead()) {
-            result.state      = SensorState::kFault;
-            result.diagnostic = "telemetry link dead";
+    executable.execute = [state](const SensorExecutionInput& input) {
+        state->setup.telemetry->refresh(input.cycle, input.diagnostics);
+        SensorPollResult result;
+        const PicoTelemetry::Channel& channel =
+            state->setup.telemetry->encoder(state->channel);
+        if (!state->poll.classify(state->setup, channel, input, result)) {
             return result;
         }
-        result.state =
-            channel.present ? SensorState::kValid : SensorState::kNoDataYet;
+
+        const int32_t counts = channel.value[0];
+        if (state->have_prev) {
+            // modular unsigned subtraction survives count wraparound
+            const int32_t delta = static_cast<int32_t>(
+                static_cast<uint32_t>(counts) - static_cast<uint32_t>(state->prev_counts));
+            state->angle_rad += delta * state->radians_per_count;
+        }
+        state->have_prev   = true;
+        state->prev_counts = counts;
+
+        result.publication =
+            SensorPublication{channel.measuredAt,
+                              TypedPayload::store(EncoderSample{state->angle_rad},
+                                                  payload_names::kEncoderSample)};
         return result;
-    }
-    last_updates_ = channel.updates;
-
-    const int32_t counts = channel.value[0];
-    if (have_prev_) {
-        // modular unsigned subtraction survives count wraparound
-        const int32_t delta = static_cast<int32_t>(static_cast<uint32_t>(counts) -
-                                                   static_cast<uint32_t>(prev_counts_));
-        angle_rad_ += delta * radians_per_count_;
-    }
-    have_prev_   = true;
-    prev_counts_ = counts;
-
-    result.state = SensorState::kValid;
-    result.publication =
-        SensorPublication{channel.measuredAt,
-                          TypedPayload::store(EncoderSample{angle_rad_},
-                                              payload_names::kEncoderSample)};
-    return result;
+    };
+    executable.reset = [state] {
+        state->poll      = ChannelPollState{};
+        state->have_prev = false;
+        state->angle_rad = 0.0;
+        state->setup.telemetry->reset();
+    };
+    return executable;
 }
 
-std::unique_ptr<Sensor> PicoImuChannelSensor::create(const ConfigNode& node,
-                                                     SensorInitializationContext& context,
-                                                     std::string& err) {
-    auto sensor = std::make_unique<PicoImuChannelSensor>();
-
-    ConfigNode source;
-    sensor->telemetry_ = telemetryFrom(node, context, source, err);
-    if (sensor->telemetry_ == nullptr) {
-        return nullptr;
+std::optional<SensorExecutable> make_pico_imu_channel(const ConfigNode& node,
+                                                      SensorInitializationContext& context,
+                                                      std::string& err) {
+    ConfigNode   source;
+    ChannelSetup setup;
+    if (!setupFrom(node, context, source, setup, err)) {
+        return std::nullopt;
     }
-    const std::string channel = source.attr("channel");
-    if (channel != "imu") {
+    if (source.attr("channel") != "imu") {
         err = source.path() + ": pico_imu_channel supports channel=\"imu\"";
-        return nullptr;
+        return std::nullopt;
     }
-    const ConfigNode calibration = node.child("Calibration");
-    if (!calibration.getBool("invert", false, sensor->invert_, err)) {
-        return nullptr;
+    bool invert = false;
+    if (!node.child("Calibration").getBool("invert", false, invert, err)) {
+        return std::nullopt;
     }
 
-    sensor->payload_ = PayloadDescriptor::of<ImuSample>(payload_names::kImuSample);
-    return sensor;
-}
+    struct State {
+        ChannelSetup     setup;
+        double           sign = 1.0;
+        ChannelPollState poll;
+    };
+    auto state   = std::make_shared<State>();
+    state->setup = std::move(setup);
+    state->sign  = invert ? -1.0 : 1.0;
 
-void PicoImuChannelSensor::reset() {
-    last_updates_ = 0;
-    if (telemetry_ != nullptr) {
-        telemetry_->reset();
-    }
-}
-
-SensorPollResult PicoImuChannelSensor::poll(const SensorExecutionInput& input) {
-    telemetry_->refresh(input.cycle, input.diagnostics);
-
-    SensorPollResult result;
-
-    const PicoTelemetry::Channel& gyro = telemetry_->gyro();
-    if (gyro.updates == last_updates_) {
-        if (telemetry_->linkDead()) {
-            result.state      = SensorState::kFault;
-            result.diagnostic = "telemetry link dead";
+    SensorExecutable executable;
+    executable.outputPayload = PayloadDescriptor::of<ImuSample>(payload_names::kImuSample);
+    executable.execute = [state](const SensorExecutionInput& input) {
+        state->setup.telemetry->refresh(input.cycle, input.diagnostics);
+        SensorPollResult              result;
+        const PicoTelemetry::Channel& gyro = state->setup.telemetry->gyro();
+        if (!state->poll.classify(state->setup, gyro, input, result)) {
             return result;
         }
-        result.state = gyro.present ? SensorState::kValid : SensorState::kNoDataYet;
+
+        // wire unit is millidegrees per second
+        ImuSample sample;
+        sample.yaw_rate_rad_s = state->sign * degToRad(gyro.value[0] / 1000.0);
+
+        result.publication =
+            SensorPublication{gyro.measuredAt,
+                              TypedPayload::store(sample, payload_names::kImuSample)};
         return result;
-    }
-    last_updates_ = gyro.updates;
-
-    // wire unit is millidegrees per second
-    const double sign = invert_ ? -1.0 : 1.0;
-    ImuSample    sample;
-    sample.yaw_rate_rad_s = sign * degToRad(gyro.value[0] / 1000.0);
-
-    result.state = SensorState::kValid;
-    result.publication =
-        SensorPublication{gyro.measuredAt,
-                          TypedPayload::store(sample, payload_names::kImuSample)};
-    return result;
+    };
+    executable.reset = [state] {
+        state->poll = ChannelPollState{};
+        state->setup.telemetry->reset();
+    };
+    return executable;
 }
 
 } // namespace navigatr

@@ -91,7 +91,7 @@ struct Fixture {
 std::string threeWheelXml(const char* a, const char* b, const char* c,
                           const char* label_a = "left") {
     std::string xml = R"(<Preprocessor id="tracking_motion"
-        type="preprocessor/tracking_wheel_odometry">)";
+        type="tracking_wheel_odometry">)";
     xml += std::string(R"(<TrackingWheel sensor_id=")") + a + R"(" label=")" + label_a +
            R"(" radius_m="0.0254" position_x_m="0" position_y_m="0.13"
               measurement_angle_deg="0"/>)";
@@ -227,7 +227,7 @@ TEST(TrackingWheelOdometry, TwoWheelsNeedHeadingConstraint) {
 
     // without a constraint: cannot observe rotation
     EXPECT_EQ(f.makeOdometry(R"(
-<Preprocessor id="m" type="preprocessor/tracking_wheel_odometry">
+<Preprocessor id="m" type="tracking_wheel_odometry">
     <TrackingWheel sensor_id="enc_a" radius_m="0.0254" position_x_m="0"
                    position_y_m="0" measurement_angle_deg="0"/>
     <TrackingWheel sensor_id="enc_b" radius_m="0.0254" position_x_m="0"
@@ -240,7 +240,7 @@ TEST(TrackingWheelOdometry, TwoWheelsNeedHeadingConstraint) {
 
     // with the constraint it works, including bias calibration
     auto odom = f.makeOdometry(R"(
-<Preprocessor id="m" type="preprocessor/tracking_wheel_odometry">
+<Preprocessor id="m" type="tracking_wheel_odometry">
     <TrackingWheel sensor_id="enc_a" radius_m="0.0254" position_x_m="0"
                    position_y_m="0" measurement_angle_deg="0"/>
     <TrackingWheel sensor_id="enc_b" radius_m="0.0254" position_x_m="0"
@@ -322,11 +322,11 @@ TEST(ConfiguredCollection, DuplicateArtifactOutputsFail) {
     context.functions = &f.functions;
 
     const ConfigNode node = f.parse(R"(
-<Preprocessing type="preprocessing/configured_collection">
-    <Preprocessor id="a" type="preprocessor/imu_normalization">
+<Preprocessing type="configured_collection">
+    <Preprocessor id="a" type="imu_normalization">
         <Input sensor_id="imu"/><Output artifact_id="same"/>
     </Preprocessor>
-    <Preprocessor id="b" type="preprocessor/imu_normalization">
+    <Preprocessor id="b" type="imu_normalization">
         <Input sensor_id="imu"/><Output artifact_id="same"/>
     </Preprocessor>
 </Preprocessing>)");
@@ -342,9 +342,69 @@ TEST(ConfiguredCollection, EmptyCollectionIsAnError) {
     context.functions = &f.functions;
 
     const ConfigNode node =
-        f.parse(R"(<Preprocessing type="preprocessing/configured_collection"/>)");
+        f.parse(R"(<Preprocessing type="configured_collection"/>)");
     EXPECT_EQ(ConfiguredCollection::create(node, context, err), nullptr);
     EXPECT_NE(err.find("noop"), std::string::npos);
+}
+
+TEST(ImuNormalization, OutageGapReseedsInsteadOfIntegrating) {
+    Fixture     f;
+    std::string err;
+    PreprocessorInitializationContext context;
+    context.sensors   = &f.catalog;
+    context.functions = &f.functions;
+
+    auto fn = ImuNormalization::create(f.parse(R"(
+<Preprocessor id="imu_normalization" type="imu_normalization">
+    <Input sensor_id="imu"/>
+    <Calibration bias_samples="0" max_gap_ms="250"/>
+    <Output artifact_id="orientation"/>
+</Preprocessor>)"),
+                                       context, err);
+    ASSERT_NE(fn, nullptr) << err;
+
+    ArtifactMap artifacts;
+    f.putImu(1.0, 0, 1);   // seed
+    fn->run(f.input(), artifacts);
+    f.putImu(1.0, 5, 2);
+    fn->run(f.input(), artifacts);
+    EXPECT_EQ(artifacts.count(ArtifactId{"orientation"}), 1u);
+    artifacts.clear();
+
+    // a five second outage: integrating across it would be garbage
+    f.putImu(1.0, 5005, 3);
+    EXPECT_EQ(fn->run(f.input(), artifacts), FunctionStatus::kOk);
+    EXPECT_TRUE(artifacts.empty());   // reseeded, interval dropped
+
+    f.putImu(1.0, 5010, 4);   // normal cadence resumes
+    fn->run(f.input(), artifacts);
+    const ImuDelta* delta =
+        artifacts.at(ArtifactId{"orientation"}).payload.get<ImuDelta>();
+    ASSERT_NE(delta, nullptr);
+    EXPECT_NEAR(delta->delta_rad, 1.0 * 0.005, 1e-12);
+}
+
+TEST(TrackingWheelOdometry, UnhealthySourcesAreNotConsumed) {
+    Fixture     f;
+    std::string err;
+    auto        odom = f.makeOdometry(threeWheelXml("enc_a", "enc_b", "enc_c"), err);
+    ASSERT_NE(odom, nullptr) << err;
+
+    ArtifactMap artifacts;
+    f.putEncoder("enc_a", 0.0, 1000, 1);
+    f.putEncoder("enc_b", 0.0, 1000, 1);
+    f.putEncoder("enc_c", 0.0, 1000, 1);
+    odom->run(f.input(), artifacts);
+
+    // one wheel goes into fault while its record still advances; the
+    // preprocessor must not act on an unhealthy source
+    f.putEncoder("enc_a", 1.0, 1005, 2);
+    f.putEncoder("enc_b", 1.0, 1005, 2);
+    f.putEncoder("enc_c", 1.0, 1005, 2);
+    f.results[SensorId{"enc_c"}].state = SensorState::kFault;
+
+    odom->run(f.input(), artifacts);
+    EXPECT_TRUE(artifacts.empty());   // no solve without every healthy input
 }
 
 TEST(ImuNormalization, CalibratesThenIntegrates) {
@@ -355,7 +415,7 @@ TEST(ImuNormalization, CalibratesThenIntegrates) {
     context.functions = &f.functions;
 
     auto fn = ImuNormalization::create(f.parse(R"(
-<Preprocessor id="imu_normalization" type="preprocessor/imu_normalization">
+<Preprocessor id="imu_normalization" type="imu_normalization">
     <Input sensor_id="imu"/>
     <Calibration bias_samples="2"/>
     <Output artifact_id="orientation"/>

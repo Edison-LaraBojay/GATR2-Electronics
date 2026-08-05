@@ -1,15 +1,17 @@
 // sensor.h
-// A configured measurement producer. Each one owns its device knowledge,
-// its channel mapping, and its private config schema; the framework calls
-// poll and does the record bookkeeping (receivedAt, sequence, retention)
-// itself. Resources are captured at construction; polling input stays small
-// and implementations cannot reach into arbitrary resources at runtime.
+// A configured measurement producer, delivered by its factory as a captured
+// executable: the payload contract it publishes plus the callables that poll
+// and reset it. Resources are captured inside the closure at construction;
+// polling input stays small and implementations cannot reach into arbitrary
+// resources at runtime. The framework does the record bookkeeping
+// (receivedAt, sequence, retention) itself.
 
 #pragma once
 #include <cstdint>
 #include <functional>
-#include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "config/config_node.h"
 #include "core/function_registry.h"
@@ -20,7 +22,7 @@ namespace navigatr
 {
 
 struct Diagnostics;
-class ResourceStore;
+class ResourceMap;
 
 struct SensorExecutionInput {
     MonotonicTime now;   // host clock
@@ -28,27 +30,23 @@ struct SensorExecutionInput {
     Diagnostics*  diagnostics = nullptr;
 };
 
-class Sensor
-{
-public:
-    virtual ~Sensor() = default;
+struct SensorExecutable {
+    PayloadDescriptor outputPayload;
 
-    virtual SensorPollResult poll(const SensorExecutionInput& input) = 0;
+    std::function<SensorPollResult(const SensorExecutionInput&)> execute;
 
-    // Payload contract of every publication this sensor produces.
-    virtual const PayloadDescriptor& outputPayload() const = 0;
-
-    virtual void reset() {}
+    // Back to power-on state. May be empty when there is nothing to reset.
+    std::function<void()> reset;
 };
 
 struct SensorInitializationContext {
-    const ResourceStore*      resources = nullptr;
+    const ResourceMap*        resources = nullptr;
     const FunctionRegistry*   functions = nullptr;
     std::vector<std::string>* warnings  = nullptr;
 };
 
-// signature stored in the FunctionRegistry under sensor/* keys
-using SensorMakeFunction = std::function<std::unique_ptr<Sensor>(
+// signature stored in the FunctionRegistry
+using SensorMakeFunction = std::function<std::optional<SensorExecutable>(
     const ConfigNode&, SensorInitializationContext&, std::string& err)>;
 
 } // namespace navigatr

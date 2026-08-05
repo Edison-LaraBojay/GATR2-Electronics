@@ -160,11 +160,13 @@ std::unique_ptr<PreprocessorExecutable> TrackingWheelOdometry::create(
                                               odom->heading_.binding, err)) {
             return nullptr;
         }
-        if (!constraint.getInt("bias_samples", 200, odom->heading_.bias_samples, err)) {
+        if (!constraint.getInt("bias_samples", 200, odom->heading_.bias_samples, err) ||
+            !constraint.getInt("max_gap_ms", 250, odom->heading_.max_gap_ms, err)) {
             return nullptr;
         }
-        if (odom->heading_.bias_samples < 0) {
-            err = constraint.path() + ": bias_samples cannot be negative";
+        if (odom->heading_.bias_samples < 0 || odom->heading_.max_gap_ms <= 0) {
+            err = constraint.path() +
+                  ": bias_samples cannot be negative and max_gap_ms must be positive";
             return nullptr;
         }
         odom->heading_.calibrated = odom->heading_.bias_samples == 0;
@@ -237,7 +239,9 @@ FunctionStatus TrackingWheelOdometry::run(const PreprocessingInput& in, Artifact
     bool progressed = false;
 
     for (Wheel& w : wheels_) {
-        const StoredSensorSample* stored = w.binding.stored(in.sensorResults);
+        // only healthy sources are consumed; fault and unavailable sensors
+        // hold their history without feeding the solve
+        const StoredSensorSample* stored = w.binding.freshStored(in.sensorResults);
         if (stored == nullptr || stored->sequence == w.last_sequence) {
             continue;
         }
@@ -264,7 +268,8 @@ FunctionStatus TrackingWheelOdometry::run(const PreprocessingInput& in, Artifact
     }
 
     if (heading_.configured) {
-        const StoredSensorSample* stored = heading_.binding.stored(in.sensorResults);
+        const StoredSensorSample* stored =
+            heading_.binding.freshStored(in.sensorResults);
         if (stored != nullptr && stored->sequence != heading_.last_sequence) {
             const ImuSample* sample = stored->payload.get<ImuSample>();
             if (sample == nullptr) {
@@ -285,10 +290,16 @@ FunctionStatus TrackingWheelOdometry::run(const PreprocessingInput& in, Artifact
                 if (heading_.have_prev) {
                     const double dt = secondsBetween(stored->measuredAt,
                                                      heading_.prev_stamp);
-                    heading_.pending_dtheta +=
-                        0.5 * (heading_.prev_rate + rate) * dt;
-                    heading_.pending_dt_s += dt;
-                    heading_.pending = true;
+                    if (dt * 1000.0 > static_cast<double>(heading_.max_gap_ms)) {
+                        // rate integration across an outage is garbage;
+                        // reseed and drop the interval
+                        heading_.have_prev = false;
+                    } else {
+                        heading_.pending_dtheta +=
+                            0.5 * (heading_.prev_rate + rate) * dt;
+                        heading_.pending_dt_s += dt;
+                        heading_.pending = true;
+                    }
                 }
                 heading_.have_prev  = true;
                 heading_.prev_rate  = rate;

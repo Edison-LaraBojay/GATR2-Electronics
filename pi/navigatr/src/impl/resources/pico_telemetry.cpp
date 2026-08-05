@@ -99,20 +99,20 @@ void PicoTelemetry::applyPacket(const gatr2::SensorSample& s, Diagnostics* diagn
     }
 }
 
-ResourceValue make_pico_telemetry(const ConfigNode& node,
+ResourceInstance make_pico_telemetry(const ConfigNode& node,
                                   ResourceInitializationContext& context,
                                   std::string& err) {
     const ConfigNode serial = node.child("Serial");
     const ResourceId link_id{serial.attr("resource_id")};
     if (link_id.empty()) {
         err = "pico_telemetry needs <Serial resource_id=.../>";
-        return ResourceValue{};
+        return ResourceInstance{};
     }
     auto link = context.require<SerialLink>(link_id, err);
     if (link == nullptr) {
-        return ResourceValue{};
+        return ResourceInstance{};
     }
-    return ResourceValue::asContract<PicoTelemetry>(
+    return ResourceInstance::asContract<PicoTelemetry>(
         std::make_shared<PicoTelemetry>(std::move(link), link_id.value));
 }
 

@@ -3,7 +3,7 @@
 #include "impl/commands/vex_brain_serial.h"
 
 #include "math/angles.h"
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 
 namespace navigatr
 {

@@ -10,7 +10,7 @@
 #include "impl/world_prediction/landmark_map.h"
 #include "math/angles.h"
 #include "payloads/landmark_associations.h"
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 #include "runtime/register_all.h"
 #include "tinyxml2/tinyxml2.h"
 
@@ -23,7 +23,7 @@ struct Fixture {
     tinyxml2::XMLDocument     doc;
     FunctionRegistry          functions;
     std::vector<std::string>  warnings;
-    ResourceStore             store;
+    ResourceMap             store;
     SlotInitializationContext context;
 
     ObservationMap observations;
@@ -37,7 +37,7 @@ struct Fixture {
         tinyxml2::XMLDocument resources_doc;
         EXPECT_EQ(resources_doc.Parse(R"(
 <Resources>
-    <Resource id="override_field" type="resource/field_map">
+    <Resource id="override_field" type="field_map">
         <Landmark id="center_goal">
             <NominalPose x_m="1.8" y_m="1.8" heading_deg="90"/>
             <Tag instance="goal_front" family="tag36h11" observed_id="7"
@@ -48,7 +48,7 @@ struct Fixture {
     </Resource>
 </Resources>)"),
                   tinyxml2::XML_SUCCESS);
-        ResourceStoreBuilder builder(functions, &warnings);
+        ResourceMapBuilder builder(functions, &warnings);
         std::string          err;
         bool                 ok = true;
         ConfigNode{resources_doc.RootElement()}.forEach("Resource", [&](const ConfigNode& r) {
@@ -99,12 +99,12 @@ struct Fixture {
 };
 
 const char* kMapOnly = R"(
-<WorldPrediction type="world_prediction/landmark_map">
+<WorldPrediction type="landmark_map">
     <FieldMap resource_id="override_field"/>
 </WorldPrediction>)";
 
 const char* kWithAssociations = R"(
-<WorldPrediction type="world_prediction/landmark_map">
+<WorldPrediction type="landmark_map">
     <FieldMap resource_id="override_field"/>
     <Input association_id="landmarks"/>
 </WorldPrediction>)";
@@ -176,7 +176,7 @@ TEST(LandmarkMap, BlendAndConfigErrors) {
     std::string err;
 
     auto wp = f.make(R"(
-<WorldPrediction type="world_prediction/landmark_map" blend="0.5">
+<WorldPrediction type="landmark_map" blend="0.5">
     <FieldMap resource_id="override_field"/>
     <Input association_id="landmarks"/>
 </WorldPrediction>)",
@@ -190,7 +190,7 @@ TEST(LandmarkMap, BlendAndConfigErrors) {
 
     // out of range blend is an error, not a clamp
     EXPECT_EQ(f.make(R"(
-<WorldPrediction type="world_prediction/landmark_map" blend="1.5">
+<WorldPrediction type="landmark_map" blend="1.5">
     <FieldMap resource_id="override_field"/>
 </WorldPrediction>)",
                      err),
@@ -199,7 +199,7 @@ TEST(LandmarkMap, BlendAndConfigErrors) {
 
     // unknown field map resource
     EXPECT_EQ(f.make(R"(
-<WorldPrediction type="world_prediction/landmark_map">
+<WorldPrediction type="landmark_map">
     <FieldMap resource_id="ghost_field"/>
 </WorldPrediction>)",
                      err),
@@ -208,7 +208,7 @@ TEST(LandmarkMap, BlendAndConfigErrors) {
 
     // unknown association reference
     EXPECT_EQ(f.make(R"(
-<WorldPrediction type="world_prediction/landmark_map">
+<WorldPrediction type="landmark_map">
     <FieldMap resource_id="override_field"/>
     <Input association_id="ghost"/>
 </WorldPrediction>)",

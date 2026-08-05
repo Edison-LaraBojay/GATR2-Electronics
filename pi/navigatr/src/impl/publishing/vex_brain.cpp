@@ -9,7 +9,7 @@
 #include "common/frame_codec.h"
 #include "math/angles.h"
 #include "payloads/landmark_associations.h"
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 #include "runtime/sensor_catalog.h"
 
 namespace navigatr

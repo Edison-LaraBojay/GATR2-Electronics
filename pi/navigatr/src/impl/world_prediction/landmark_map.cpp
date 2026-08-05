@@ -5,7 +5,7 @@
 #include <typeindex>
 
 #include "payloads/landmark_associations.h"
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 
 namespace navigatr
 {

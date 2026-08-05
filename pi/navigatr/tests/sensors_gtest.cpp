@@ -22,33 +22,33 @@ namespace
 const char* kConfig = R"(
 <System>
     <Resources>
-        <Resource id="pico_uart" type="resource/memory_link"/>
-        <Resource id="pico_telemetry" type="resource/pico_telemetry">
+        <Resource id="pico_uart" type="memory_link"/>
+        <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
         </Resource>
     </Resources>
     <Sensors>
-        <Sensor id="tracking_encoder_a" type="sensor/pico_encoder_channel">
+        <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
             <Source resource_id="pico_telemetry" channel="0"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
-        <Sensor id="tracking_encoder_b" type="sensor/pico_encoder_channel">
+        <Sensor id="tracking_encoder_b" type="pico_encoder_channel">
             <Source resource_id="pico_telemetry" channel="1"/>
             <Calibration counts_per_revolution="4000" invert="true"/>
         </Sensor>
-        <Sensor id="robot_imu" type="sensor/pico_imu_channel">
+        <Sensor id="robot_imu" type="pico_imu_channel">
             <Source resource_id="pico_telemetry" channel="imu"/>
         </Sensor>
     </Sensors>
     <Pipeline>
-        <CommandCollection type="commands/noop"/>
-        <Preprocessing type="preprocessing/noop"/>
-        <LocalizationPrediction type="localization/noop"/>
-        <Perception type="perception/noop"/>
-        <Association type="association/noop"/>
-        <PoseCorrection type="pose_correction/noop"/>
-        <WorldPrediction type="world_prediction/noop"/>
-        <Publishing type="publishing/noop"/>
+        <CommandCollection type="noop"/>
+        <Preprocessing type="noop"/>
+        <LocalizationPrediction type="noop"/>
+        <Perception type="noop"/>
+        <Association type="noop"/>
+        <PoseCorrection type="noop"/>
+        <WorldPrediction type="noop"/>
+        <Publishing type="noop"/>
     </Pipeline>
 </System>
 )";
@@ -182,6 +182,64 @@ TEST(Sensors, PartialMaskOnlyUpdatesPresentChannels) {
               SensorState::kValid);
 }
 
+TEST(Sensors, SilentOpenLinkGoesUnavailableNotValidForever) {
+    // freshness policy: an open link that stops publishing must not leave
+    // its sensors Valid indefinitely
+    const char* xml = R"(
+<System>
+    <Resources>
+        <Resource id="pico_uart" type="memory_link"/>
+        <Resource id="pico_telemetry" type="pico_telemetry">
+            <Serial resource_id="pico_uart"/>
+        </Resource>
+    </Resources>
+    <Sensors>
+        <Sensor id="enc" type="pico_encoder_channel">
+            <Source resource_id="pico_telemetry" channel="0"/>
+            <Calibration counts_per_revolution="4000"/>
+            <Freshness stale_after_ms="50"/>
+        </Sensor>
+    </Sensors>
+    <Pipeline>
+        <CommandCollection type="noop"/>
+        <Preprocessing type="noop"/>
+        <LocalizationPrediction type="noop"/>
+        <Perception type="noop"/>
+        <Association type="noop"/>
+        <PoseCorrection type="noop"/>
+        <WorldPrediction type="noop"/>
+        <Publishing type="noop"/>
+    </Pipeline>
+</System>
+)";
+    FunctionRegistry functions;
+    registerAll(functions);
+    std::string err;
+    auto        system = System::buildFromString(xml, functions, err);
+    ASSERT_NE(system, nullptr) << err;
+    auto link = system->resources().require<SerialLink>(ResourceId{"pico_uart"}, err);
+    auto* pico = dynamic_cast<MemoryLink*>(link.get());
+    ASSERT_NE(pico, nullptr);
+
+    pico->input().feed(packet(1, 1000, 500, 0, 0));
+    system->step(hostTime(1));
+    EXPECT_EQ(system->sensorResults().at(SensorId{"enc"}).state, SensorState::kValid);
+
+    system->step(hostTime(20));   // quiet but within the window
+    EXPECT_EQ(system->sensorResults().at(SensorId{"enc"}).state, SensorState::kValid);
+
+    system->step(hostTime(100));   // silent past stale_after_ms
+    const SensorRecord& stale = system->sensorResults().at(SensorId{"enc"});
+    EXPECT_EQ(stale.state, SensorState::kUnavailable);
+    ASSERT_TRUE(stale.latest.has_value());   // history retained
+    EXPECT_EQ(stale.latest->sequence, 1u);
+
+    pico->input().feed(packet(2, 1200, 600, 0, 0));   // data resumes
+    system->step(hostTime(110));
+    EXPECT_EQ(system->sensorResults().at(SensorId{"enc"}).state, SensorState::kValid);
+    EXPECT_EQ(system->sensorResults().at(SensorId{"enc"}).latest->sequence, 2u);
+}
+
 TEST(Sensors, FaultRetainsHistoricalSample) {
     // a link that yields one packet and then reports itself dead
     class ClosingLink : public SerialLink
@@ -208,36 +266,36 @@ TEST(Sensors, FaultRetainsHistoricalSample) {
     FunctionRegistry functions;
     registerAll(functions);
     functions.add<ResourceMakeFunction>(
-        FunctionKey{"resource/test_closing_link"},
+        FunctionKey{"test_closing_link"},
         [](const ConfigNode&, ResourceInitializationContext&,
-           std::string&) -> ResourceValue {
-            return ResourceValue::asContract<SerialLink>(
+           std::string&) -> ResourceInstance {
+            return ResourceInstance::asContract<SerialLink>(
                 std::make_shared<ClosingLink>(packet(1, 1000, 500, 0, 0)));
         });
 
     const char* xml = R"(
 <System>
     <Resources>
-        <Resource id="pico_uart" type="resource/test_closing_link"/>
-        <Resource id="pico_telemetry" type="resource/pico_telemetry">
+        <Resource id="pico_uart" type="test_closing_link"/>
+        <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
         </Resource>
     </Resources>
     <Sensors>
-        <Sensor id="enc" type="sensor/pico_encoder_channel">
+        <Sensor id="enc" type="pico_encoder_channel">
             <Source resource_id="pico_telemetry" channel="0"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
     </Sensors>
     <Pipeline>
-        <CommandCollection type="commands/noop"/>
-        <Preprocessing type="preprocessing/noop"/>
-        <LocalizationPrediction type="localization/noop"/>
-        <Perception type="perception/noop"/>
-        <Association type="association/noop"/>
-        <PoseCorrection type="pose_correction/noop"/>
-        <WorldPrediction type="world_prediction/noop"/>
-        <Publishing type="publishing/noop"/>
+        <CommandCollection type="noop"/>
+        <Preprocessing type="noop"/>
+        <LocalizationPrediction type="noop"/>
+        <Perception type="noop"/>
+        <Association type="noop"/>
+        <PoseCorrection type="noop"/>
+        <WorldPrediction type="noop"/>
+        <Publishing type="noop"/>
     </Pipeline>
 </System>
 )";
@@ -264,21 +322,21 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
         const std::string xml = std::string(R"(
 <System>
     <Resources>
-        <Resource id="pico_uart" type="resource/memory_link"/>
-        <Resource id="pico_telemetry" type="resource/pico_telemetry">
+        <Resource id="pico_uart" type="memory_link"/>
+        <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
         </Resource>
     </Resources>
     <Sensors>)") + sensors_xml + R"(</Sensors>
     <Pipeline>
-        <CommandCollection type="commands/noop"/>
-        <Preprocessing type="preprocessing/noop"/>
-        <LocalizationPrediction type="localization/noop"/>
-        <Perception type="perception/noop"/>
-        <Association type="association/noop"/>
-        <PoseCorrection type="pose_correction/noop"/>
-        <WorldPrediction type="world_prediction/noop"/>
-        <Publishing type="publishing/noop"/>
+        <CommandCollection type="noop"/>
+        <Preprocessing type="noop"/>
+        <LocalizationPrediction type="noop"/>
+        <Perception type="noop"/>
+        <Association type="noop"/>
+        <PoseCorrection type="noop"/>
+        <WorldPrediction type="noop"/>
+        <Publishing type="noop"/>
     </Pipeline>
 </System>
 )";
@@ -286,7 +344,7 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
     };
 
     // missing id
-    EXPECT_EQ(build(R"(<Sensor type="sensor/pico_imu_channel">
+    EXPECT_EQ(build(R"(<Sensor type="pico_imu_channel">
         <Source resource_id="pico_telemetry" channel="imu"/></Sensor>)"),
               nullptr);
     EXPECT_NE(err.find("id and type"), std::string::npos);
@@ -298,20 +356,20 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
 
     // duplicate id
     EXPECT_EQ(build(R"(
-        <Sensor id="x" type="sensor/pico_imu_channel">
+        <Sensor id="x" type="pico_imu_channel">
             <Source resource_id="pico_telemetry" channel="imu"/></Sensor>
-        <Sensor id="x" type="sensor/pico_imu_channel">
+        <Sensor id="x" type="pico_imu_channel">
             <Source resource_id="pico_telemetry" channel="imu"/></Sensor>)"),
               nullptr);
     EXPECT_NE(err.find("duplicate Sensor id"), std::string::npos);
 
     // unknown type
-    EXPECT_EQ(build(R"(<Sensor id="x" type="sensor/quantum"/>)"), nullptr);
-    EXPECT_NE(err.find("sensor/quantum"), std::string::npos);
+    EXPECT_EQ(build(R"(<Sensor id="x" type="quantum"/>)"), nullptr);
+    EXPECT_NE(err.find("quantum"), std::string::npos);
 
     // factory-owned children pass through the generic builder untouched;
     // unknown extra children are the factory's business
-    EXPECT_NE(build(R"(<Sensor id="x" type="sensor/pico_encoder_channel">
+    EXPECT_NE(build(R"(<Sensor id="x" type="pico_encoder_channel">
         <Source resource_id="pico_telemetry" channel="0"/>
         <Calibration counts_per_revolution="4000"/>
         <VendorSpecificNote anything="goes"/></Sensor>)"),
@@ -319,14 +377,14 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
         << err;
 
     // the selected factory rejects its own invalid configuration
-    EXPECT_EQ(build(R"(<Sensor id="x" type="sensor/pico_encoder_channel">
+    EXPECT_EQ(build(R"(<Sensor id="x" type="pico_encoder_channel">
         <Source resource_id="pico_telemetry" channel="0"/>
         <Calibration counts_per_revolution="-5"/></Sensor>)"),
               nullptr);
     EXPECT_NE(err.find("counts_per_revolution"), std::string::npos);
 
     // channel bounds are factory knowledge too
-    EXPECT_EQ(build(R"(<Sensor id="x" type="sensor/pico_encoder_channel">
+    EXPECT_EQ(build(R"(<Sensor id="x" type="pico_encoder_channel">
         <Source resource_id="pico_telemetry" channel="9"/>
         <Calibration counts_per_revolution="4000"/></Sensor>)"),
               nullptr);

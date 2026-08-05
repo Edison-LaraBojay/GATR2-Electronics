@@ -35,7 +35,7 @@ struct Fixture {
     tinyxml2::XMLDocument     doc;
     FunctionRegistry          functions;
     std::vector<std::string>  warnings;
-    ResourceStore             store;
+    ResourceMap             store;
     SensorCatalog             catalog;
     SlotInitializationContext context;
     MemoryLink*               brain = nullptr;
@@ -53,9 +53,9 @@ struct Fixture {
 
         tinyxml2::XMLDocument resources_doc;
         EXPECT_EQ(resources_doc.Parse(R"(
-<Resources><Resource id="brain_uart" type="resource/memory_link"/></Resources>)"),
+<Resources><Resource id="brain_uart" type="memory_link"/></Resources>)"),
                   tinyxml2::XML_SUCCESS);
-        ResourceStoreBuilder builder(functions, &warnings);
+        ResourceMapBuilder builder(functions, &warnings);
         std::string          err;
         bool                 ok = true;
         ConfigNode{resources_doc.RootElement()}.forEach("Resource",
@@ -124,7 +124,7 @@ TEST(BrainCommands, AppliesAndDeduplicates) {
     Fixture     f;
     std::string err;
     auto        commands = VexBrainSerialCommands::create(
-        f.parse(R"(<CommandCollection type="commands/vex_brain_serial">
+        f.parse(R"(<CommandCollection type="vex_brain_serial">
                     <Serial resource_id="brain_uart"/></CommandCollection>)"),
         f.context, err);
     ASSERT_NE(commands, nullptr) << err;
@@ -158,7 +158,7 @@ TEST(BrainCommands, NoUpdatePersistsState) {
     Fixture     f;
     std::string err;
     auto        commands = VexBrainSerialCommands::create(
-        f.parse(R"(<CommandCollection type="commands/vex_brain_serial">
+        f.parse(R"(<CommandCollection type="vex_brain_serial">
                     <Serial resource_id="brain_uart"/></CommandCollection>)"),
         f.context, err);
     ASSERT_NE(commands, nullptr) << err;
@@ -178,7 +178,7 @@ TEST(BrainPublisher, WireMappingHealthAndUnits) {
     Fixture     f;
     std::string err;
     auto        publisher = VexBrainPublisher::create(
-        f.parse(R"(<Publishing type="publishing/vex_brain">
+        f.parse(R"(<Publishing type="vex_brain">
                     <Serial resource_id="brain_uart"/>
                     <Health fresh_ms="150">
                         <Encoder sensor_id="enc_a"/>
@@ -230,7 +230,7 @@ TEST(BrainPublisher, UnmappedWireIdStaysInvalid) {
     Fixture     f;
     std::string err;
     auto        publisher = VexBrainPublisher::create(
-        f.parse(R"(<Publishing type="publishing/vex_brain">
+        f.parse(R"(<Publishing type="vex_brain">
                     <Serial resource_id="brain_uart"/>
                    </Publishing>)"),
         f.context, err);
@@ -249,7 +249,7 @@ TEST(BrainPublisher, LandmarkEntriesMapAndClamp) {
     Fixture     f;
     std::string err;
     auto        publisher = VexBrainPublisher::create(
-        f.parse(R"(<Publishing type="publishing/vex_brain">
+        f.parse(R"(<Publishing type="vex_brain">
                     <Serial resource_id="brain_uart"/>
                     <WorldObject object_id="center_goal" wire_id="9"/>
                     <Landmarks association_id="landmarks"/>
@@ -290,7 +290,7 @@ TEST(BrainPublisher, StreamOffSendsNothingAndConfigErrors) {
     Fixture     f;
     std::string err;
     auto        publisher = VexBrainPublisher::create(
-        f.parse(R"(<Publishing type="publishing/vex_brain">
+        f.parse(R"(<Publishing type="vex_brain">
                     <Serial resource_id="brain_uart"/>
                    </Publishing>)"),
         f.context, err);
@@ -302,7 +302,7 @@ TEST(BrainPublisher, StreamOffSendsNothingAndConfigErrors) {
 
     // duplicate wire mapping is a configuration error
     EXPECT_EQ(VexBrainPublisher::create(
-                  f.parse(R"(<Publishing type="publishing/vex_brain">
+                  f.parse(R"(<Publishing type="vex_brain">
                     <Serial resource_id="brain_uart"/>
                     <WorldObject object_id="a" wire_id="1"/>
                     <WorldObject object_id="b" wire_id="1"/>
@@ -313,7 +313,7 @@ TEST(BrainPublisher, StreamOffSendsNothingAndConfigErrors) {
 
     // unknown health sensor reference
     EXPECT_EQ(VexBrainPublisher::create(
-                  f.parse(R"(<Publishing type="publishing/vex_brain">
+                  f.parse(R"(<Publishing type="vex_brain">
                     <Serial resource_id="brain_uart"/>
                     <Health><Encoder sensor_id="ghost"/></Health>
                    </Publishing>)"),

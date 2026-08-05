@@ -21,14 +21,14 @@ namespace
 const char* kAllNoop = R"(
 <System>
     <Pipeline>
-        <CommandCollection type="commands/noop"/>
-        <Preprocessing type="preprocessing/noop"/>
-        <LocalizationPrediction type="localization/noop"/>
-        <Perception type="perception/noop"/>
-        <Association type="association/noop"/>
-        <PoseCorrection type="pose_correction/noop"/>
-        <WorldPrediction type="world_prediction/noop"/>
-        <Publishing type="publishing/noop"/>
+        <CommandCollection type="noop"/>
+        <Preprocessing type="noop"/>
+        <LocalizationPrediction type="noop"/>
+        <Perception type="noop"/>
+        <Association type="noop"/>
+        <PoseCorrection type="noop"/>
+        <WorldPrediction type="noop"/>
+        <Publishing type="noop"/>
     </Pipeline>
 </System>
 )";
@@ -64,14 +64,12 @@ TEST(SystemBuild, AllNoopBuildsStepsAndPersistsCommandState) {
     // no update carries the previous command state forward unchanged
     EXPECT_TRUE(system->command().stream_on);
     EXPECT_EQ(system->command().init_sequence, 0u);
-    EXPECT_EQ(system->diagnostics().functions.at("LocalizationPrediction/localization/noop")
-                  .runs,
-              5u);
+    EXPECT_EQ(system->diagnostics().functions.at("LocalizationPrediction/noop").runs, 5u);
 }
 
 TEST(SystemBuild, MissingSlotIsAnError) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<WorldPrediction type=\"world_prediction/noop\"/>", "")
+    EXPECT_EQ(tryBuild(withSlot("<WorldPrediction type=\"noop\"/>", "")
                            .c_str(),
                        err),
               nullptr);
@@ -81,7 +79,7 @@ TEST(SystemBuild, MissingSlotIsAnError) {
 
 TEST(SystemBuild, MissingTypeIsAnError) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<CommandCollection type=\"commands/noop\"/>",
+    EXPECT_EQ(tryBuild(withSlot("<CommandCollection type=\"noop\"/>",
                                 "<CommandCollection/>")
                            .c_str(),
                        err),
@@ -91,19 +89,20 @@ TEST(SystemBuild, MissingTypeIsAnError) {
 
 TEST(SystemBuild, UnknownTypeIsAnError) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<LocalizationPrediction type=\"localization/noop\"/>",
-                                "<LocalizationPrediction type=\"localization/quantum\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<LocalizationPrediction type=\"noop\"/>",
+                                "<LocalizationPrediction type=\"quantum\"/>")
                            .c_str(),
                        err),
               nullptr);
-    EXPECT_NE(err.find("localization/quantum"), std::string::npos);
+    EXPECT_NE(err.find("quantum"), std::string::npos);
 }
 
 TEST(SystemBuild, WrongCategoryKeyCannotBeConstructed) {
-    // a publisher key in the localization slot fails on signature
+    // a publisher-only name in the localization slot fails on signature,
+    // while the shared name noop resolves per category
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<LocalizationPrediction type=\"localization/noop\"/>",
-                                "<LocalizationPrediction type=\"publishing/noop\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<LocalizationPrediction type=\"noop\"/>",
+                                "<LocalizationPrediction type=\"vex_brain\"/>")
                            .c_str(),
                        err),
               nullptr);
@@ -112,17 +111,17 @@ TEST(SystemBuild, WrongCategoryKeyCannotBeConstructed) {
 
 TEST(SystemBuild, DuplicateSlotAndUnknownChildrenRejected) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<Perception type=\"perception/noop\"/>",
-                                "<Perception type=\"perception/noop\"/>"
-                                "<Perception type=\"perception/noop\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<Perception type=\"noop\"/>",
+                                "<Perception type=\"noop\"/>"
+                                "<Perception type=\"noop\"/>")
                            .c_str(),
                        err),
               nullptr);
     EXPECT_NE(err.find("more than one Perception"), std::string::npos);
 
-    EXPECT_EQ(tryBuild(withSlot("<Perception type=\"perception/noop\"/>",
-                                "<Perception type=\"perception/noop\"/>"
-                                "<Perceptron type=\"perception/noop\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<Perception type=\"noop\"/>",
+                                "<Perception type=\"noop\"/>"
+                                "<Perceptron type=\"noop\"/>")
                            .c_str(),
                        err),
               nullptr);
@@ -160,19 +159,19 @@ TEST(SystemBuild, ErrorsCarryPathIdAndType) {
     EXPECT_EQ(tryBuild(R"(
 <System>
     <Resources>
-        <Resource id="pico_telemetry" type="resource/pico_telemetry">
+        <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="missing_uart"/>
         </Resource>
     </Resources>
     <Pipeline>
-        <CommandCollection type="commands/noop"/>
-        <Preprocessing type="preprocessing/noop"/>
-        <LocalizationPrediction type="localization/noop"/>
-        <Perception type="perception/noop"/>
-        <Association type="association/noop"/>
-        <PoseCorrection type="pose_correction/noop"/>
-        <WorldPrediction type="world_prediction/noop"/>
-        <Publishing type="publishing/noop"/>
+        <CommandCollection type="noop"/>
+        <Preprocessing type="noop"/>
+        <LocalizationPrediction type="noop"/>
+        <Perception type="noop"/>
+        <Association type="noop"/>
+        <PoseCorrection type="noop"/>
+        <WorldPrediction type="noop"/>
+        <Publishing type="noop"/>
     </Pipeline>
 </System>
 )",
@@ -198,29 +197,29 @@ TEST(SystemBuild, DeclarationReorderingChangesNothing) {
     const char* xml = R"(
 <System>
     <Resources>
-        <Resource id="pico_telemetry" type="resource/pico_telemetry">
+        <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
         </Resource>
-        <Resource id="pico_uart" type="resource/memory_link"/>
+        <Resource id="pico_uart" type="memory_link"/>
     </Resources>
     <Sensors>
-        <Sensor id="robot_imu" type="sensor/pico_imu_channel">
+        <Sensor id="robot_imu" type="pico_imu_channel">
             <Source resource_id="pico_telemetry" channel="imu"/>
         </Sensor>
-        <Sensor id="enc" type="sensor/pico_encoder_channel">
+        <Sensor id="enc" type="pico_encoder_channel">
             <Source resource_id="pico_telemetry" channel="0"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
     </Sensors>
     <Pipeline>
-        <CommandCollection type="commands/noop"/>
-        <Preprocessing type="preprocessing/noop"/>
-        <LocalizationPrediction type="localization/noop"/>
-        <Perception type="perception/noop"/>
-        <Association type="association/noop"/>
-        <PoseCorrection type="pose_correction/noop"/>
-        <WorldPrediction type="world_prediction/noop"/>
-        <Publishing type="publishing/noop"/>
+        <CommandCollection type="noop"/>
+        <Preprocessing type="noop"/>
+        <LocalizationPrediction type="noop"/>
+        <Perception type="noop"/>
+        <Association type="noop"/>
+        <PoseCorrection type="noop"/>
+        <WorldPrediction type="noop"/>
+        <Publishing type="noop"/>
     </Pipeline>
 </System>
 )";
@@ -313,42 +312,42 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
     };
 
     functions.add<CommandsMakeFunction>(
-        FunctionKey{"commands/probe"},
+        FunctionKey{"probe"},
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<ProbeCommands>(log);
         });
     functions.add<PreprocessingMakeFunction>(
-        FunctionKey{"preprocessing/probe"},
+        FunctionKey{"probe"},
         [log](const ConfigNode&, PreprocessorInitializationContext&, std::string&) {
             return std::make_unique<ProbePreprocessing>(log);
         });
     functions.add<LocalizationMakeFunction>(
-        FunctionKey{"localization/probe"},
+        FunctionKey{"probe"},
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<ProbeLocalization>(log);
         });
     functions.add<PerceptionMakeFunction>(
-        FunctionKey{"perception/probe"},
+        FunctionKey{"probe"},
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<ProbePerception>(log);
         });
     functions.add<AssociationMakeFunction>(
-        FunctionKey{"association/probe"},
+        FunctionKey{"probe"},
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<ProbeAssociation>(log);
         });
     functions.add<PoseCorrectionMakeFunction>(
-        FunctionKey{"pose_correction/probe"},
+        FunctionKey{"probe"},
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<ProbeCorrection>(log);
         });
     functions.add<WorldPredictionMakeFunction>(
-        FunctionKey{"world_prediction/probe"},
+        FunctionKey{"probe"},
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<ProbeWorld>(log);
         });
     functions.add<PublishingMakeFunction>(
-        FunctionKey{"publishing/probe"},
+        FunctionKey{"probe"},
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<ProbePublishing>(log);
         });
@@ -358,14 +357,14 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
     const char* xml = R"(
 <System>
     <Pipeline>
-        <Publishing type="publishing/probe"/>
-        <Perception type="perception/probe"/>
-        <CommandCollection type="commands/probe"/>
-        <WorldPrediction type="world_prediction/probe"/>
-        <LocalizationPrediction type="localization/probe"/>
-        <PoseCorrection type="pose_correction/probe"/>
-        <Preprocessing type="preprocessing/probe"/>
-        <Association type="association/probe"/>
+        <Publishing type="probe"/>
+        <Perception type="probe"/>
+        <CommandCollection type="probe"/>
+        <WorldPrediction type="probe"/>
+        <LocalizationPrediction type="probe"/>
+        <PoseCorrection type="probe"/>
+        <Preprocessing type="probe"/>
+        <Association type="probe"/>
     </Pipeline>
 </System>
 )";

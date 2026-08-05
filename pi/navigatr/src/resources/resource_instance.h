@@ -17,17 +17,17 @@
 namespace navigatr
 {
 
-class ResourceValue
+class ResourceInstance
 {
 public:
-    ResourceValue() = default;
+    ResourceInstance() = default;
 
     template <typename Contract, typename Implementation>
-    static ResourceValue asContract(std::shared_ptr<Implementation> implementation) {
+    static ResourceInstance asContract(std::shared_ptr<Implementation> implementation) {
         // constness is restored on retrieval; the value is only reachable
         // through the recorded contract type
         using Mutable = std::remove_const_t<Contract>;
-        ResourceValue v;
+        ResourceInstance v;
         v.contract_ = std::type_index(typeid(Contract));
         v.object_   = std::static_pointer_cast<void>(std::const_pointer_cast<Mutable>(
             std::static_pointer_cast<Contract>(std::move(implementation))));

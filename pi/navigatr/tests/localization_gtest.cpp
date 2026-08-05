@@ -27,7 +27,7 @@ struct Fixture {
     std::unique_ptr<Localization> prediction;
 
     explicit Fixture(const char* xml = R"(
-        <LocalizationPrediction type="localization/wheel_imu_prediction">
+        <LocalizationPrediction type="wheel_imu_prediction">
             <Motion artifact_id="motion"/>
         </LocalizationPrediction>)") {
         EXPECT_EQ(doc.Parse(xml), tinyxml2::XML_SUCCESS);
@@ -126,7 +126,7 @@ TEST(WheelImuPrediction, InitEdgeTriggered) {
 
 TEST(WheelImuPrediction, OrientationOverridesMotionHeading) {
     Fixture f(R"(
-        <LocalizationPrediction type="localization/wheel_imu_prediction">
+        <LocalizationPrediction type="wheel_imu_prediction">
             <Motion artifact_id="motion"/>
             <Orientation artifact_id="orientation"/>
         </LocalizationPrediction>)");
@@ -150,7 +150,7 @@ TEST(WheelImuPrediction, MissingMotionHoldsPose) {
 TEST(WheelImuPrediction, ReferencesValidateAtBuild) {
     tinyxml2::XMLDocument doc;
     ASSERT_EQ(doc.Parse(R"(
-        <LocalizationPrediction type="localization/wheel_imu_prediction">
+        <LocalizationPrediction type="wheel_imu_prediction">
             <Motion artifact_id="ghost"/>
         </LocalizationPrediction>)"),
               tinyxml2::XML_SUCCESS);

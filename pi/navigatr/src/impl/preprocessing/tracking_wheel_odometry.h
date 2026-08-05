@@ -78,6 +78,7 @@ private:
         bool                          configured = false;
         TypedSensorBinding<ImuSample> binding;
         long                          bias_samples = 200;
+        long                          max_gap_ms   = 250;   // reseed across outages
 
         bool     calibrated = false;
         long     cal_count  = 0;

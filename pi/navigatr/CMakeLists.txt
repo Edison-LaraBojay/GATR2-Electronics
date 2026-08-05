@@ -18,19 +18,29 @@ set(NAVIGATR_SOURCES
     src/config/field_map.cpp
     src/transport/file_stream.cpp
     src/transport/serial_port.cpp
-    src/resources/resource_store.cpp
+    src/resources/resource_map.cpp
     src/impl/resources/serial_links.cpp
     src/impl/resources/pico_telemetry.cpp
     src/impl/resources/field_map_resource.cpp
+    src/impl/resources/register_resources.cpp
     src/impl/sensors/pico_channels.cpp
+    src/impl/sensors/register_sensors.cpp
     src/impl/noop/noops.cpp
     src/impl/commands/vex_brain_serial.cpp
+    src/impl/commands/register_commands.cpp
     src/impl/preprocessing/configured_collection.cpp
     src/impl/preprocessing/tracking_wheel_odometry.cpp
     src/impl/preprocessing/imu_normalization.cpp
+    src/impl/preprocessing/register_preprocessing.cpp
     src/impl/localization/wheel_imu_prediction.cpp
+    src/impl/localization/register_localization.cpp
+    src/impl/perception/register_perception.cpp
+    src/impl/association/register_association.cpp
+    src/impl/pose_correction/register_pose_correction.cpp
     src/impl/world_prediction/landmark_map.cpp
+    src/impl/world_prediction/register_world_prediction.cpp
     src/impl/publishing/vex_brain.cpp
+    src/impl/publishing/register_publishers.cpp
     src/runtime/register_all.cpp
     src/runtime/system.cpp
 )

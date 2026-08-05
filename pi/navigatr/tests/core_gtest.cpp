@@ -7,7 +7,8 @@
 #include "core/function_registry.h"
 #include "core/records.h"
 #include "core/time.h"
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
+#include "runtime/sensor_map.h"
 
 using namespace navigatr;
 
@@ -27,48 +28,51 @@ struct BetaPayload {
 TEST(FunctionRegistry, RegisterAndRetrieveTypedSignatures) {
     FunctionRegistry functions;
 
+    // one opaque name may exist once per signature; this is what lets every
+    // category register its own noop
     ASSERT_TRUE(functions.add<SensorMakeFunction>(
-        FunctionKey{"sensor/fake"},
+        FunctionKey{"fake"},
         [](const ConfigNode&, SensorInitializationContext&,
-           std::string&) -> std::unique_ptr<Sensor> { return nullptr; }));
+           std::string&) -> std::optional<SensorExecutable> { return std::nullopt; }));
     ASSERT_TRUE(functions.add<ResourceMakeFunction>(
-        FunctionKey{"resource/fake"},
+        FunctionKey{"fake"},
         [](const ConfigNode&, ResourceInitializationContext&,
-           std::string&) -> ResourceValue { return ResourceValue{}; }));
+           std::string&) -> ResourceInstance { return ResourceInstance{}; }));
 
     std::string err;
-    EXPECT_NE(functions.find<SensorMakeFunction>(FunctionKey{"sensor/fake"}, err), nullptr);
-    EXPECT_NE(functions.find<ResourceMakeFunction>(FunctionKey{"resource/fake"}, err),
+    EXPECT_NE(functions.find<SensorMakeFunction>(FunctionKey{"fake"}, err), nullptr);
+    EXPECT_NE(functions.find<ResourceMakeFunction>(FunctionKey{"fake"}, err),
               nullptr);
 }
 
 TEST(FunctionRegistry, UnknownKeyFailsLoudly) {
     FunctionRegistry functions;
     std::string      err;
-    EXPECT_EQ(functions.find<SensorMakeFunction>(FunctionKey{"sensor/missing"}, err),
+    EXPECT_EQ(functions.find<SensorMakeFunction>(FunctionKey{"missing"}, err),
               nullptr);
-    EXPECT_NE(err.find("sensor/missing"), std::string::npos);
+    EXPECT_NE(err.find("missing"), std::string::npos);
 }
 
 TEST(FunctionRegistry, WrongSignatureFailsLoudly) {
     FunctionRegistry functions;
     functions.add<ResourceMakeFunction>(
-        FunctionKey{"resource/fake"},
+        FunctionKey{"fake"},
         [](const ConfigNode&, ResourceInitializationContext&,
-           std::string&) -> ResourceValue { return ResourceValue{}; });
+           std::string&) -> ResourceInstance { return ResourceInstance{}; });
 
     std::string err;
-    EXPECT_EQ(functions.find<SensorMakeFunction>(FunctionKey{"resource/fake"}, err),
+    EXPECT_EQ(functions.find<SensorMakeFunction>(FunctionKey{"fake"}, err),
               nullptr);
     EXPECT_NE(err.find("different signature"), std::string::npos);
 }
 
-TEST(FunctionRegistry, DuplicateKeyFails) {
+TEST(FunctionRegistry, DuplicateKeyWithinSignatureFails) {
     FunctionRegistry functions;
-    const auto       factory = [](const ConfigNode&, SensorInitializationContext&,
-                            std::string&) -> std::unique_ptr<Sensor> { return nullptr; };
-    EXPECT_TRUE(functions.add<SensorMakeFunction>(FunctionKey{"sensor/fake"}, factory));
-    EXPECT_FALSE(functions.add<SensorMakeFunction>(FunctionKey{"sensor/fake"}, factory));
+    const auto       factory =
+        [](const ConfigNode&, SensorInitializationContext&,
+           std::string&) -> std::optional<SensorExecutable> { return std::nullopt; };
+    EXPECT_TRUE(functions.add<SensorMakeFunction>(FunctionKey{"fake"}, factory));
+    EXPECT_FALSE(functions.add<SensorMakeFunction>(FunctionKey{"fake"}, factory));
     EXPECT_FALSE(functions.add<SensorMakeFunction>(FunctionKey{""}, factory));
 }
 
@@ -105,6 +109,30 @@ TEST(TypedIds, DistinctTypesDoNotMix) {
     EXPECT_EQ(results.count(SensorId{"tracking"}), 1u);
     // ResourceId{"tracking"} would not compile as a key here.
     EXPECT_NE(SensorId{"a"}, SensorId{"b"});
+}
+
+TEST(SensorMapClass, IdKeyedDeterministicOrder) {
+    const auto executable = [] {
+        SensorExecutable e;
+        e.outputPayload = PayloadDescriptor::of<AlphaPayload>("test.alpha");
+        e.execute = [](const SensorExecutionInput&) { return SensorPollResult{}; };
+        return e;
+    };
+
+    SensorMap sensors;
+    EXPECT_TRUE(sensors.add(SensorId{"b"}, executable(), "Sensor/b"));
+    EXPECT_TRUE(sensors.add(SensorId{"a"}, executable(), "Sensor/a"));
+    EXPECT_FALSE(sensors.add(SensorId{"a"}, executable(), "Sensor/a"));   // duplicate
+
+    // declaration order, not hash or lexical order
+    ASSERT_EQ(sensors.size(), 2u);
+    EXPECT_EQ(sensors.executionOrder()[0].id, SensorId{"b"});
+    EXPECT_EQ(sensors.executionOrder()[1].id, SensorId{"a"});
+
+    const SensorMap::Entry* found = sensors.find(SensorId{"a"});
+    ASSERT_NE(found, nullptr);
+    EXPECT_EQ(found->label, "Sensor/a");
+    EXPECT_EQ(sensors.find(SensorId{"missing"}), nullptr);
 }
 
 TEST(Time, DomainsStaySeparate) {

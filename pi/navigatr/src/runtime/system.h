@@ -34,8 +34,9 @@
 #include "contracts/world_prediction.h"
 #include "core/diagnostics.h"
 #include "core/function_registry.h"
-#include "resources/resource_store.h"
+#include "resources/resource_map.h"
 #include "runtime/sensor_catalog.h"
+#include "runtime/sensor_map.h"
 #include "state/command_state.h"
 #include "state/robot_state.h"
 #include "state/world_state.h"
@@ -81,7 +82,7 @@ public:
     const std::vector<std::string>& warnings() const { return warnings_; }
 
     // Read access for tests and tooling.
-    const ResourceStore& resources() const { return resources_; }
+    const ResourceMap& resources() const { return resources_; }
     const SensorCatalog& sensorCatalog() const { return catalog_; }
 
 private:
@@ -93,16 +94,11 @@ private:
     double loop_rate_hz_ = 100.0;
 
     // destruction order: declared first, destroyed last
-    ResourceStore            resources_;
+    ResourceMap            resources_;
     std::vector<std::string> warnings_;
 
-    struct SensorEntry {
-        SensorId                id;
-        std::unique_ptr<Sensor> sensor;
-        std::string             label;   // diagnostics
-    };
-    std::vector<SensorEntry> sensors_;   // deterministic execution order
-    SensorCatalog            catalog_;
+    SensorMap     sensors_;   // id-keyed executables, deterministic order
+    SensorCatalog catalog_;
 
     std::unique_ptr<Commands>        commands_;
     std::unique_ptr<Preprocessing>   preprocessing_;

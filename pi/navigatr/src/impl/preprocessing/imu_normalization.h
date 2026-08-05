@@ -43,6 +43,7 @@ private:
     ArtifactId                    output_;
     TypedSensorBinding<ImuSample> binding_;
     long                          bias_samples_ = 200;
+    long                          max_gap_ms_   = 250;   // reseed across outages
 
     uint64_t last_sequence_ = 0;
     bool     calibrated_    = false;

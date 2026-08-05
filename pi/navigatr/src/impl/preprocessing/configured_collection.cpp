@@ -27,13 +27,6 @@ std::unique_ptr<Preprocessing> ConfiguredCollection::create(
             ok  = false;
             return;
         }
-        for (const auto& seen : collection->executables_) {
-            if (seen->id() == id) {
-                err = p.path() + ": duplicate Preprocessor id " + id.value;
-                ok  = false;
-                return;
-            }
-        }
         const PreprocessorMakeFunction* factory =
             context.functions->find<PreprocessorMakeFunction>(type, err);
         if (factory == nullptr) {
@@ -47,8 +40,8 @@ std::unique_ptr<Preprocessing> ConfiguredCollection::create(
             return;
         }
         for (const ArtifactOutputDecl& out : built->outputs()) {
-            for (const auto& seen : collection->executables_) {
-                for (const ArtifactOutputDecl& other : seen->outputs()) {
+            for (const PreprocessingMap::Entry& seen : collection->executables_.executionOrder()) {
+                for (const ArtifactOutputDecl& other : seen.executable->outputs()) {
                     if (other.id == out.id) {
                         err = p.path() + ": duplicate artifact output id " + out.id.value;
                         ok  = false;
@@ -57,14 +50,18 @@ std::unique_ptr<Preprocessing> ConfiguredCollection::create(
                 }
             }
         }
-        collection->executables_.push_back(std::move(built));
+        if (!collection->executables_.add(id, std::move(built))) {
+            err = p.path() + ": duplicate Preprocessor id " + id.value;
+            ok  = false;
+            return;
+        }
     });
     if (!ok) {
         return nullptr;
     }
-    if (collection->executables_.empty()) {
+    if (collection->executables_.size() == 0) {
         err = node.path() + ": configured_collection has no Preprocessor children; "
-              "doing nothing is type=\"preprocessing/noop\"";
+              "doing nothing is type=\"noop\"";
         return nullptr;
     }
     return collection;
@@ -72,10 +69,10 @@ std::unique_ptr<Preprocessing> ConfiguredCollection::create(
 
 PreprocessingOutput ConfiguredCollection::run(const PreprocessingInput& in) {
     PreprocessingOutput out;
-    for (auto& executable : executables_) {
-        const FunctionStatus s = executable->run(in, out.artifacts);
+    for (PreprocessingMap::Entry& entry : executables_.executionOrder()) {
+        const FunctionStatus s = entry.executable->run(in, out.artifacts);
         if (in.diagnostics != nullptr) {
-            in.diagnostics->note("Preprocessor/" + executable->id().value, s);
+            in.diagnostics->note("Preprocessor/" + entry.id.value, s);
         }
         out.status = worseOf(out.status, s);
     }
@@ -84,8 +81,8 @@ PreprocessingOutput ConfiguredCollection::run(const PreprocessingInput& in) {
 
 std::vector<ArtifactOutputDecl> ConfiguredCollection::produces() const {
     std::vector<ArtifactOutputDecl> out;
-    for (const auto& executable : executables_) {
-        for (const ArtifactOutputDecl& decl : executable->outputs()) {
+    for (const PreprocessingMap::Entry& entry : executables_.executionOrder()) {
+        for (const ArtifactOutputDecl& decl : entry.executable->outputs()) {
             out.push_back(decl);
         }
     }
@@ -93,8 +90,8 @@ std::vector<ArtifactOutputDecl> ConfiguredCollection::produces() const {
 }
 
 void ConfiguredCollection::reset() {
-    for (auto& executable : executables_) {
-        executable->reset();
+    for (PreprocessingMap::Entry& entry : executables_.executionOrder()) {
+        entry.executable->reset();
     }
 }
 
