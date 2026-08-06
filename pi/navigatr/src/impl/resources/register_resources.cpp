@@ -1,8 +1,12 @@
 // register_resources.cpp
 
+#include "impl/resources/cameras.h"
 #include "impl/resources/field_map_resource.h"
 #include "impl/resources/pico_telemetry.h"
+#include "impl/resources/robot_frame_map.h"
 #include "impl/resources/serial_links.h"
+#include "impl/resources/tag_detectors.h"
+#include "impl/resources/target_set_resource.h"
 #include "resources/resource_map.h"
 #include "runtime/register_all.h"
 
@@ -17,6 +21,13 @@ void register_resources(FunctionRegistry& functions) {
                                         &make_file_replay_link);
     registerOrDie<ResourceMakeFunction>(functions, "pico_telemetry", &make_pico_telemetry);
     registerOrDie<ResourceMakeFunction>(functions, "field_map", &make_field_map);
+    registerOrDie<ResourceMakeFunction>(functions, "robot_frame_map",
+                                        &make_robot_frame_map);
+    registerOrDie<ResourceMakeFunction>(functions, "libcamera_camera",
+                                        &make_libcamera_camera);
+    registerOrDie<ResourceMakeFunction>(functions, "apriltag_detector",
+                                        &make_apriltag_detector);
+    registerOrDie<ResourceMakeFunction>(functions, "target_set", &make_target_set);
 }
 
 } // namespace navigatr

@@ -59,6 +59,30 @@ The registry and code are the source of truth; this file catalogs them.
   `imu_normalization` or a HeadingConstraint, which own their
   own `bias_samples` windows.
 
+## camera_frame
+
+- Factory: `make_camera_frame`.
+- Output payload: `sensor.camera_frame` (`CameraFramePayload`): the frame
+  data, the camera's engineering frame id (resolved in the robot frame
+  map by consumers), and the intrinsics the frame was captured under.
+- Schema:
+
+```xml
+<Sensor id="front_camera" type="camera_frame">
+    <Source resource_id="front_camera_device"/>
+</Sensor>
+```
+
+- Required resources: a `CameraDevice` resource.
+- Timestamp source: the exposure timestamp, host clock.
+- Update behavior: a new device frame publishes; a live camera between
+  frames is a healthy quiet cycle (a slow camera does not disappear).
+- Failure behavior: a dead camera device is Unavailable with a
+  diagnostic, never a silent absence; history is retained.
+- Calibration ownership: intrinsics and the extrinsic frame id live on
+  the camera device resource; the mounting transform lives in the robot
+  frame map under that frame id.
+
 ## Adding a sensor type
 
 Write a factory that returns a `SensorExecutable` (its `PayloadDescriptor`

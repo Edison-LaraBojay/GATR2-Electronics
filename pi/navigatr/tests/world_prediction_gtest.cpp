@@ -30,6 +30,8 @@ struct Fixture {
     AssociationMap associations;
     RobotState     robot;
     WorldState     world;
+    CommandState   command;
+    TargetState    target;
 
     Fixture() {
         register_resources(functions);
@@ -39,11 +41,18 @@ struct Fixture {
 <Resources>
     <Resource id="override_field" type="field_map">
         <Landmark id="center_goal">
-            <NominalPose x_m="1.8" y_m="1.8" heading_deg="90"/>
-            <Tag instance="goal_front" family="tag36h11" observed_id="7"
-                 x_m="0.15" y_m="0" heading_deg="180"/>
-            <Tag instance="goal_left" family="tag36h11" observed_id="7"
-                 x_m="0" y_m="0.15" heading_deg="90"/>
+            <NominalPose calibration_status="verified"
+                         x_m="1.8" y_m="1.8" heading_deg="90"/>
+            <TagMount instance_id="goal_front" calibration_status="verified"
+                      family="tag36h11" observed_id="7" detection_size_m="0.06">
+                <PoseOfTagSurfaceInLandmark x_m="0.15" y_m="0" z_m="0.25"
+                    roll_deg="0" pitch_deg="0" yaw_deg="180"/>
+            </TagMount>
+            <TagMount instance_id="goal_left" calibration_status="verified"
+                      family="tag36h11" observed_id="7" detection_size_m="0.06">
+                <PoseOfTagSurfaceInLandmark x_m="0" y_m="0.15" z_m="0.25"
+                    roll_deg="0" pitch_deg="0" yaw_deg="90"/>
+            </TagMount>
         </Landmark>
     </Resource>
 </Resources>)"),
@@ -75,9 +84,10 @@ struct Fixture {
     }
 
     WorldPredictionOutput run(WorldPrediction& wp, int64_t now = 1) {
-        const WorldPredictionOutput out =
-            wp.run({observations, associations, robot, world, hostTime(now)});
-        world = out.world;
+        const WorldPredictionOutput out = wp.run(
+            {observations, associations, robot, world, command, target, hostTime(now)});
+        world  = out.world;
+        target = out.target;
         return out;
     }
 
@@ -122,13 +132,16 @@ TEST(FieldMapResource, ParsesLandmarksAndTagInstances) {
     EXPECT_NEAR(goal->nominal.x_m, 1.8, 1e-12);
     EXPECT_NEAR(goal->nominal.heading_rad, kPi / 2.0, 1e-12);
 
-    // two physical instances share one printed id; identity is the instance
-    ASSERT_EQ(goal->tags.size(), 2u);
-    EXPECT_EQ(goal->tags[0].instance, "goal_front");
-    EXPECT_EQ(goal->tags[1].instance, "goal_left");
-    EXPECT_EQ(goal->tags[0].observed_id, 7);
-    EXPECT_EQ(goal->tags[1].observed_id, 7);
-    EXPECT_NEAR(goal->tags[0].mount.x_m, 0.15, 1e-12);
+    // two physical mounts share one printed id; identity is the instance
+    ASSERT_EQ(goal->mounts.size(), 2u);
+    EXPECT_EQ(goal->mounts[0].instance_id, "goal_front");
+    EXPECT_EQ(goal->mounts[1].instance_id, "goal_left");
+    EXPECT_EQ(goal->mounts[0].observed_id, 7);
+    EXPECT_EQ(goal->mounts[1].observed_id, 7);
+    EXPECT_NEAR(goal->mounts[0].detection_size_m, 0.06, 1e-12);
+    EXPECT_NEAR(goal->mounts[0].T_landmark_tag_surface.x_m, 0.15, 1e-12);
+    // yaw 180: the surface outward normal points back along landmark -x
+    EXPECT_NEAR(goal->mounts[0].T_landmark_tag_surface.R.m[0][0], -1.0, 1e-12);
 }
 
 TEST(LandmarkMap, SeedsFromMapAndKeepsUnseenValid) {

@@ -16,12 +16,15 @@ endif()
 set(TEST_SOURCES
     core_gtest.cpp
     transforms_gtest.cpp
+    se3_gtest.cpp
     resources_gtest.cpp
+    geometry_resources_gtest.cpp
     sensors_gtest.cpp
     preprocessing_gtest.cpp
     localization_gtest.cpp
     brain_io_gtest.cpp
     world_prediction_gtest.cpp
+    vision_targets_gtest.cpp
     system_build_gtest.cpp
     end_to_end_gtest.cpp
 )

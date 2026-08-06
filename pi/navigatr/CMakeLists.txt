@@ -22,8 +22,13 @@ set(NAVIGATR_SOURCES
     src/impl/resources/serial_links.cpp
     src/impl/resources/pico_telemetry.cpp
     src/impl/resources/field_map_resource.cpp
+    src/impl/resources/robot_frame_map.cpp
+    src/impl/resources/cameras.cpp
+    src/impl/resources/tag_detectors.cpp
+    src/impl/resources/target_set_resource.cpp
     src/impl/resources/register_resources.cpp
     src/impl/sensors/pico_channels.cpp
+    src/impl/sensors/camera_channel.cpp
     src/impl/sensors/register_sensors.cpp
     src/impl/noop/noops.cpp
     src/impl/commands/vex_brain_serial.cpp
@@ -34,10 +39,13 @@ set(NAVIGATR_SOURCES
     src/impl/preprocessing/register_preprocessing.cpp
     src/impl/localization/wheel_imu_prediction.cpp
     src/impl/localization/register_localization.cpp
+    src/impl/perception/apriltag_tag_observation.cpp
     src/impl/perception/register_perception.cpp
+    src/impl/association/tag_mount_association.cpp
     src/impl/association/register_association.cpp
     src/impl/pose_correction/register_pose_correction.cpp
     src/impl/world_prediction/landmark_map.cpp
+    src/impl/world_prediction/target_tracker.cpp
     src/impl/world_prediction/register_world_prediction.cpp
     src/impl/publishing/vex_brain.cpp
     src/impl/publishing/register_publishers.cpp

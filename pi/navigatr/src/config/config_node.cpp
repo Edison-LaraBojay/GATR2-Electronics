@@ -110,6 +110,35 @@ bool ConfigNode::getBool(const char* key, bool def, bool& out, std::string& err)
     return false;
 }
 
+bool ConfigNode::requireDouble(const char* key, double& out, std::string& err) const {
+    if (!hasAttr(key)) {
+        err = path() + ": missing required attribute " + key;
+        return false;
+    }
+    return getDouble(key, 0.0, out, err);
+}
+
+bool ConfigNode::requireInt(const char* key, long& out, std::string& err) const {
+    if (!hasAttr(key)) {
+        err = path() + ": missing required attribute " + key;
+        return false;
+    }
+    return getInt(key, 0, out, err);
+}
+
+bool ConfigNode::requireAttr(const char* key, std::string& out, std::string& err) const {
+    if (!hasAttr(key)) {
+        err = path() + ": missing required attribute " + key;
+        return false;
+    }
+    out = attr(key);
+    if (out.empty()) {
+        err = path() + ": attribute " + key + " must not be empty";
+        return false;
+    }
+    return true;
+}
+
 ConfigNode ConfigNode::child(const char* child_name) const {
     return e_ == nullptr ? ConfigNode{} : ConfigNode{e_->FirstChildElement(child_name)};
 }

@@ -2,27 +2,14 @@
 
 #include "config/field_map.h"
 
-#include "math/angles.h"
+#include "config/calibration.h"
+#include "config/pose3_config.h"
 
 namespace navigatr
 {
 
-namespace
-{
-
-bool poseFromAttrs(const ConfigNode& n, Pose2D& out, std::string& err) {
-    double heading_deg = 0.0;
-    if (!n.getDouble("x_m", 0.0, out.x_m, err) || !n.getDouble("y_m", 0.0, out.y_m, err) ||
-        !n.getDouble("heading_deg", 0.0, heading_deg, err)) {
-        return false;
-    }
-    out.heading_rad = degToRad(heading_deg);
-    return true;
-}
-
-} // namespace
-
-bool parseFieldMap(const ConfigNode& node, FieldMap& out, std::string& err) {
+bool parseFieldMap(const ConfigNode& node, bool allow_provisional, FieldMap& out,
+                   std::string& err) {
     bool ok = true;
     node.forEach("Landmark", [&](const ConfigNode& lm) {
         if (!ok) {
@@ -47,35 +34,113 @@ bool parseFieldMap(const ConfigNode& node, FieldMap& out, std::string& err) {
             ok  = false;
             return;
         }
-        if (!poseFromAttrs(nominal, decl.nominal, err)) {
+        if (!checkCalibration(nominal, allow_provisional, err) ||
+            !parsePlanarPose(nominal, decl.nominal, err)) {
             ok = false;
             return;
         }
 
-        lm.forEach("Tag", [&](const ConfigNode& tag) {
+        lm.forEach("ApproachFrame", [&](const ConfigNode& af) {
             if (!ok) {
                 return;
             }
-            TagInstanceDecl t;
-            t.instance = tag.attr("instance");
-            if (t.instance.empty()) {
-                err = tag.path() + ": Tag needs instance";
+            ApproachFrameDecl a;
+            std::string       id_raw;
+            if (!af.requireAttr("id", id_raw, err)) {
+                ok = false;
+                return;
+            }
+            a.id = FrameId{id_raw};
+            for (const LandmarkDecl& seen : out.landmarks) {
+                if (seen.findApproach(a.id) != nullptr) {
+                    err = af.path() + ": duplicate ApproachFrame id " + a.id.value;
+                    ok  = false;
+                    return;
+                }
+            }
+            if (decl.findApproach(a.id) != nullptr) {
+                err = af.path() + ": duplicate ApproachFrame id " + a.id.value;
                 ok  = false;
                 return;
             }
-            t.family = tag.attr("family");
-            long id  = -1;
-            if (!tag.getInt("observed_id", -1, id, err)) {
+            if (!checkCalibration(af, allow_provisional, err)) {
                 ok = false;
+                return;
+            }
+            const ConfigNode pose = af.child("PoseOfApproachFrameInLandmark");
+            if (!pose.valid()) {
+                err = af.path() + ": ApproachFrame needs PoseOfApproachFrameInLandmark";
+                ok  = false;
+                return;
+            }
+            if (!parseTransform3(pose, a.T_landmark_approach, err)) {
+                ok = false;
+                return;
+            }
+            decl.approaches.push_back(std::move(a));
+        });
+        if (!ok) {
+            return;
+        }
+
+        lm.forEach("TagMount", [&](const ConfigNode& tag) {
+            if (!ok) {
+                return;
+            }
+            TagMountDecl t;
+            if (!tag.requireAttr("instance_id", t.instance_id, err)) {
+                ok = false;
+                return;
+            }
+            for (const LandmarkDecl& seen : out.landmarks) {
+                if (seen.findMount(t.instance_id) != nullptr) {
+                    err = tag.path() + ": duplicate TagMount instance_id " + t.instance_id;
+                    ok  = false;
+                    return;
+                }
+            }
+            if (decl.findMount(t.instance_id) != nullptr) {
+                err = tag.path() + ": duplicate TagMount instance_id " + t.instance_id;
+                ok  = false;
+                return;
+            }
+            if (!checkCalibration(tag, allow_provisional, err)) {
+                ok = false;
+                return;
+            }
+            long id = -1;
+            if (!tag.requireAttr("family", t.family, err) ||
+                !tag.requireInt("observed_id", id, err) ||
+                !tag.requireDouble("detection_size_m", t.detection_size_m, err)) {
+                ok = false;
+                return;
+            }
+            if (id < 0) {
+                err = tag.path() + ": observed_id cannot be negative";
+                ok  = false;
                 return;
             }
             t.observed_id = static_cast<int>(id);
-            if (!poseFromAttrs(tag, t.mount, err)) {
+            if (t.detection_size_m <= 0.0) {
+                err = tag.path() + ": detection_size_m must be positive";
+                ok  = false;
+                return;
+            }
+            const ConfigNode pose = tag.child("PoseOfTagSurfaceInLandmark");
+            if (!pose.valid()) {
+                err = tag.path() + ": TagMount needs PoseOfTagSurfaceInLandmark";
+                ok  = false;
+                return;
+            }
+            if (!parseTransform3(pose, t.T_landmark_tag_surface, err)) {
                 ok = false;
                 return;
             }
-            decl.tags.push_back(std::move(t));
+            decl.mounts.push_back(std::move(t));
         });
+        if (!ok) {
+            return;
+        }
 
         out.landmarks.push_back(std::move(decl));
     });

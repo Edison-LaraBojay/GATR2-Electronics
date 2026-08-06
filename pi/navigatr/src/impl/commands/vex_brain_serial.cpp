@@ -94,6 +94,7 @@ CommandsOutput VexBrainSerialCommands::run(const CommandsInput& in) {
                 out.command.object_requested =
                     (c.flags & gatr2::kCmdFlagObjectRequested) != 0;
                 out.command.object_wire_id = c.object_id;
+                out.command.object_sequence += 1;
                 break;
             case gatr2::kCmdSetStream:
                 out.command.stream_on = (c.flags & gatr2::kCmdFlagStreamOn) != 0;

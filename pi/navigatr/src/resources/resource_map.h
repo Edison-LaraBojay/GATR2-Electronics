@@ -37,6 +37,7 @@ struct ResourceInitializationContext {
     ResourceMapBuilder*     resolver  = nullptr;
     const FunctionRegistry*   functions = nullptr;
     std::vector<std::string>* warnings  = nullptr;
+    bool                      allow_provisional = false;   // calibration policy
 
     template <typename Contract>
     std::shared_ptr<Contract> require(const ResourceId& id, std::string& err);
@@ -102,6 +103,8 @@ public:
     // Dependency-resolving lookup used by factories mid-build.
     const ResourceInstance* resolve(const ResourceId& id, std::string& err);
 
+    void setAllowProvisional(bool allow) { allow_provisional_ = allow; }
+
     // Force construction of every indexed definition.
     bool buildAll(std::string& err);
 
@@ -123,6 +126,7 @@ private:
 
     const FunctionRegistry&   functions_;
     std::vector<std::string>* warnings_;
+    bool                      allow_provisional_ = false;
     std::vector<Definition>   definitions_;
     std::vector<std::string>  build_stack_;   // for cycle reporting
     ResourceMap             store_;

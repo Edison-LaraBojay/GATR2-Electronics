@@ -55,6 +55,18 @@ struct SlotInitializationContext {
         return false;
     }
 
+    bool requireObservation(const ObservationId& id, const std::type_index* expected,
+                            const std::string& who, std::string& err) const {
+        for (const ObservationOutputDecl& d : observations) {
+            if (d.id == id) {
+                return checkPayload(d.payload, expected, who, "observation", id.value,
+                                    err);
+            }
+        }
+        err = who + " references observation " + id.value + " which nothing produces";
+        return false;
+    }
+
     bool requireAssociation(const AssociationId& id, const std::type_index* expected,
                             const std::string& who, std::string& err) const {
         for (const AssociationOutputDecl& d : associations) {

@@ -24,8 +24,12 @@ struct CommandState {
     Pose2D   init_pose;
     uint8_t  mode = 0;
 
-    bool    object_requested = false;
-    uint8_t object_wire_id   = 0;
+    // Target selection is a command edge like init: object_sequence
+    // increments once per newly accepted select command, so a retransmitted
+    // command never re-activates and a genuinely new command always does.
+    bool     object_requested = false;
+    uint8_t  object_wire_id   = 0;
+    uint64_t object_sequence  = 0;   // 0 = never commanded
 };
 
 } // namespace navigatr

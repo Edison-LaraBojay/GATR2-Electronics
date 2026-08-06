@@ -12,7 +12,9 @@
 #include "contracts/slot_init.h"
 #include "core/function_status.h"
 #include "core/records.h"
+#include "state/command_state.h"
 #include "state/robot_state.h"
+#include "state/target_state.h"
 #include "state/world_state.h"
 
 namespace navigatr
@@ -23,11 +25,14 @@ struct WorldPredictionInput {
     const AssociationMap& associations;
     const RobotState&     robot;   // corrected
     const WorldState&     previousWorld;
+    const CommandState&   command;
+    const TargetState&    previousTarget;
     MonotonicTime         now;   // host clock
 };
 
 struct WorldPredictionOutput {
     WorldState     world;
+    TargetState    target;   // implementations without targets pass through
     FunctionStatus status = FunctionStatus::kOk;
 };
 

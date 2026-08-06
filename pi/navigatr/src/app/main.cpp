@@ -56,6 +56,8 @@ int main(int argc, char** argv) {
             options.replay[spec.substr(0, eq)] = spec.substr(eq + 1);
         } else if (arg == "--cycles" && i + 1 < argc) {
             max_cycles = std::strtol(argv[++i], nullptr, 10);
+        } else if (arg == "--allow-provisional") {
+            options.allow_provisional = true;
         } else if (config_path.empty()) {
             config_path = arg;
         } else {
@@ -64,8 +66,10 @@ int main(int argc, char** argv) {
         }
     }
     if (config_path.empty()) {
-        std::fprintf(stderr, "usage: navigatr <config.xml> "
-                             "[--replay <resource_id>=<capture.bin>] [--cycles <n>]\n");
+        std::fprintf(stderr,
+                     "usage: navigatr <config.xml> "
+                     "[--replay <resource_id>=<capture.bin>] [--cycles <n>] "
+                     "[--allow-provisional]\n");
         return 2;
     }
 

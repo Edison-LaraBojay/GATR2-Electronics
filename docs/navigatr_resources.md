@@ -88,21 +88,95 @@ executable configuration and there is no monolithic robot config header.
 - Schema:
 
 ```xml
-<Resource id="override_field" type="field_map">
+<Resource id="game_field" type="field_map">
     <Landmark id="center_goal">
-        <NominalPose x_m="1.8" y_m="1.8" heading_deg="0"/>
-        <Tag instance="goal_front" family="tag36h11" observed_id="7"
-             x_m="0.15" y_m="0" heading_deg="180"/>
+        <NominalPose calibration_status="verified"
+                     x_m="1.7832" y_m="1.7832" heading_deg="0"/>
+        <ApproachFrame id="center_goal_west_face" calibration_status="verified">
+            <PoseOfApproachFrameInLandmark x_m="-0.14" y_m="0" z_m="0"
+                roll_deg="0" pitch_deg="0" yaw_deg="180"/>
+        </ApproachFrame>
+        <TagMount instance_id="center_goal_west_tag"
+                  calibration_status="verified" family="tag36h11"
+                  observed_id="0" detection_size_m="0.06">
+            <PoseOfTagSurfaceInLandmark x_m="-0.14" y_m="0" z_m="0.25"
+                roll_deg="0" pitch_deg="0" yaw_deg="180"/>
+        </TagMount>
     </Landmark>
 </Resource>
 ```
 
-- Immutable shared field data: landmarks with nominal field poses and
-  physical tag instances (several instances may share one printed
-  observed_id; which instance produced an observation is association's
-  decision). Meters and degrees in, meters and radians in memory. No brain
-  wire ids here.
+- Immutable shared field data: a landmark has one semantic origin, one
+  nominal field pose, any number of named approach frames (+x outward from
+  the landmark, +y left looking outward), and any number of physical tag
+  mounts in full SE(3) (several mounts may share one printed observed_id;
+  which mount produced an observation is association's decision, by full
+  pose, never forced). `detection_size_m` is the edge of the detector's
+  pose-estimation corners, not the sticker. Every geometry attribute is
+  required and calibration gated. Meters and degrees in, meters and
+  radians in memory. No brain wire ids here.
 - Thread safety: immutable after construction.
+
+## robot_frame_map
+
+- Contract: `const RobotFrameMap`.
+- Schema:
+
+```xml
+<Resource id="robot_geometry" type="robot_frame_map">
+    <Frame id="front_camera_engineering" parent_frame_id="robot_body"
+           calibration_status="verified">
+        <PoseOfChildInParent x_m="0.2" y_m="0" z_m="0.3"
+            roll_deg="0" pitch_deg="12" yaw_deg="0"/>
+    </Frame>
+</Resource>
+```
+
+- Named robot interaction frames (contact points, camera optical centers)
+  measured relative to the robot pose origin, full SE(3). Chains through
+  `parent_frame_id` resolve to `robot_body` at build; a missing parent or
+  a cycle is an error. A mechanism whose position changes during operation
+  is not a fixed frame; define per-state frames or do not use it.
+- Thread safety: immutable after construction.
+
+## libcamera_camera
+
+- Contract: `CameraDevice`.
+- Schema: `Device index`, `Capture` (width, height, `pixel_format="Y8"`,
+  rate), `Calibration` (`calibration_status`, `calibration_id`,
+  `Intrinsics model="brown_conrady"` with the full distortion set tied to
+  the exact camera/lens/resolution, `Extrinsic frame_id` naming the
+  engineering frame in the robot frame map). See
+  `config/*_apriltag_landmark_correction.xml.in`.
+- Startup fails when calibration resolution and capture resolution
+  disagree. On builds without a capture backend the device is fully
+  validated but dead, with a build warning; the camera_frame sensor
+  reports it unavailable and the robot keeps running. The libcamera
+  capture backend lands with camera bring-up on the Pi.
+
+## apriltag_detector
+
+- Contract: `TagDetector` (frame in, detector-native detections out).
+- Schema: one or more `<Family name="tag36h11" detection_size_m="0.06"/>`.
+- The adapter around the upstream AprilRobotics library is not built into
+  the binary yet; the type registers and validates so configurations hold,
+  and selecting it fails loudly at build instead of detecting nothing.
+  Perception owns the single fixed conversion from detector-native axes to
+  engineering axes; no native axis escapes it.
+
+## target_set
+
+- Contract: `const TargetSet`.
+- Navigation targets the brain selects by wire id. Landmark-relative
+  targets name a landmark, one of its approach frames, a controlled robot
+  frame, the desired controlled-frame pose, and an explicit
+  `VisionCorrection` policy (`none`, `acquire_once` with timeout fallback,
+  consistency window, age and angular-speed limits, optional
+  `PreferredCamera` and `AllowedTagMount` preferences that never force
+  association). Robot-relative targets carry a delta snapshotted once per
+  new command sequence. Validated at build against the field map and the
+  robot frame map. See `config/*_apriltag_landmark_correction.xml.in` and
+  `docs/navigatr.md` for the runtime semantics in `target_tracker`.
 
 ## SpiBus contract
 

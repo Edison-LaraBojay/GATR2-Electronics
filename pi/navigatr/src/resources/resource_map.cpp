@@ -95,9 +95,10 @@ const ResourceInstance* ResourceMapBuilder::resolve(const ResourceId& id,
     build_stack_.push_back(id.value);
 
     ResourceInitializationContext context;
-    context.resolver  = this;
-    context.functions = &functions_;
-    context.warnings  = warnings_;
+    context.resolver          = this;
+    context.functions         = &functions_;
+    context.warnings          = warnings_;
+    context.allow_provisional = allow_provisional_;
 
     ResourceInstance value;
     std::string   build_err;

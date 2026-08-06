@@ -52,7 +52,8 @@ std::unique_ptr<WorldPrediction> LandmarkMapWorldPrediction::create(
 
 WorldPredictionOutput LandmarkMapWorldPrediction::run(const WorldPredictionInput& in) {
     WorldPredictionOutput out;
-    out.world = in.previousWorld;
+    out.world  = in.previousWorld;
+    out.target = in.previousTarget;
 
     for (const LandmarkDecl& decl : map_->landmarks) {
         if (out.world.objects.find(decl.id) != out.world.objects.end()) {

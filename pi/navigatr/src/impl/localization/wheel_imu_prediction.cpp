@@ -48,12 +48,12 @@ LocalizationOutput WheelImuPrediction::run(const LocalizationInput& in) {
     out.robot     = in.previous;
     RobotState& r = out.robot;
 
+    // A commanded pose init re-anchors the odometry frame in the field
+    // frame. The continuous odometry pose is untouched, so anything latched
+    // in the odometry frame keeps its physical meaning.
     if (in.command.init_sequence != 0 && in.command.init_sequence != last_applied_init_) {
         last_applied_init_ = in.command.init_sequence;
-        r.pose             = in.command.init_pose;
-        r.vx_m_s           = 0.0;
-        r.vy_m_s           = 0.0;
-        r.yaw_rate_rad_s   = 0.0;
+        r.field_from_odom  = compose(in.command.init_pose, inverse(r.odom_pose));
         r.valid            = true;
         r.initialized      = true;
     }
@@ -92,6 +92,20 @@ LocalizationOutput WheelImuPrediction::run(const LocalizationInput& in) {
         }
     }
 
+    // Device time running backwards means the source rebooted: the odometry
+    // frame is discontinuous. Bump the epoch so odometry-anchored latches
+    // are invalidated, and do not integrate the garbage step.
+    if (r.measuredAt.domain == ClockDomain::kDevice &&
+        stamp.domain == ClockDomain::kDevice && stamp < r.measuredAt) {
+        r.odometry_epoch += 1;
+        r.vx_m_s         = 0.0;
+        r.vy_m_s         = 0.0;
+        r.yaw_rate_rad_s = 0.0;
+        r.measuredAt     = stamp;
+        out.status       = FunctionStatus::kFault;
+        return out;
+    }
+
     // chord of the constant-curvature arc across this step
     double lx = dx;
     double ly = dy;
@@ -102,13 +116,13 @@ LocalizationOutput WheelImuPrediction::run(const LocalizationInput& in) {
         ly             = dx * c + dy * s;
     }
 
-    const double h  = r.pose.heading_rad;
+    const double h  = r.odom_pose.heading_rad;
     const double gx = lx * std::cos(h) - ly * std::sin(h);
     const double gy = lx * std::sin(h) + ly * std::cos(h);
 
-    r.pose.x_m += gx;
-    r.pose.y_m += gy;
-    r.pose.heading_rad = wrapAngle(h + dtheta);
+    r.odom_pose.x_m += gx;
+    r.odom_pose.y_m += gy;
+    r.odom_pose.heading_rad = wrapAngle(h + dtheta);
 
     if (dt > 1e-6) {
         r.vx_m_s         = gx / dt;

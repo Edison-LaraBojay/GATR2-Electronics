@@ -39,6 +39,7 @@
 #include "runtime/sensor_map.h"
 #include "state/command_state.h"
 #include "state/robot_state.h"
+#include "state/target_state.h"
 #include "state/world_state.h"
 
 namespace navigatr
@@ -49,6 +50,10 @@ struct BuildOptions {
     // configuration; its declared implementation is replaced with a replay
     // link for this run.
     std::map<std::string, std::string> replay;
+
+    // Bench-only escape hatch: accept calibration_status="provisional".
+    // UNCONFIGURED values are always errors.
+    bool allow_provisional = false;
 };
 
 class System
@@ -76,6 +81,7 @@ public:
     const RobotState&       robot() const { return robot_; }
     const WorldState&       world() const { return world_; }
     const CommandState&     command() const { return command_; }
+    const TargetState&      target() const { return target_; }
     Diagnostics&            diagnostics() { return diagnostics_; }
 
     // Non-fatal build notes, e.g. a serial device that failed to open.
@@ -115,6 +121,7 @@ private:
     RobotState       robot_;
     WorldState       world_;
     CommandState     command_;
+    TargetState      target_;
     Diagnostics      diagnostics_;
 };
 

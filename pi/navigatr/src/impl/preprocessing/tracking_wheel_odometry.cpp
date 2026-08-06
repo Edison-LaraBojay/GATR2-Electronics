@@ -111,11 +111,14 @@ std::unique_ptr<PreprocessorExecutable> TrackingWheelOdometry::create(
         }
         wheel.label = w.attr("label");
 
+        // Calibration-critical geometry: every value measured, none
+        // defaulted. An unmeasured wheel must fail the build, not run as
+        // zero.
         double x = 0.0, y = 0.0, angle_deg = 0.0;
-        if (!w.getDouble("radius_m", 0.0, wheel.radius_m, err) ||
-            !w.getDouble("position_x_m", 0.0, x, err) ||
-            !w.getDouble("position_y_m", 0.0, y, err) ||
-            !w.getDouble("measurement_angle_deg", 0.0, angle_deg, err)) {
+        if (!w.requireDouble("radius_m", wheel.radius_m, err) ||
+            !w.requireDouble("position_x_m", x, err) ||
+            !w.requireDouble("position_y_m", y, err) ||
+            !w.requireDouble("measurement_angle_deg", angle_deg, err)) {
             ok = false;
             return;
         }
@@ -124,7 +127,11 @@ std::unique_ptr<PreprocessorExecutable> TrackingWheelOdometry::create(
             ok  = false;
             return;
         }
-        const std::string direction = w.attr("direction", "positive");
+        std::string direction;
+        if (!w.requireAttr("direction", direction, err)) {
+            ok = false;
+            return;
+        }
         if (direction == "positive") {
             wheel.sign = 1.0;
         } else if (direction == "negative") {

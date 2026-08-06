@@ -47,6 +47,7 @@ struct Fixture {
     RobotState       robot;
     WorldState       world;
     CommandState     command;
+    TargetState      target;
 
     Fixture() {
         register_resources(functions);
@@ -105,8 +106,9 @@ struct Fixture {
     }
 
     PublishingInput publishingInput(int64_t now_ms = 100) {
-        return PublishingInput{results, artifacts,    observations, associations,
-                               robot,   world,        command,      hostTime(now_ms)};
+        return PublishingInput{results, artifacts, observations, associations,
+                               robot,   world,     command,      target,
+                               hostTime(now_ms)};
     }
 
     gatr2::PoseFrame decode() {
@@ -190,9 +192,9 @@ TEST(BrainPublisher, WireMappingHealthAndUnits) {
         f.context, err);
     ASSERT_NE(publisher, nullptr) << err;
 
-    f.robot.pose.x_m        = 1.5004;
-    f.robot.pose.y_m        = -0.2502;
-    f.robot.pose.heading_rad = kPi / 2.0;
+    f.robot.odom_pose.x_m        = 1.5004;
+    f.robot.odom_pose.y_m        = -0.2502;
+    f.robot.odom_pose.heading_rad = kPi / 2.0;
     f.robot.valid            = true;
     f.robot.initialized      = true;
     f.robot.measuredAt       = deviceTime(5000);

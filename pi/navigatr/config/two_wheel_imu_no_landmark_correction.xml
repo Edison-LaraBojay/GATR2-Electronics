@@ -1,6 +1,8 @@
 <?xml version="1.0"?>
-<!-- Bench rig: two tracking wheels and the IMU heading constraint alone.
-     Everything the camera or brain would own is an explicit noop. -->
+<!-- Two tracking wheels fused with the IMU heading constraint, no landmark
+     correction and no publishing: the minimal odometry bring-up
+     configuration. Two wheels cannot observe rotation alone, so the
+     HeadingConstraint is mandatory here. -->
 <System>
 
     <Loop rate_hz="100"/>

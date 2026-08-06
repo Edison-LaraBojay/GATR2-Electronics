@@ -14,6 +14,7 @@
 #include "core/records.h"
 #include "state/command_state.h"
 #include "state/robot_state.h"
+#include "state/target_state.h"
 #include "state/world_state.h"
 
 namespace navigatr
@@ -27,6 +28,7 @@ struct PublishingInput {
     const RobotState&       robot;
     const WorldState&       world;
     const CommandState&     command;
+    const TargetState&      target;
     MonotonicTime           now;   // host clock
 };
 

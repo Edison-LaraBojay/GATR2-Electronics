@@ -78,7 +78,7 @@ TEST(WheelImuPrediction, StraightLine) {
     f.putMotion(0.1, 0.0, 0.0);
     const LocalizationOutput out = f.run();
     EXPECT_EQ(out.status, FunctionStatus::kOk);
-    EXPECT_NEAR(out.robot.pose.x_m, 0.1, 1e-12);
+    EXPECT_NEAR(out.robot.fieldPose().x_m, 0.1, 1e-12);
     EXPECT_TRUE(out.robot.valid);
     EXPECT_NEAR(out.robot.vx_m_s, 20.0, 1e-9);
 }
@@ -88,18 +88,18 @@ TEST(WheelImuPrediction, QuarterCircleChord) {
     const double R = 0.5;
     f.putMotion(R * kPi / 2.0, 0.0, kPi / 2.0);
     f.run();
-    EXPECT_NEAR(f.previous.pose.x_m, R, 1e-9);
-    EXPECT_NEAR(f.previous.pose.y_m, R, 1e-9);
-    EXPECT_NEAR(f.previous.pose.heading_rad, kPi / 2.0, 1e-12);
+    EXPECT_NEAR(f.previous.fieldPose().x_m, R, 1e-9);
+    EXPECT_NEAR(f.previous.fieldPose().y_m, R, 1e-9);
+    EXPECT_NEAR(f.previous.fieldPose().heading_rad, kPi / 2.0, 1e-12);
 }
 
 TEST(WheelImuPrediction, TranslationFollowsHeading) {
     Fixture f;
-    f.previous.pose.heading_rad = kPi / 2.0;
+    f.previous.odom_pose.heading_rad = kPi / 2.0;
     f.putMotion(0.1, 0.0, 0.0);
     f.run();
-    EXPECT_NEAR(f.previous.pose.x_m, 0.0, 1e-12);
-    EXPECT_NEAR(f.previous.pose.y_m, 0.1, 1e-12);
+    EXPECT_NEAR(f.previous.fieldPose().x_m, 0.0, 1e-12);
+    EXPECT_NEAR(f.previous.fieldPose().y_m, 0.1, 1e-12);
 }
 
 TEST(WheelImuPrediction, InitEdgeTriggered) {
@@ -112,16 +112,16 @@ TEST(WheelImuPrediction, InitEdgeTriggered) {
     LocalizationOutput out = f.run();   // no motion data, init still applies
     EXPECT_EQ(out.status, FunctionStatus::kNoData);
     EXPECT_TRUE(out.robot.initialized);
-    EXPECT_NEAR(out.robot.pose.x_m, 0.61, 1e-12);
+    EXPECT_NEAR(out.robot.fieldPose().x_m, 0.61, 1e-12);
 
     f.putMotion(0.1, 0.0, 0.0);
     out = f.run();   // same init_sequence: no re-init
-    EXPECT_NEAR(out.robot.pose.y_m, 0.457 + 0.1, 1e-9);
+    EXPECT_NEAR(out.robot.fieldPose().y_m, 0.457 + 0.1, 1e-9);
 
     f.command.init_sequence = 2;   // a new command resets again
     f.artifacts.clear();
     out = f.run();
-    EXPECT_NEAR(out.robot.pose.y_m, 0.457, 1e-12);
+    EXPECT_NEAR(out.robot.fieldPose().y_m, 0.457, 1e-12);
 }
 
 TEST(WheelImuPrediction, OrientationOverridesMotionHeading) {
@@ -133,7 +133,7 @@ TEST(WheelImuPrediction, OrientationOverridesMotionHeading) {
     f.putMotion(0.0, 0.0, 0.5);        // wheels say half a radian
     f.putOrientation(0.25);            // gyro says a quarter
     f.run();
-    EXPECT_NEAR(f.previous.pose.heading_rad, 0.25, 1e-12);
+    EXPECT_NEAR(f.previous.fieldPose().heading_rad, 0.25, 1e-12);
 }
 
 TEST(WheelImuPrediction, MissingMotionHoldsPose) {
@@ -143,7 +143,7 @@ TEST(WheelImuPrediction, MissingMotionHoldsPose) {
     f.artifacts.clear();
     const LocalizationOutput out = f.run();
     EXPECT_EQ(out.status, FunctionStatus::kNoData);
-    EXPECT_NEAR(out.robot.pose.x_m, 0.1, 1e-12);
+    EXPECT_NEAR(out.robot.fieldPose().x_m, 0.1, 1e-12);
     EXPECT_TRUE(out.robot.valid);
 }
 

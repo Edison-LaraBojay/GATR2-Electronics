@@ -56,7 +56,8 @@ class NoopWorldPrediction : public WorldPrediction
 {
 public:
     WorldPredictionOutput run(const WorldPredictionInput& in) override {
-        return WorldPredictionOutput{in.previousWorld, FunctionStatus::kOk};
+        return WorldPredictionOutput{in.previousWorld, in.previousTarget,
+                                     FunctionStatus::kOk};
     }
 };
 

@@ -42,6 +42,12 @@ public:
     bool getInt(const char* key, long def, long& out, std::string& err) const;
     bool getBool(const char* key, bool def, bool& out, std::string& err) const;
 
+    // Required variants: a missing attribute is a configuration error, never
+    // a silent default. Calibration-critical geometry must use these.
+    bool requireDouble(const char* key, double& out, std::string& err) const;
+    bool requireInt(const char* key, long& out, std::string& err) const;
+    bool requireAttr(const char* key, std::string& out, std::string& err) const;
+
     // First child element, optionally by name. Invalid node when absent.
     ConfigNode child(const char* child_name = nullptr) const;
 

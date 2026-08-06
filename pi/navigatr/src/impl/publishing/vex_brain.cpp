@@ -182,12 +182,14 @@ PublishingOutput VexBrainPublisher::run(const PublishingInput& in) {
         bias_cal_seen_ = true;
     }
 
+    const Pose2D field_pose = in.robot.fieldPose();
+
     gatr2::PoseFrame p{};
     p.seq          = seq_++;
     p.stamp_ms     = static_cast<uint32_t>(in.robot.measuredAt.ms);
-    p.x_mm         = toWireMm(in.robot.pose.x_m);
-    p.y_mm         = toWireMm(in.robot.pose.y_m);
-    p.heading_cdeg = radToCdeg(in.robot.pose.heading_rad);
+    p.x_mm         = toWireMm(field_pose.x_m);
+    p.y_mm         = toWireMm(field_pose.y_m);
+    p.heading_cdeg = radToCdeg(field_pose.heading_rad);
 
     uint16_t status = 0;
     if (in.robot.valid) {
@@ -218,21 +220,42 @@ PublishingOutput VexBrainPublisher::run(const PublishingInput& in) {
     if (in.command.object_requested) {
         status |= gatr2::kStatusObjRequested;
         p.object_id = in.command.object_wire_id;
-        for (const WireObject& wire : wire_objects_) {
-            if (wire.wire_id != in.command.object_wire_id) {
-                continue;
+
+        // An active latched target for the requested wire id wins: the brain
+        // receives the desired robot body pose, field frame. Otherwise fall
+        // back to a configured world object estimate.
+        bool published = false;
+        if (in.target.active && in.target.latched &&
+            in.target.status != TargetStatus::kCancelled &&
+            in.target.wire_id == in.command.object_wire_id) {
+            const Pose2D target_field =
+                compose(in.robot.field_from_odom, in.target.T_odom_robot_target);
+            status |= gatr2::kStatusObjValid;
+            if (in.target.status == TargetStatus::kLockedVision) {
+                status |= gatr2::kStatusObjObserved;
             }
-            const auto it = in.world.objects.find(wire.object);
-            if (it != in.world.objects.end() && it->second.valid) {
-                status |= gatr2::kStatusObjValid;
-                if (it->second.observed) {
-                    status |= gatr2::kStatusObjObserved;
+            p.obj_x_mm         = toWireMm(target_field.x_m);
+            p.obj_y_mm         = toWireMm(target_field.y_m);
+            p.obj_heading_cdeg = radToCdeg(target_field.heading_rad);
+            published          = true;
+        }
+        if (!published) {
+            for (const WireObject& wire : wire_objects_) {
+                if (wire.wire_id != in.command.object_wire_id) {
+                    continue;
                 }
-                p.obj_x_mm         = toWireMm(it->second.pose.pose.x_m);
-                p.obj_y_mm         = toWireMm(it->second.pose.pose.y_m);
-                p.obj_heading_cdeg = radToCdeg(it->second.pose.pose.heading_rad);
+                const auto it = in.world.objects.find(wire.object);
+                if (it != in.world.objects.end() && it->second.valid) {
+                    status |= gatr2::kStatusObjValid;
+                    if (it->second.observed) {
+                        status |= gatr2::kStatusObjObserved;
+                    }
+                    p.obj_x_mm         = toWireMm(it->second.pose.pose.x_m);
+                    p.obj_y_mm         = toWireMm(it->second.pose.pose.y_m);
+                    p.obj_heading_cdeg = radToCdeg(it->second.pose.pose.heading_rad);
+                }
+                break;
             }
-            break;
         }
     }
     p.status = status;

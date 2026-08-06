@@ -298,7 +298,8 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
             : log(std::move(l)) {}
         WorldPredictionOutput run(const WorldPredictionInput& in) override {
             log->push_back("world_prediction");
-            return WorldPredictionOutput{in.previousWorld, FunctionStatus::kOk};
+            return WorldPredictionOutput{in.previousWorld, in.previousTarget,
+                                         FunctionStatus::kOk};
         }
     };
     struct ProbePublishing : Publishing {

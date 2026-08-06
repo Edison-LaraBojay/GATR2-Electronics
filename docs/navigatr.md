@@ -153,6 +153,79 @@ translation on the gyro heading) rather than overriding heading after the
 fact; the prediction-slot `Orientation` input exists for motion sources that
 carry no heading of their own.
 
+## Coordinate conventions
+
+One project-owned set of axes, pinned by tests in `se3_gtest.cpp`. Any
+heading taken from a VEX drawing is converted once into this convention.
+
+```text
+Field frame F (from Audience View)          y
+    origin bottom-left inside the field     ^   top
+    +x right, +y top, +z up                 |
+    heading 0 = +x, +90 = +y, CCW           |
+    positive from above                     +------> x
+                                          origin   right
+```
+
+```text
+robot body R: origin = the exact point RobotState tracks (drivetrain
+    center of rotation or the chosen odometry reference, not
+    automatically the geometric center); +x forward, +y left, +z up
+engineering camera Ce: origin at the optical center; +x looking
+    direction, +y camera-left, +z camera-up; a level forward camera is
+    yaw 0 pitch 0 roll 0, aimed left is positive yaw, tilted down is
+    positive pitch
+canonical tag surface S: origin at the center of the detector's four
+    pose-estimation corners; +x outward normal toward a viewer, +z the
+    decoded printed top, +y right-handed completion
+```
+
+Every transform is written `T_A_B` (pose of B in A) and chains as
+`T_A_C = T_A_B * T_B_C`. XML carries meters and degrees, applied as
+`R = Rz(yaw) * Ry(pitch) * Rx(roll)`, right handed; C++ carries radians.
+Camera and tag chains stay SE(3) end to end (`math/se3.h`) and project to
+planar only after the chain is complete. Detector-native optical axes are
+converted once inside perception with two fixed rotations; they never
+appear as mysterious angle offsets in camera configurations.
+
+## Odometry frame and field frame
+
+The robot estimate is split: a smooth local odometry frame O that wheel and
+IMU prediction updates continuously, and the corrected field frame F that
+re-anchors it. `T_field_robot = T_field_odom * T_odom_robot`. A commanded
+pose init changes only `T_field_odom`, so odometry-anchored data (latched
+targets, exposure-time lookups) keeps its physical meaning across a field
+re-anchor. `odometry_epoch` increments when O itself becomes discontinuous
+(hard reset, device time regression from a Pico reboot); anything latched
+in O is valid only while the epoch matches, and cancellation is the V1
+policy. The framework keeps a short host-clock pose history so evidence
+with an exposure timestamp is evaluated against the pose at exposure.
+
+## Targets and correction gating
+
+Navigation targets are configuration (`target_set` resource): a
+landmark-relative target names a landmark, one of its approach frames, a
+controlled robot frame (`front_contact`, `rear_contact`, ...), and the
+desired controlled-frame pose; a robot-relative target names a delta
+snapshotted once per new command sequence. The `target_tracker` world
+prediction owns activation (edge triggered by the brain's select command),
+the vision policy (`none`, `acquire_once`; `continuous` is reserved),
+explicit timeout fallback, and generation stamping: evidence from a
+previous target generation or odometry epoch is discarded, never applied.
+Only the selected target's landmark ever mutates, and `PoseCorrection`
+stays `noop`: vision corrects or acquires the selected landmark-derived
+target, never the wheel/IMU robot estimate.
+
+## Placeholder policy
+
+Runnable `.xml` contains only verified numeric values. `.xml.in` files are
+intentionally non-runnable templates whose `@...@` tokens must be replaced
+with measured values, never zero to make parsing pass. Calibration-critical
+attributes are required (missing is an error, not a default), and elements
+carrying measured geometry declare `calibration_status`: UNCONFIGURED is
+always an error, provisional runs only under the explicit
+`--allow-provisional` bench option, verified always runs.
+
 ## What stays implementation-specific
 
 The generic runtime does not privilege AprilTags, wheel counts, left/right

@@ -43,7 +43,7 @@ using ObservationId  = TypedId<struct ObservationIdTag>;
 using AssociationId  = TypedId<struct AssociationIdTag>;
 using WorldObjectId  = TypedId<struct WorldObjectIdTag>;
 
-// Registered factory key, namespaced like sensor/pico_encoder_channel.
+// Registered factory key, a plain opaque name like pico_encoder_channel.
 using FunctionKey = TypedId<struct FunctionKeyTag>;
 
 // Coordinate frame name, e.g. field, robot, camera. Not a wire packet.

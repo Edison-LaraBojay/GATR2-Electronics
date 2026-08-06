@@ -1,0 +1,352 @@
+<?xml version="1.0"?>
+<!--
+THIS IS AN INTENTIONALLY NON-RUNNABLE TEMPLATE.
+
+Every @...@ token must be replaced with a measured/configured numeric value.
+Never replace a required value with zero merely to make parsing pass.
+
+After every token is replaced and each calibration_status is raised to
+provisional (bench, launched with the allow-provisional option) or verified
+(production), save the result as
+two_wheel_imu_apriltag_landmark_correction.xml.
+
+Two tracking wheels fused with the IMU heading constraint (mandatory with
+two wheels), one front camera, AprilTag
+landmark observation, acquire-once vision correction of the selected
+target. PoseCorrection stays noop: vision corrects or acquires the selected
+landmark-derived target, never the wheel/IMU robot estimate.
+-->
+<System>
+
+    <Loop rate_hz="100"/>
+
+    <Resources>
+        <Resource id="pico_uart" type="linux_serial_link">
+            <Device path="/dev/ttyAMA0"/>
+            <Baud value="115200"/>
+        </Resource>
+
+        <Resource id="pico_telemetry" type="pico_telemetry">
+            <Serial resource_id="pico_uart"/>
+        </Resource>
+
+        <Resource id="brain_uart" type="linux_serial_link">
+            <Device path="/dev/ttyAMA5"/>
+            <Baud value="115200"/>
+            <DriverEnable gpio="6"/>
+        </Resource>
+
+        <!-- OPEN QUESTION made visible: the RS-485 brain link is one way,
+             Pi to brain. Target selection needs a physical brain-to-Pi
+             return path; name its device here once it exists. -->
+        <Resource id="brain_command_uart" type="linux_serial_link">
+            <Device path="@SELECT_COMMAND_RETURN_LINK_DEVICE@"/>
+            <Baud value="115200"/>
+        </Resource>
+
+        <Resource id="robot_geometry" type="robot_frame_map">
+
+            <Frame id="front_camera_engineering"
+                   parent_frame_id="robot_body"
+                   calibration_status="UNCONFIGURED">
+                <!--
+                Origin: camera optical center.
+
+                x_m: forward distance from the robot_body origin (the exact
+                     point RobotState tracks, not "the center" unless the
+                     origin was deliberately defined there).
+                y_m: leftward distance from the robot_body origin.
+                z_m: height above the robot_body origin.
+
+                yaw_deg: 0 means the camera looks robot-forward; positive
+                         means it looks toward robot-left.
+                pitch_deg: 0 means level; positive tilts the looking
+                           direction downward under the right-handed
+                           +y-left convention.
+                roll_deg: right-hand rotation about the looking direction.
+
+                The camera need not be mounted straight; the configured
+                transform must simply match reality.
+                -->
+                <PoseOfChildInParent
+                    x_m="@MEASURE_CAMERA_FORWARD_POSITION_M@"
+                    y_m="@MEASURE_CAMERA_LEFT_POSITION_M@"
+                    z_m="@MEASURE_CAMERA_HEIGHT_M@"
+                    roll_deg="@MEASURE_CAMERA_ROLL_DEG@"
+                    pitch_deg="@MEASURE_CAMERA_DOWNWARD_PITCH_DEG@"
+                    yaw_deg="@MEASURE_CAMERA_LEFTWARD_YAW_DEG@"/>
+            </Frame>
+
+            <Frame id="front_contact"
+                   parent_frame_id="robot_body"
+                   calibration_status="UNCONFIGURED">
+                <PoseOfChildInParent
+                    x_m="@MEASURE_FRONT_CONTACT_FORWARD_M@"
+                    y_m="@MEASURE_FRONT_CONTACT_LEFT_M@"
+                    z_m="@MEASURE_FRONT_CONTACT_HEIGHT_M@"
+                    roll_deg="0"
+                    pitch_deg="0"
+                    yaw_deg="0"/>
+            </Frame>
+
+            <Frame id="rear_contact"
+                   parent_frame_id="robot_body"
+                   calibration_status="UNCONFIGURED">
+                <!--
+                Rear-contact +x points physically out through the robot's
+                rear; that is why its yaw relative to robot_body is 180
+                degrees. x_m is negative when the contact is behind the
+                robot_body origin.
+                -->
+                <PoseOfChildInParent
+                    x_m="@MEASURE_REAR_CONTACT_X_M_NEGATIVE_IF_BEHIND_ORIGIN@"
+                    y_m="@MEASURE_REAR_CONTACT_LEFT_M@"
+                    z_m="@MEASURE_REAR_CONTACT_HEIGHT_M@"
+                    roll_deg="0"
+                    pitch_deg="0"
+                    yaw_deg="180"/>
+            </Frame>
+
+        </Resource>
+
+        <Resource id="front_camera_device" type="libcamera_camera">
+            <Device index="0"/>
+
+            <Capture
+                width_px="@SELECT_CAPTURE_WIDTH_PX@"
+                height_px="@SELECT_CAPTURE_HEIGHT_PX@"
+                pixel_format="Y8"
+                frame_rate_hz="@SELECT_CAPTURE_RATE_HZ@"/>
+
+            <!-- Intrinsics are tied to the exact camera, lens, focus,
+                 resolution, crop mode, and pixel format. The build fails if
+                 capture and calibration resolutions disagree. -->
+            <Calibration
+                calibration_status="UNCONFIGURED"
+                calibration_id="front_camera_REPLACE_ME">
+
+                <Intrinsics
+                    model="brown_conrady"
+                    calibrated_width_px="@CALIBRATED_WIDTH_PX@"
+                    calibrated_height_px="@CALIBRATED_HEIGHT_PX@"
+                    fx_px="@CALIBRATED_FX_PX@"
+                    fy_px="@CALIBRATED_FY_PX@"
+                    cx_px="@CALIBRATED_CX_PX@"
+                    cy_px="@CALIBRATED_CY_PX@"
+                    k1="@CALIBRATED_K1@"
+                    k2="@CALIBRATED_K2@"
+                    p1="@CALIBRATED_P1@"
+                    p2="@CALIBRATED_P2@"
+                    k3="@CALIBRATED_K3@"
+                    rms_reprojection_px="@CALIBRATION_RMS_PX@"/>
+
+                <Extrinsic frame_id="front_camera_engineering"/>
+
+            </Calibration>
+        </Resource>
+
+        <Resource id="tag_detector" type="apriltag_detector">
+            <!-- detection_size_m is the edge of the detector's four
+                 pose-estimation corners, not the outer sticker size. -->
+            <Family name="@CONFIRM_PHYSICAL_OVERRIDE_TAG_FAMILY@"
+                    detection_size_m="@MEASURE_DETECTOR_CORNER_EDGE_SIZE_M@"/>
+        </Resource>
+
+        <Resource id="game_field" type="field_map">
+            <Landmark id="center_goal">
+
+                <!-- Official goal-center coordinates in the project field
+                     convention: origin bottom-left from Audience View, +x
+                     right, +y top, heading 0 = +x, CCW positive. -->
+                <NominalPose calibration_status="verified"
+                    x_m="1.7832" y_m="1.7832" heading_deg="0"/>
+
+                <ApproachFrame
+                    id="center_goal_example_face"
+                    calibration_status="UNCONFIGURED">
+                    <!--
+                    Origin: chosen reference point on this goal face.
+                    +x: outward from the goal into the approach space.
+                    +y: left when looking outward.  +z: up.
+                    -->
+                    <PoseOfApproachFrameInLandmark
+                        x_m="@MEASURE_FACE_REFERENCE_X_M@"
+                        y_m="@MEASURE_FACE_REFERENCE_Y_M@"
+                        z_m="@MEASURE_FACE_REFERENCE_Z_M@"
+                        roll_deg="0"
+                        pitch_deg="0"
+                        yaw_deg="@MEASURE_FACE_OUTWARD_YAW_DEG@"/>
+                </ApproachFrame>
+
+                <!-- One TagMount per physical face/tag instance, even when
+                     several share one printed id. -->
+                <TagMount
+                    instance_id="center_goal_selected_face_tag"
+                    calibration_status="UNCONFIGURED"
+                    family="@CONFIRM_PHYSICAL_OVERRIDE_TAG_FAMILY@"
+                    observed_id="0"
+                    detection_size_m="@MEASURE_DETECTOR_CORNER_EDGE_SIZE_M@">
+                    <!-- T_landmark_tagSurface: surface +x is the outward
+                         normal, +z the printed top, roll the printed
+                         in-plane rotation, pitch the face tilt. -->
+                    <PoseOfTagSurfaceInLandmark
+                        x_m="@MEASURE_TAG_CENTER_X_FROM_LANDMARK_ORIGIN_M@"
+                        y_m="@MEASURE_TAG_CENTER_Y_FROM_LANDMARK_ORIGIN_M@"
+                        z_m="@MEASURE_TAG_CENTER_HEIGHT_M@"
+                        roll_deg="@MEASURE_PRINTED_TAG_ROTATION_DEG@"
+                        pitch_deg="@MEASURE_TAG_FACE_TILT_DEG@"
+                        yaw_deg="@MEASURE_TAG_OUTWARD_NORMAL_YAW_DEG@"/>
+                </TagMount>
+
+            </Landmark>
+        </Resource>
+
+        <Resource id="targets" type="target_set">
+            <FieldMap resource_id="game_field"/>
+            <RobotFrames resource_id="robot_geometry"/>
+
+            <Target
+                id="back_to_center_goal_example_face"
+                type="landmark_relative"
+                wire_id="1"
+                landmark_id="center_goal"
+                approach_frame_id="center_goal_example_face"
+                controlled_frame_id="rear_contact">
+
+                <!--
+                The approach frame's +x points outward from the goal, so
+                positive x_m is stand-off outside the goal. rear_contact +x
+                points out through the robot's rear and must oppose the
+                approach +x at the target, hence heading 180. The two 180s
+                (rear frame vs body, rear frame vs approach) cancel in the
+                desired body heading; do not add a third for backing up.
+                -->
+                <DesiredControlledFramePose
+                    calibration_status="UNCONFIGURED"
+                    x_m="@AUTON_ROUTE_REAR_CONTACT_STANDOFF_M@"
+                    y_m="@AUTON_ROUTE_LATERAL_OFFSET_M@"
+                    heading_deg="180"/>
+
+                <!-- use_nominal_target means zero visual correction, never
+                     a zero pose. -->
+                <VisionCorrection
+                    type="acquire_once"
+                    on_acquisition_timeout="use_nominal_target"
+                    minimum_consistent_observations="3"
+                    maximum_observation_age_ms="@SELECT_MAXIMUM_AGE_MS@"
+                    maximum_robot_angular_speed_deg_s="@SELECT_ACQUISITION_SPEED_LIMIT@"
+                    acquisition_timeout_ms="@SELECT_ACQUISITION_TIMEOUT_MS@"
+                    consistency_translation_m="@SELECT_CONSISTENCY_TRANSLATION_M@"
+                    consistency_heading_deg="@SELECT_CONSISTENCY_HEADING_DEG@">
+                    <PreferredCamera sensor_id="front_camera"/>
+                    <!-- Route-specific preference, never forced association. -->
+                    <AllowedTagMount instance_id="center_goal_selected_face_tag"/>
+                </VisionCorrection>
+
+            </Target>
+
+            <Target
+                id="scored_to_matchloader"
+                type="robot_relative"
+                wire_id="2"
+                controlled_frame_id="robot_body">
+                <Snapshot frame_id="robot_body" delta_axes="robot_at_activation"/>
+                <Delta
+                    x_m="@AUTON_ROUTE_FORWARD_DELTA_M@"
+                    y_m="@AUTON_ROUTE_LEFT_DELTA_M@"
+                    heading_deg="@AUTON_ROUTE_HEADING_DELTA_DEG@"/>
+                <VisionCorrection type="none"/>
+            </Target>
+
+        </Resource>
+    </Resources>
+
+    <Sensors>
+        <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
+            <Source resource_id="pico_telemetry" channel="0"/>
+            <Calibration counts_per_revolution="@CONFIRM_ENCODER_CPR@"
+                         invert="@CONFIRM_ENCODER_A_INVERT@"/>
+        </Sensor>
+
+        <Sensor id="tracking_encoder_b" type="pico_encoder_channel">
+            <Source resource_id="pico_telemetry" channel="1"/>
+            <Calibration counts_per_revolution="@CONFIRM_ENCODER_CPR@"
+                         invert="@CONFIRM_ENCODER_B_INVERT@"/>
+        </Sensor>
+
+        <Sensor id="robot_imu" type="pico_imu_channel">
+            <Source resource_id="pico_telemetry" channel="imu"/>
+            <Calibration invert="@CONFIRM_IMU_POSITIVE_YAW_SIGN_INVERT@"/>
+        </Sensor>
+
+        <Sensor id="front_camera" type="camera_frame">
+            <Source resource_id="front_camera_device"/>
+        </Sensor>
+    </Sensors>
+
+    <Pipeline>
+
+        <CommandCollection type="vex_brain_serial">
+            <Serial resource_id="brain_command_uart"/>
+        </CommandCollection>
+
+        <Preprocessing type="configured_collection">
+            <Preprocessor id="tracking_motion" type="tracking_wheel_odometry">
+                <TrackingWheel sensor_id="tracking_encoder_a" label="forward"
+                    radius_m="@MEASURE_WHEEL_A_RADIUS_M@"
+                    position_x_m="@MEASURE_WHEEL_A_POSITION_X_M@"
+                    position_y_m="@MEASURE_WHEEL_A_POSITION_Y_M@"
+                    measurement_angle_deg="@MEASURE_WHEEL_A_ANGLE_DEG@"
+                    direction="@CONFIRM_WHEEL_A_DIRECTION@"/>
+                <TrackingWheel sensor_id="tracking_encoder_b" label="lateral"
+                    radius_m="@MEASURE_WHEEL_B_RADIUS_M@"
+                    position_x_m="@MEASURE_WHEEL_B_POSITION_X_M@"
+                    position_y_m="@MEASURE_WHEEL_B_POSITION_Y_M@"
+                    measurement_angle_deg="@MEASURE_WHEEL_B_ANGLE_DEG@"
+                    direction="@CONFIRM_WHEEL_B_DIRECTION@"/>
+                <HeadingConstraint sensor_id="robot_imu" bias_samples="200"/>
+                <Output artifact_id="tracking_motion_delta"/>
+            </Preprocessor>
+        </Preprocessing>
+
+        <LocalizationPrediction type="wheel_imu_prediction">
+            <Motion artifact_id="tracking_motion_delta"/>
+        </LocalizationPrediction>
+
+        <Perception type="apriltag_tag_observation">
+            <Camera sensor_id="front_camera"/>
+            <Detector resource_id="tag_detector"/>
+            <Output observation_id="tag_observations"/>
+        </Perception>
+
+        <Association type="tag_mount_association">
+            <Observations observation_id="tag_observations"/>
+            <FieldMap resource_id="game_field"/>
+            <RobotFrames resource_id="robot_geometry"/>
+            <Targets resource_id="targets"/>
+            <Gates max_translation_error_m="0.5" max_heading_error_deg="30"
+                   ambiguity_margin_m="0.15"/>
+            <Output association_id="landmark_pose_observations"/>
+        </Association>
+
+        <!-- AprilTags must not alter the wheel/IMU robot estimate. -->
+        <PoseCorrection type="noop"/>
+
+        <WorldPrediction type="target_tracker">
+            <Targets resource_id="targets"/>
+            <FieldMap resource_id="game_field"/>
+            <Associations association_id="landmark_pose_observations"/>
+        </WorldPrediction>
+
+        <Publishing type="vex_brain">
+            <Serial resource_id="brain_uart"/>
+            <Health fresh_ms="150">
+                <Encoder sensor_id="tracking_encoder_a"/>
+                <Encoder sensor_id="tracking_encoder_b"/>
+                <Gyro sensor_id="robot_imu"/>
+            </Health>
+        </Publishing>
+
+    </Pipeline>
+
+</System>

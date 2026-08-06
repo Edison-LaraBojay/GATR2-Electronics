@@ -107,6 +107,7 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     // Resources: index everything, apply replay overrides, then build with
     // dependency resolution so declaration order never matters.
     ResourceMapBuilder resource_builder(functions, &warnings_);
+    resource_builder.setAllowProvisional(options.allow_provisional);
     const ConfigNode     resources_node = root.child("Resources");
     if (resources_node.valid()) {
         if (!checkChildren(resources_node, {"Resource"}, {"Resource"}, err)) {
@@ -337,11 +338,19 @@ void System::step(MonotonicTime now) {
     robot_ = loc_out.robot;
     diagnostics_.note(slot_labels_[2], loc_out.status);
 
+    // Framework-owned pose history: the odometry pose at this cycle's host
+    // time, so evidence with an exposure timestamp can be evaluated against
+    // the pose at exposure.
+    robot_.history.push_back(TimedOdomPose{now, robot_.odom_pose});
+    while (robot_.history.size() > RobotState::kHistoryCapacity) {
+        robot_.history.pop_front();
+    }
+
     PerceptionOutput per_out = perception_->run({sensor_results_, pre_out.artifacts, now});
     diagnostics_.note(slot_labels_[3], per_out.status);
 
     AssociationOutput assoc_out =
-        association_->run({per_out.observations, robot_, world_, now});
+        association_->run({per_out.observations, robot_, world_, command_, target_, now});
     diagnostics_.note(slot_labels_[4], assoc_out.status);
 
     PoseCorrectionOutput corr_out = pose_correction_->run(
@@ -350,13 +359,15 @@ void System::step(MonotonicTime now) {
     diagnostics_.note(slot_labels_[5], corr_out.status);
 
     WorldPredictionOutput world_out = world_prediction_->run(
-        {per_out.observations, assoc_out.associations, robot_, world_, now});
-    world_ = world_out.world;
+        {per_out.observations, assoc_out.associations, robot_, world_, command_, target_,
+         now});
+    world_  = world_out.world;
+    target_ = world_out.target;
     diagnostics_.note(slot_labels_[6], world_out.status);
 
     PublishingOutput pub_out =
         publishing_->run({sensor_results_, pre_out.artifacts, per_out.observations,
-                          assoc_out.associations, robot_, world_, command_, now});
+                          assoc_out.associations, robot_, world_, command_, target_, now});
     diagnostics_.note(slot_labels_[7], pub_out.status);
 }
 
@@ -376,9 +387,15 @@ void System::reset() {
     world_prediction_->reset();
     publishing_->reset();
 
-    robot_   = RobotState{};
-    world_   = WorldState{};
-    command_ = CommandState{};
+    // A hard reset is an odometry discontinuity: the new odometry frame
+    // shares nothing with the old one, so the epoch moves on.
+    const uint64_t next_epoch = robot_.odometry_epoch + 1;
+
+    robot_                = RobotState{};
+    robot_.odometry_epoch = next_epoch;
+    world_                = WorldState{};
+    command_              = CommandState{};
+    target_               = TargetState{};
 }
 
 } // namespace navigatr

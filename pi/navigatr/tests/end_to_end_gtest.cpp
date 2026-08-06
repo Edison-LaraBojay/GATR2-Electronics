@@ -34,7 +34,8 @@ const char* kFullConfig = R"(
         <Resource id="brain_uart" type="memory_link"/>
         <Resource id="override_field" type="field_map">
             <Landmark id="center_goal">
-                <NominalPose x_m="1.8" y_m="1.8" heading_deg="0"/>
+                <NominalPose calibration_status="verified"
+                             x_m="1.8" y_m="1.8" heading_deg="0"/>
             </Landmark>
         </Resource>
     </Resources>
@@ -64,13 +65,13 @@ const char* kFullConfig = R"(
                           type="tracking_wheel_odometry">
                 <TrackingWheel sensor_id="tracking_encoder_a" label="left"
                                radius_m="0.0254" position_x_m="0"
-                               position_y_m="0.13" measurement_angle_deg="0"/>
+                               position_y_m="0.13" measurement_angle_deg="0" direction="positive"/>
                 <TrackingWheel sensor_id="tracking_encoder_b" label="right"
                                radius_m="0.0254" position_x_m="0"
-                               position_y_m="-0.13" measurement_angle_deg="0"/>
+                               position_y_m="-0.13" measurement_angle_deg="0" direction="positive"/>
                 <TrackingWheel sensor_id="tracking_encoder_c" label="rear"
                                radius_m="0.0254" position_x_m="-0.12"
-                               position_y_m="0" measurement_angle_deg="90"/>
+                               position_y_m="0" measurement_angle_deg="90" direction="positive"/>
                 <Output artifact_id="tracking_motion_delta"/>
             </Preprocessor>
             <Preprocessor id="imu_normalization"
@@ -225,9 +226,9 @@ TEST(EndToEnd, SquarePathClosesOnCommandedStart) {
     const RobotState& robot = rig.system->robot();
     EXPECT_TRUE(robot.valid);
     EXPECT_TRUE(robot.initialized);
-    EXPECT_NEAR(robot.pose.x_m, 0.610, 0.003);
-    EXPECT_NEAR(robot.pose.y_m, 0.457, 0.003);
-    EXPECT_NEAR(radToDeg(wrapAngle(robot.pose.heading_rad - kPi / 2.0)), 0.0, 0.05);
+    EXPECT_NEAR(robot.fieldPose().x_m, 0.610, 0.003);
+    EXPECT_NEAR(robot.fieldPose().y_m, 0.457, 0.003);
+    EXPECT_NEAR(radToDeg(wrapAngle(robot.fieldPose().heading_rad - kPi / 2.0)), 0.0, 0.05);
 
     EXPECT_EQ(rig.system->diagnostics().links.at("pico_uart").seq_gaps, 0u);
     EXPECT_EQ(rig.system->diagnostics().links.at("pico_uart").decode_errors, 0u);

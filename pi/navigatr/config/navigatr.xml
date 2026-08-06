@@ -29,7 +29,8 @@
 
         <Resource id="override_field" type="field_map">
             <Landmark id="center_goal">
-                <NominalPose x_m="1.8" y_m="1.8" heading_deg="0"/>
+                <NominalPose calibration_status="verified"
+                             x_m="1.7832" y_m="1.7832" heading_deg="0"/>
             </Landmark>
         </Resource>
     </Resources>

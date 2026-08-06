@@ -94,13 +94,13 @@ std::string threeWheelXml(const char* a, const char* b, const char* c,
         type="tracking_wheel_odometry">)";
     xml += std::string(R"(<TrackingWheel sensor_id=")") + a + R"(" label=")" + label_a +
            R"(" radius_m="0.0254" position_x_m="0" position_y_m="0.13"
-              measurement_angle_deg="0"/>)";
+              measurement_angle_deg="0" direction="positive"/>)";
     xml += std::string(R"(<TrackingWheel sensor_id=")") + b +
            R"(" label="right" radius_m="0.0254" position_x_m="0" position_y_m="-0.13"
-              measurement_angle_deg="0"/>)";
+              measurement_angle_deg="0" direction="positive"/>)";
     xml += std::string(R"(<TrackingWheel sensor_id=")") + c +
            R"(" label="rear" radius_m="0.0254" position_x_m="-0.12" position_y_m="0"
-              measurement_angle_deg="90"/>)";
+              measurement_angle_deg="90" direction="positive"/>)";
     xml += R"(<Output artifact_id="motion"/></Preprocessor>)";
     return xml;
 }
@@ -229,9 +229,9 @@ TEST(TrackingWheelOdometry, TwoWheelsNeedHeadingConstraint) {
     EXPECT_EQ(f.makeOdometry(R"(
 <Preprocessor id="m" type="tracking_wheel_odometry">
     <TrackingWheel sensor_id="enc_a" radius_m="0.0254" position_x_m="0"
-                   position_y_m="0" measurement_angle_deg="0"/>
+                   position_y_m="0" measurement_angle_deg="0" direction="positive"/>
     <TrackingWheel sensor_id="enc_b" radius_m="0.0254" position_x_m="0"
-                   position_y_m="0" measurement_angle_deg="90"/>
+                   position_y_m="0" measurement_angle_deg="90" direction="positive"/>
     <Output artifact_id="motion"/>
 </Preprocessor>)",
                              err),
@@ -242,9 +242,9 @@ TEST(TrackingWheelOdometry, TwoWheelsNeedHeadingConstraint) {
     auto odom = f.makeOdometry(R"(
 <Preprocessor id="m" type="tracking_wheel_odometry">
     <TrackingWheel sensor_id="enc_a" radius_m="0.0254" position_x_m="0"
-                   position_y_m="0" measurement_angle_deg="0"/>
+                   position_y_m="0" measurement_angle_deg="0" direction="positive"/>
     <TrackingWheel sensor_id="enc_b" radius_m="0.0254" position_x_m="0"
-                   position_y_m="0" measurement_angle_deg="90"/>
+                   position_y_m="0" measurement_angle_deg="90" direction="positive"/>
     <HeadingConstraint sensor_id="imu" bias_samples="2"/>
     <Output artifact_id="motion"/>
 </Preprocessor>)",
@@ -309,9 +309,17 @@ TEST(TrackingWheelOdometry, ConfigurationErrors) {
 
     // bad direction enum
     bad = threeWheelXml("enc_a", "enc_b", "enc_c");
-    bad.insert(bad.find("/>"), " direction=\"sideways\"");
+    bad.replace(bad.find("direction=\"positive\""), 20, "direction=\"sideways\"");
     EXPECT_EQ(f.makeOdometry(bad, err), nullptr);
     EXPECT_NE(err.find("direction"), std::string::npos);
+
+    // calibration-critical geometry is required, never defaulted
+    bad            = threeWheelXml("enc_a", "enc_b", "enc_c");
+    const auto pos = bad.find(" position_y_m=\"0.13\"");
+    ASSERT_NE(pos, std::string::npos);
+    bad.erase(pos, 20);
+    EXPECT_EQ(f.makeOdometry(bad, err), nullptr);
+    EXPECT_NE(err.find("missing required attribute position_y_m"), std::string::npos);
 }
 
 TEST(ConfiguredCollection, DuplicateArtifactOutputsFail) {
