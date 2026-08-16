@@ -94,8 +94,9 @@ private:
 
 struct RobotScript {
     Pose2D   odom;
-    uint64_t epoch      = 0;
-    double   yaw_rate   = 0.0;
+    uint64_t epoch    = 0;
+    double   yaw_rate = 0.0;
+    bool     valid    = true;
 };
 
 class ScriptedLocalization : public Localization
@@ -108,7 +109,7 @@ public:
         out.robot.odom_pose       = script_->odom;
         out.robot.odometry_epoch  = script_->epoch;
         out.robot.yaw_rate_rad_s  = script_->yaw_rate;
-        out.robot.valid           = true;
+        out.robot.valid           = script_->valid;
         return out;
     }
 
@@ -247,6 +248,21 @@ std::string configXml(double camera_yaw_deg, double ambiguity_margin_m) {
             consistency_translation_m="0.05"
             consistency_heading_deg="3"/>
       </Target>
+      <Target id="back_to_left" type="landmark_relative" wire_id="6"
+              landmark_id="left_goal"
+              approach_frame_id="left_goal_west_face"
+              controlled_frame_id="rear_contact">
+        <DesiredControlledFramePose calibration_status="verified"
+            x_m="0.05" y_m="0" heading_deg="180"/>
+        <VisionCorrection type="acquire_once"
+            on_acquisition_timeout="cancel"
+            minimum_consistent_observations="1"
+            maximum_observation_age_ms="200"
+            maximum_robot_angular_speed_deg_s="60"
+            acquisition_timeout_ms="1000"
+            consistency_translation_m="0.05"
+            consistency_heading_deg="3"/>
+      </Target>
     </Resource>
   </Resources>
   <Sensors>
@@ -268,7 +284,9 @@ std::string configXml(double camera_yaw_deg, double ambiguity_margin_m) {
       <FieldMap resource_id="game_field"/>
       <RobotFrames resource_id="robot_geometry"/>
       <Targets resource_id="targets"/>
-      <Gates max_translation_error_m="0.5" max_heading_error_deg="30" @MARGIN@/>
+      <Gates max_translation_error_m="0.5" max_heading_error_deg="30" @MARGIN@
+             max_range_m="3.0" min_decision_margin="20"
+             min_projected_size_px="4"/>
       <Output association_id="landmark_pose_observations"/>
     </Association>
     <PoseCorrection type="noop"/>
@@ -584,20 +602,24 @@ TEST(VisionTargets, OdometryEpochResetCancelsLatchedTarget) {
     EXPECT_FALSE(f.system->target().latched);
 }
 
-TEST(VisionTargets, AngularSpeedGateBlocksAcquisition) {
+TEST(VisionTargets, AngularSpeedGateUsesMotionAtExposureTime) {
     Fixture f;
-    f.robot->odom     = Pose2D{0.9, 1.7832, 0.0};
-    f.robot->yaw_rate = degToRad(120);   // above the 60 deg/s limit
+    f.robot->odom = Pose2D{0.9, 1.7832, 0.0};
 
     f.select(1);
     f.stepOnce();
+
+    // the robot genuinely spins: 2 degrees per 10 ms cycle is 200 deg/s in
+    // the pose history around each exposure, over the 60 deg/s limit
     for (int i = 0; i < 3; ++i) {
+        f.robot->odom.heading_rad += degToRad(2.0);
         f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
         f.stepOnce();
     }
     EXPECT_EQ(f.system->target().status, TargetStatus::kPendingAcquisition);
 
-    f.robot->yaw_rate = 0.0;   // slow down; evidence counts again
+    // the robot settles; exposure-time motion drops to zero and evidence
+    // counts again
     for (int i = 0; i < 3; ++i) {
         f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
         f.stepOnce();
@@ -623,19 +645,121 @@ TEST(VisionTargets, RepeatedPrintedIdsDisambiguateByFullPose) {
     EXPECT_EQ(left.source, EstimateSource::kFieldMap);   // untouched
 }
 
-TEST(VisionTargets, AmbiguousCandidatesAbstain) {
-    // with an enormous ambiguity margin the runner-up is never beaten
-    // decisively, so the same evidence produces abstention, not a guess
-    Fixture f(0.0, 50.0);
-    f.robot->odom = Pose2D{2.2, 0.6, 0.0};
-
-    f.select(5);
+TEST(VisionTargets, PartialEvidenceNeverMutatesWorldBeforeLock) {
+    Fixture f;
+    f.robot->odom = Pose2D{0.9, 1.7832, 0.0};
+    f.select(1);   // minimum_consistent_observations = 3
     f.stepOnce();
-    for (int i = 0; i < 3; ++i) {
-        f.pushFrame({f.detectionFor(Pose2D{3.0, 0.6, 0.0}, kCenterMount, 1)});
+
+    // two accepted frames: acquisition is in progress but nothing commits
+    for (int i = 0; i < 2; ++i) {
+        f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
         f.stepOnce();
     }
     EXPECT_EQ(f.system->target().status, TargetStatus::kPendingAcquisition);
-    const WorldObject& right = f.system->world().objects.at(WorldObjectId{"right_goal"});
-    EXPECT_EQ(right.source, EstimateSource::kFieldMap);   // no mutation either
+    {
+        const WorldObject& goal =
+            f.system->world().objects.at(WorldObjectId{"center_goal"});
+        EXPECT_EQ(goal.source, EstimateSource::kFieldMap);
+        EXPECT_FALSE(goal.observed);
+    }
+
+    // the third frame locks; landmark and target commit atomically
+    f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
+    f.stepOnce();
+    ASSERT_EQ(f.system->target().status, TargetStatus::kLockedVision);
+    const WorldObject& goal = f.system->world().objects.at(WorldObjectId{"center_goal"});
+    EXPECT_EQ(goal.source, EstimateSource::kObserved);
+    EXPECT_TRUE(goal.observed);
+}
+
+TEST(VisionTargets, SingleFrameWithManyTagsCountsAsOneObservation) {
+    Fixture f;
+    f.robot->odom = Pose2D{0.9, 1.7832, 0.0};
+    f.select(1);
+    f.stepOnce();
+
+    // one exposure containing the tag three times must not satisfy three
+    // consistent observations; frames count, not entries
+    const NativeTagDetection d = f.detectionFor(kCenterGoal, kCenterMount, 0);
+    f.pushFrame({d, d, d});
+    f.stepOnce();
+    for (int i = 0; i < 5; ++i) {
+        f.stepOnce();   // no further frames
+    }
+    EXPECT_EQ(f.system->target().status, TargetStatus::kPendingAcquisition);
+}
+
+TEST(VisionTargets, NominalFallbackIgnoresUnconfirmedEvidence) {
+    // the goal is physically displaced, but acquisition never completes:
+    // the timeout fallback must come from the immutable map nominal with
+    // zero trace of the unconfirmed camera evidence
+    Fixture f;
+    f.robot->odom = Pose2D{0.9, 1.7832, 0.0};
+    f.select(1);
+    f.stepOnce();
+
+    const Pose2D displaced{kCenterGoal.x_m + 0.08, kCenterGoal.y_m, 0.0};
+    for (int i = 0; i < 2; ++i) {   // one short of the lock
+        f.pushFrame({f.detectionFor(displaced, kCenterMount, 0)});
+        f.stepOnce();
+    }
+    while (f.now_ms < 1200) {
+        f.stepOnce();
+    }
+    ASSERT_EQ(f.system->target().status, TargetStatus::kLockedNominal);
+    EXPECT_NEAR(f.system->target().T_odom_robot_target.x_m, kExpectedBodyTarget.x_m,
+                1e-9);
+    EXPECT_NEAR(f.system->target().T_odom_robot_target.y_m, kExpectedBodyTarget.y_m,
+                1e-9);
+    const WorldObject& goal = f.system->world().objects.at(WorldObjectId{"center_goal"});
+    EXPECT_EQ(goal.source, EstimateSource::kFieldMap);   // never touched
+}
+
+TEST(VisionTargets, SelectDuringInvalidLocalizationDefersActivation) {
+    Fixture f;
+    f.robot->valid = false;
+    f.robot->odom  = Pose2D{1.0, 1.0, 0.0};
+
+    f.select(2);   // robot_relative: would snapshot zeros if unguarded
+    f.stepOnce();
+    f.stepOnce();
+    EXPECT_FALSE(f.system->target().active);
+
+    // localization becomes real later, at a different pose; the deferred
+    // command activates there
+    f.robot->valid = true;
+    f.robot->odom  = Pose2D{2.0, 1.0, 0.0};
+    f.stepOnce();
+    ASSERT_EQ(f.system->target().status, TargetStatus::kLockedRobotRelative);
+    EXPECT_NEAR(f.system->target().T_odom_robot_target.x_m, 1.4, 1e-12);
+    EXPECT_NEAR(f.system->target().T_odom_robot_target.y_m, 1.3, 1e-12);
+}
+
+TEST(VisionTargets, AmbiguousCandidatesAbstain) {
+    // from far back both repeated-id mounts pass every expected-visibility
+    // check (in front, facing, in the field of view, large enough); with an
+    // enormous ambiguity margin the runner-up is never beaten decisively,
+    // so the same evidence produces abstention, not a guess
+    Fixture f(0.0, 50.0);
+    f.robot->odom = Pose2D{-2.0, 1.8, 0.0};   // both goals ahead of the camera
+
+    f.select(6);   // acquire the left goal, one consistent frame suffices
+    f.stepOnce();
+    for (int i = 0; i < 3; ++i) {
+        f.pushFrame({f.detectionFor(Pose2D{0.6, 3.0, 0.0}, kCenterMount, 1)});
+        f.stepOnce();
+    }
+    EXPECT_EQ(f.system->target().status, TargetStatus::kPendingAcquisition);
+    const WorldObject& left = f.system->world().objects.at(WorldObjectId{"left_goal"});
+    EXPECT_EQ(left.source, EstimateSource::kFieldMap);   // no mutation either
+
+    // the identical scene with a sane margin is decisive
+    Fixture g(0.0, 0.15);
+    g.robot->odom = Pose2D{-2.0, 1.8, 0.0};
+    g.select(6);
+    g.stepOnce();
+    g.pushFrame({g.detectionFor(Pose2D{0.6, 3.0, 0.0}, kCenterMount, 1)});
+    g.stepOnce();
+    EXPECT_EQ(g.system->target().status, TargetStatus::kLockedVision);
 }

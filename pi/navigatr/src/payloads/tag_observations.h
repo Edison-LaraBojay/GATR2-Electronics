@@ -6,12 +6,14 @@
 // appears in this payload.
 
 #pragma once
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "core/ids.h"
 #include "core/time.h"
 #include "math/se3.h"
+#include "resources/camera.h"
 
 namespace navigatr
 {
@@ -25,7 +27,21 @@ struct TagObservation {
     std::string family;
     int         observed_id = -1;
     Transform3  T_camera_tag;   // T_Ce_S, engineering to canonical surface
-    double      decision_margin = 0.0;
+
+    // Pixel geometry in the captured image, ordering as NativeTagDetection
+    // (corner 0 bottom-left of the printed tag, counter-clockwise); kept
+    // for association diagnostics and the inspection overlays.
+    double corners_px[4][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+    double center_px[2]     = {0, 0};
+
+    // Detector quality carried through for association gating and the
+    // inspection tools; semantics and has_ flags as NativeTagDetection.
+    int    hamming                 = 0;
+    double decision_margin         = 0.0;
+    bool   has_reprojection_error  = false;
+    double reprojection_error_px   = 0.0;
+    bool   has_alternate_pose_ambiguity = false;
+    double alternate_pose_ambiguity     = 0.0;
 };
 
 struct TagObservationSet {
@@ -33,6 +49,14 @@ struct TagObservationSet {
     FrameId       camera_frame;      // engineering frame id in the robot frame map
     uint32_t      frame_sequence = 0;
     MonotonicTime exposureAt;        // host clock
+
+    // The calibration the frame was captured under, for consumers that
+    // project (field-of-view checks, overlays).
+    std::shared_ptr<const CameraIntrinsics> intrinsics;
+
+    // Wall time perception spent in the detector for this frame.
+    double detector_processing_ms = 0.0;
+
     std::vector<TagObservation> tags;
 };
 

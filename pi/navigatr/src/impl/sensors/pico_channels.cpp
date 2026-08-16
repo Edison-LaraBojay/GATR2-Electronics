@@ -206,6 +206,11 @@ std::optional<SensorExecutable> make_pico_imu_channel(const ConfigNode& node,
         // wire unit is millidegrees per second
         ImuSample sample;
         sample.yaw_rate_rad_s = state->sign * degToRad(gyro.value[0] / 1000.0);
+        sample.accumulated_angle_rad =
+            state->sign *
+            degToRad(state->setup.telemetry->gyroAccumulatedRaw() / 1000.0);
+        sample.accumulated_epoch = state->setup.telemetry->gyroAccumulatedEpoch();
+        sample.has_accumulated   = true;
 
         result.publication =
             SensorPublication{gyro.measuredAt,

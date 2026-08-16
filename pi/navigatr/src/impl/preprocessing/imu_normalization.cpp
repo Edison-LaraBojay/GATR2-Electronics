@@ -49,12 +49,13 @@ std::vector<ArtifactOutputDecl> ImuNormalization::outputs() const {
 }
 
 void ImuNormalization::reset() {
-    last_sequence_ = 0;
-    calibrated_    = bias_samples_ == 0;
-    cal_count_     = 0;
-    cal_sum_       = 0.0;
-    bias_rad_s_    = 0.0;
-    have_prev_     = false;
+    last_sequence_  = 0;
+    calibrated_     = bias_samples_ == 0;
+    cal_count_      = 0;
+    cal_sum_        = 0.0;
+    bias_rad_s_     = 0.0;
+    have_prev_      = false;
+    prev_has_accum_ = false;
 }
 
 FunctionStatus ImuNormalization::run(const PreprocessingInput& in, ArtifactMap& out) {
@@ -81,30 +82,50 @@ FunctionStatus ImuNormalization::run(const PreprocessingInput& in, ArtifactMap& 
 
     const double rate = sample->yaw_rate_rad_s - bias_rad_s_;
     if (!have_prev_) {
-        have_prev_  = true;
-        prev_rate_  = rate;
-        prev_stamp_ = stored->measuredAt;
+        have_prev_        = true;
+        prev_rate_        = rate;
+        prev_accum_       = sample->accumulated_angle_rad;
+        prev_has_accum_   = sample->has_accumulated;
+        prev_accum_epoch_ = sample->accumulated_epoch;
+        prev_stamp_       = stored->measuredAt;
         return FunctionStatus::kOk;
     }
 
     const double dt_s = secondsBetween(stored->measuredAt, prev_stamp_);
     if (dt_s * 1000.0 > static_cast<double>(max_gap_ms_)) {
         // rate integration across an outage is garbage; reseed instead
-        prev_rate_  = rate;
-        prev_stamp_ = stored->measuredAt;
+        prev_rate_        = rate;
+        prev_accum_       = sample->accumulated_angle_rad;
+        prev_has_accum_   = sample->has_accumulated;
+        prev_accum_epoch_ = sample->accumulated_epoch;
+        prev_stamp_       = stored->measuredAt;
         return FunctionStatus::kOk;
     }
 
     ImuDelta delta;
     delta.dt_s       = dt_s;
     delta.rate_rad_s = rate;
-    delta.delta_rad  = 0.5 * (prev_rate_ + rate) * delta.dt_s;
+    // the producer's accumulated angle keeps rotation that packet batching
+    // drops from a latest-rate sample; a difference across accumulator
+    // epochs spans a producer-side discontinuity and falls back to the
+    // endpoint trapezoid
+    if (sample->has_accumulated && prev_has_accum_ &&
+        sample->accumulated_epoch == prev_accum_epoch_) {
+        delta.delta_rad =
+            (sample->accumulated_angle_rad - prev_accum_) - bias_rad_s_ * dt_s;
+    } else {
+        delta.delta_rad = 0.5 * (prev_rate_ + rate) * delta.dt_s;
+    }
 
-    prev_rate_  = rate;
-    prev_stamp_ = stored->measuredAt;
+    prev_rate_        = rate;
+    prev_accum_       = sample->accumulated_angle_rad;
+    prev_has_accum_   = sample->has_accumulated;
+    prev_accum_epoch_ = sample->accumulated_epoch;
+    prev_stamp_       = stored->measuredAt;
 
     ArtifactRecord record;
     record.measuredAt = stored->measuredAt;
+    record.receivedAt = stored->receivedAt;
     record.payload    = TypedPayload::store(delta, payload_names::kImuDelta);
     out[output_]      = std::move(record);
     return FunctionStatus::kOk;

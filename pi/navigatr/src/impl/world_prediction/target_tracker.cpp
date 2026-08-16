@@ -85,9 +85,11 @@ std::unique_ptr<WorldPrediction> TargetTracker::create(const ConfigNode& node,
     return tracker;
 }
 
-Pose2D TargetTracker::nominalTargetPose(const TargetDecl& decl,
-                                        const WorldPredictionInput& in,
-                                        const WorldState& world) const {
+// Policy none: the current estimate, which is the nominal map pose or a
+// previously committed (locked) observation, never in-flight evidence.
+Pose2D TargetTracker::estimateTargetPose(const TargetDecl& decl,
+                                         const WorldPredictionInput& in,
+                                         const WorldState& world) const {
     Pose2D T_field_landmark;
     const LandmarkDecl* lm = field_->find(decl.landmark);
     if (lm != nullptr) {
@@ -96,6 +98,21 @@ Pose2D TargetTracker::nominalTargetPose(const TargetDecl& decl,
     const auto it = world.objects.find(decl.landmark);
     if (it != world.objects.end() && it->second.valid) {
         T_field_landmark = it->second.pose.pose;
+    }
+    const Pose2D T_odom_landmark =
+        compose(inverse(in.robot.field_from_odom), T_field_landmark);
+    return decl.resolveFromLandmark(T_odom_landmark);
+}
+
+// Timeout fallback: strictly the immutable field map nominal. "Use nominal
+// target" means zero visual correction, so nothing the camera did before
+// the timeout may leak in.
+Pose2D TargetTracker::mapNominalTargetPose(const TargetDecl& decl,
+                                           const WorldPredictionInput& in) const {
+    Pose2D T_field_landmark;
+    const LandmarkDecl* lm = field_->find(decl.landmark);
+    if (lm != nullptr) {
+        T_field_landmark = lm->nominal;
     }
     const Pose2D T_odom_landmark =
         compose(inverse(in.robot.field_from_odom), T_field_landmark);
@@ -128,12 +145,15 @@ WorldPredictionOutput TargetTracker::run(const WorldPredictionInput& in) {
         kv.second.observed = false;
     }
 
-    // Activation edge: one new command sequence, one activation.
+    // Activation edge: one new command sequence, one activation. A command
+    // arriving while localization is not yet valid stays un-consumed and
+    // activates on the first valid cycle; nothing ever snapshots zeros.
     if (in.command.object_sequence != 0 &&
-        in.command.object_sequence != last_seen_object_sequence_) {
+        in.command.object_sequence != last_seen_object_sequence_ &&
+        (in.robot.valid || !in.command.object_requested)) {
         last_seen_object_sequence_ = in.command.object_sequence;
-        candidates_.clear();
-        ts = TargetState{};
+        acquisition_               = AcquisitionBuffer{};
+        ts                         = TargetState{};
         if (in.command.object_requested) {
             const TargetDecl* decl = targets_->findByWireId(in.command.object_wire_id);
             if (decl == nullptr) {
@@ -150,7 +170,7 @@ WorldPredictionOutput TargetTracker::run(const WorldPredictionInput& in) {
                     ts.latched             = true;
                     ts.status              = TargetStatus::kLockedRobotRelative;
                 } else if (decl->vision.policy == VisionPolicy::kNone) {
-                    ts.T_odom_robot_target = nominalTargetPose(*decl, in, out.world);
+                    ts.T_odom_robot_target = estimateTargetPose(*decl, in, out.world);
                     ts.latched             = true;
                     ts.status              = TargetStatus::kLockedNominal;
                 } else {
@@ -169,7 +189,7 @@ WorldPredictionOutput TargetTracker::run(const WorldPredictionInput& in) {
         ts.odometry_epoch != in.robot.odometry_epoch) {
         ts.status  = TargetStatus::kCancelled;
         ts.latched = false;
-        candidates_.clear();
+        acquisition_ = AcquisitionBuffer{};
         return out;
     }
 
@@ -183,8 +203,11 @@ WorldPredictionOutput TargetTracker::run(const WorldPredictionInput& in) {
         return out;
     }
 
-    // Consume this generation's evidence.
-    if (!association_ref_.empty()) {
+    // Consume this generation's evidence into the private buffer. At most
+    // one candidate per camera frame: three mounts in one image are one
+    // observation, not three. Nothing outside the buffer changes until the
+    // lock commits.
+    if (!association_ref_.empty() && in.robot.valid) {
         const auto it = in.associations.find(association_ref_);
         if (it != in.associations.end()) {
             const LandmarkPoseObservationSet* set =
@@ -193,74 +216,114 @@ WorldPredictionOutput TargetTracker::run(const WorldPredictionInput& in) {
                 out.status = FunctionStatus::kFault;
                 return out;
             }
+            // Best acceptable entry of this frame, by confidence.
+            const LandmarkPoseObservation* accepted = nullptr;
             for (const LandmarkPoseObservation& entry : set->entries) {
                 if (entry.target_generation != ts.generation ||
                     entry.landmark != decl->landmark) {
                     continue;   // stale generation or someone else's evidence
                 }
-                if ((in.now - entry.exposureAt) > decl->vision.maximum_observation_age_ms) {
+                if ((in.now - entry.exposureAt) >
+                    decl->vision.maximum_observation_age_ms) {
                     continue;
                 }
-                if (std::fabs(in.robot.yaw_rate_rad_s) >
+                // Motion is gated at the moment of exposure, not at
+                // processing time: with camera latency those differ.
+                double rate_at_exposure = std::fabs(in.robot.yaw_rate_rad_s);
+                double sampled          = 0.0;
+                if (in.robot.yawRateAt(entry.exposureAt, sampled)) {
+                    rate_at_exposure = std::fabs(sampled);
+                }
+                if (rate_at_exposure >
                     decl->vision.maximum_robot_angular_speed_rad_s) {
                     continue;
                 }
-
-                // The one landmark this target selects is the only one that
-                // may mutate.
-                WorldObject& obj = out.world.objects[entry.landmark];
-                const Pose2D T_field_landmark =
-                    compose(in.robot.field_from_odom, entry.T_odom_landmark);
-                if (!obj.valid) {
-                    obj.pose.frame = FrameId{"field"};
-                    obj.pose.pose  = T_field_landmark;
-                } else {
-                    obj.pose.pose.x_m +=
-                        (T_field_landmark.x_m - obj.pose.pose.x_m) * blend_;
-                    obj.pose.pose.y_m +=
-                        (T_field_landmark.y_m - obj.pose.pose.y_m) * blend_;
-                    obj.pose.pose.heading_rad = wrapAngle(
-                        obj.pose.pose.heading_rad +
-                        wrapAngle(T_field_landmark.heading_rad -
-                                  obj.pose.pose.heading_rad) *
-                            blend_);
+                if (acquisition_.have_frame &&
+                    entry.camera == acquisition_.last_frame_camera &&
+                    entry.frame_sequence == acquisition_.last_frame_sequence) {
+                    continue;   // this frame already contributed
                 }
-                obj.pose.measuredAt = in.now;
-                obj.valid           = true;
-                obj.observed        = true;
-                obj.source          = EstimateSource::kObserved;
-                obj.confidence      = entry.confidence;
+                if (accepted == nullptr || entry.confidence > accepted->confidence) {
+                    accepted = &entry;
+                }
+            }
 
-                // Consistency run over successive candidate target poses.
-                const Pose2D candidate = decl->resolveFromLandmark(entry.T_odom_landmark);
-                if (!candidates_.empty()) {
-                    const Pose2D& prev = candidates_.back();
+            if (accepted != nullptr) {
+                acquisition_.have_frame          = true;
+                acquisition_.last_frame_camera   = accepted->camera;
+                acquisition_.last_frame_sequence = accepted->frame_sequence;
+
+                const Pose2D candidate =
+                    decl->resolveFromLandmark(accepted->T_odom_landmark);
+                if (!acquisition_.target_candidates.empty()) {
+                    const Pose2D& prev = acquisition_.target_candidates.back();
                     const double  dt   = std::hypot(candidate.x_m - prev.x_m,
                                                     candidate.y_m - prev.y_m);
                     const double  dh =
                         std::fabs(wrapAngle(candidate.heading_rad - prev.heading_rad));
                     if (dt > decl->vision.consistency_translation_m ||
                         dh > decl->vision.consistency_heading_rad) {
-                        candidates_.clear();   // inconsistent; restart the run
+                        // inconsistent; restart the run, still privately
+                        acquisition_.target_candidates.clear();
+                        acquisition_.landmark_poses.clear();
+                        acquisition_.confidences.clear();
                     }
                 }
-                candidates_.push_back(candidate);
+                acquisition_.target_candidates.push_back(candidate);
+                acquisition_.landmark_poses.push_back(accepted->T_odom_landmark);
+                acquisition_.confidences.push_back(accepted->confidence);
 
-                if (static_cast<long>(candidates_.size()) >=
+                if (static_cast<long>(acquisition_.target_candidates.size()) >=
                     decl->vision.minimum_consistent_observations) {
-                    double sx = 0.0, sy = 0.0, sh_sin = 0.0, sh_cos = 0.0;
-                    for (const Pose2D& c : candidates_) {
-                        sx += c.x_m;
-                        sy += c.y_m;
-                        sh_sin += std::sin(c.heading_rad);
-                        sh_cos += std::cos(c.heading_rad);
+                    // Atomic commit: blend the consistent window's mean
+                    // landmark into the world first, then derive the
+                    // latched target from that final committed landmark, so
+                    // the two can never disagree.
+                    double lx = 0.0, ly = 0.0, lh_sin = 0.0, lh_cos = 0.0;
+                    double conf = 0.0;
+                    const double n =
+                        static_cast<double>(acquisition_.landmark_poses.size());
+                    for (std::size_t i = 0; i < acquisition_.landmark_poses.size();
+                         ++i) {
+                        const Pose2D& l = acquisition_.landmark_poses[i];
+                        lx += l.x_m;
+                        ly += l.y_m;
+                        lh_sin += std::sin(l.heading_rad);
+                        lh_cos += std::cos(l.heading_rad);
+                        conf += acquisition_.confidences[i];
                     }
-                    const double n         = static_cast<double>(candidates_.size());
-                    ts.T_odom_robot_target = Pose2D{
-                        sx / n, sy / n, std::atan2(sh_sin, sh_cos)};
-                    ts.latched = true;
-                    ts.status  = TargetStatus::kLockedVision;
-                    candidates_.clear();
+
+                    const Pose2D landmark_odom{lx / n, ly / n,
+                                               std::atan2(lh_sin, lh_cos)};
+                    const Pose2D T_field_landmark =
+                        compose(in.robot.field_from_odom, landmark_odom);
+                    WorldObject& obj = out.world.objects[decl->landmark];
+                    if (!obj.valid) {
+                        obj.pose.frame = FrameId{"field"};
+                        obj.pose.pose  = T_field_landmark;
+                    } else {
+                        obj.pose.pose.x_m +=
+                            (T_field_landmark.x_m - obj.pose.pose.x_m) * blend_;
+                        obj.pose.pose.y_m +=
+                            (T_field_landmark.y_m - obj.pose.pose.y_m) * blend_;
+                        obj.pose.pose.heading_rad = wrapAngle(
+                            obj.pose.pose.heading_rad +
+                            wrapAngle(T_field_landmark.heading_rad -
+                                      obj.pose.pose.heading_rad) *
+                                blend_);
+                    }
+                    obj.pose.measuredAt = in.now;
+                    obj.valid           = true;
+                    obj.observed        = true;
+                    obj.source          = EstimateSource::kObserved;
+                    obj.confidence      = conf / n;
+
+                    const Pose2D committed_odom =
+                        compose(inverse(in.robot.field_from_odom), obj.pose.pose);
+                    ts.T_odom_robot_target = decl->resolveFromLandmark(committed_odom);
+                    ts.latched             = true;
+                    ts.status              = TargetStatus::kLockedVision;
+                    acquisition_           = AcquisitionBuffer{};
                     return out;   // gate closed for this generation
                 }
             }
@@ -269,9 +332,9 @@ WorldPredictionOutput TargetTracker::run(const WorldPredictionInput& in) {
 
     // Explicit timeout fallback; silence is not a policy.
     if ((in.now - ts.activatedAt) > decl->vision.acquisition_timeout_ms) {
-        candidates_.clear();
+        acquisition_ = AcquisitionBuffer{};
         if (decl->vision.on_timeout == AcquisitionFallback::kUseNominalTarget) {
-            ts.T_odom_robot_target = nominalTargetPose(*decl, in, out.world);
+            ts.T_odom_robot_target = mapNominalTargetPose(*decl, in);
             ts.latched             = true;
             ts.status              = TargetStatus::kLockedNominal;
         } else {

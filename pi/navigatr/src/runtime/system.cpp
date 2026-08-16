@@ -333,20 +333,44 @@ void System::step(MonotonicTime now) {
         preprocessing_->run({sensor_results_, now, cycle_, &diagnostics_});
     diagnostics_.note(slot_labels_[1], pre_out.status);
 
+    const uint64_t epoch_before = robot_.odometry_epoch;
+
     LocalizationOutput loc_out =
         localization_->run({sensor_results_, pre_out.artifacts, command_, robot_, now});
     robot_ = loc_out.robot;
     diagnostics_.note(slot_labels_[2], loc_out.status);
 
-    // Framework-owned pose history: the odometry pose at this cycle's host
-    // time, so evidence with an exposure timestamp can be evaluated against
-    // the pose at exposure.
-    robot_.history.push_back(TimedOdomPose{now, robot_.odom_pose});
-    while (robot_.history.size() > RobotState::kHistoryCapacity) {
-        robot_.history.pop_front();
+    // An odometry epoch change means the old frame shares nothing with the
+    // new one; poses recorded in it are not history, they are garbage.
+    if (robot_.odometry_epoch != epoch_before) {
+        robot_.history.clear();
     }
 
-    PerceptionOutput per_out = perception_->run({sensor_results_, pre_out.artifacts, now});
+    // Framework-owned pose history, so evidence with an exposure timestamp
+    // can be evaluated against the pose at exposure. Only valid poses enter
+    // history (a startup pose of zeros is not evidence), stamped at the
+    // estimator's mapped measurement time when it has one; the loop time is
+    // an upper bound fallback. A clock-map revision can move a mapped time
+    // at or before the newest entry; the newer pose then explicitly
+    // replaces that entry so history stays monotonic without losing the
+    // newest estimate.
+    if (robot_.valid) {
+        MonotonicTime at = robot_.measuredAtHost.isSet() ? robot_.measuredAtHost : now;
+        if (!robot_.history.empty() && at < robot_.history.back().at) {
+            at = robot_.history.back().at;   // revision: clamp, keep newest pose
+        }
+        if (robot_.history.empty() || at > robot_.history.back().at) {
+            robot_.history.push_back(TimedOdomPose{at, robot_.odom_pose});
+        } else {
+            robot_.history.back() = TimedOdomPose{at, robot_.odom_pose};
+        }
+        while (robot_.history.size() > RobotState::kHistoryCapacity) {
+            robot_.history.pop_front();
+        }
+    }
+
+    PerceptionOutput per_out =
+        perception_->run({sensor_results_, pre_out.artifacts, target_, now});
     diagnostics_.note(slot_labels_[3], per_out.status);
 
     AssociationOutput assoc_out =

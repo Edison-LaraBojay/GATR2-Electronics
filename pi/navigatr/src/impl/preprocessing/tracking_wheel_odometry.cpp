@@ -168,12 +168,15 @@ std::unique_ptr<PreprocessorExecutable> TrackingWheelOdometry::create(
             return nullptr;
         }
         if (!constraint.getInt("bias_samples", 200, odom->heading_.bias_samples, err) ||
-            !constraint.getInt("max_gap_ms", 250, odom->heading_.max_gap_ms, err)) {
+            !constraint.getInt("max_gap_ms", 250, odom->heading_.max_gap_ms, err) ||
+            !constraint.getDouble("max_calibration_travel_m", 0.005,
+                                  odom->heading_.max_calibration_travel_m, err)) {
             return nullptr;
         }
-        if (odom->heading_.bias_samples < 0 || odom->heading_.max_gap_ms <= 0) {
-            err = constraint.path() +
-                  ": bias_samples cannot be negative and max_gap_ms must be positive";
+        if (odom->heading_.bias_samples < 0 || odom->heading_.max_gap_ms <= 0 ||
+            odom->heading_.max_calibration_travel_m <= 0.0) {
+            err = constraint.path() + ": bias_samples cannot be negative; max_gap_ms "
+                  "and max_calibration_travel_m must be positive";
             return nullptr;
         }
         odom->heading_.calibrated = odom->heading_.bias_samples == 0;
@@ -234,16 +237,25 @@ void TrackingWheelOdometry::reset() {
     heading_.calibrated     = heading_.bias_samples == 0;
     heading_.cal_count      = 0;
     heading_.cal_sum        = 0.0;
+    heading_.cal_have_accum = false;
+    heading_.cal_travel_m   = 0.0;
     heading_.bias_rad_s     = 0.0;
     heading_.have_prev      = false;
+    heading_.prev_has_accum = false;
     heading_.last_sequence  = 0;
     heading_.pending        = false;
     heading_.pending_dtheta = 0.0;
     heading_.pending_dt_s   = 0.0;
+    last_received_          = MonotonicTime{};
 }
 
 FunctionStatus TrackingWheelOdometry::run(const PreprocessingInput& in, ArtifactMap& out) {
     bool progressed = false;
+
+    // While gyro bias collection runs, wheel baselines rebase continuously
+    // instead of accumulating: the first fused solve must never combine
+    // travel from before calibration with a short gyro interval.
+    const bool calibrating = heading_.configured && !heading_.calibrated;
 
     for (Wheel& w : wheels_) {
         // only healthy sources are consumed; fault and unavailable sensors
@@ -258,12 +270,22 @@ FunctionStatus TrackingWheelOdometry::run(const PreprocessingInput& in, Artifact
         }
         w.last_sequence = stored->sequence;
         progressed      = true;
+        if (!last_received_.isSet() || stored->receivedAt > last_received_) {
+            last_received_ = stored->receivedAt;
+        }
 
         if (!w.have_prev) {
             w.have_prev      = true;
             w.prev_angle_rad = sample->angle_rad;
             w.prev_stamp     = stored->measuredAt;
             continue;
+        }
+        if (calibrating) {
+            heading_.cal_travel_m +=
+                std::fabs((sample->angle_rad - w.prev_angle_rad) * w.radius_m);
+            w.prev_angle_rad = sample->angle_rad;
+            w.prev_stamp     = stored->measuredAt;
+            continue;   // rebase only; travel during calibration is not motion data
         }
         w.pending_travel_m +=
             (sample->angle_rad - w.prev_angle_rad) * w.radius_m * w.sign;
@@ -284,13 +306,43 @@ FunctionStatus TrackingWheelOdometry::run(const PreprocessingInput& in, Artifact
             }
             heading_.last_sequence = stored->sequence;
             progressed             = true;
+            if (!last_received_.isSet() || stored->receivedAt > last_received_) {
+                last_received_ = stored->receivedAt;
+            }
 
             if (!heading_.calibrated) {
+                // Bias collection is valid only while stationary; motion
+                // restarts it.
+                if (heading_.cal_travel_m > heading_.max_calibration_travel_m) {
+                    heading_.cal_count      = 0;
+                    heading_.cal_sum        = 0.0;
+                    heading_.cal_have_accum = false;
+                    heading_.cal_travel_m   = 0.0;
+                }
+                if (sample->has_accumulated && !heading_.cal_have_accum) {
+                    heading_.cal_have_accum       = true;
+                    heading_.cal_accum_start      = sample->accumulated_angle_rad;
+                    heading_.cal_accum_start_stamp = stored->measuredAt;
+                }
                 heading_.cal_sum += sample->yaw_rate_rad_s;
                 ++heading_.cal_count;
                 if (heading_.cal_count >= heading_.bias_samples) {
-                    heading_.bias_rad_s = heading_.cal_sum / heading_.cal_count;
-                    heading_.calibrated = true;
+                    const double elapsed =
+                        heading_.cal_have_accum
+                            ? secondsBetween(stored->measuredAt,
+                                             heading_.cal_accum_start_stamp)
+                            : 0.0;
+                    if (heading_.cal_have_accum && elapsed > 1e-6) {
+                        // total accumulated angle over the stationary window
+                        // beats a mean of sampled rates
+                        heading_.bias_rad_s = (sample->accumulated_angle_rad -
+                                               heading_.cal_accum_start) /
+                                              elapsed;
+                    } else {
+                        heading_.bias_rad_s = heading_.cal_sum / heading_.cal_count;
+                    }
+                    heading_.calibrated   = true;
+                    heading_.cal_travel_m = 0.0;
                 }
             } else {
                 const double rate = sample->yaw_rate_rad_s - heading_.bias_rad_s;
@@ -302,15 +354,31 @@ FunctionStatus TrackingWheelOdometry::run(const PreprocessingInput& in, Artifact
                         // reseed and drop the interval
                         heading_.have_prev = false;
                     } else {
-                        heading_.pending_dtheta +=
-                            0.5 * (heading_.prev_rate + rate) * dt;
+                        // the accumulated angle keeps rotation that packet
+                        // batching would drop from a latest-rate sample; a
+                        // difference across accumulator epochs spans a
+                        // producer-side discontinuity and falls back to the
+                        // endpoint trapezoid
+                        double dtheta;
+                        if (sample->has_accumulated && heading_.prev_has_accum &&
+                            sample->accumulated_epoch == heading_.prev_accum_epoch) {
+                            dtheta = (sample->accumulated_angle_rad -
+                                      heading_.prev_accum) -
+                                     heading_.bias_rad_s * dt;
+                        } else {
+                            dtheta = 0.5 * (heading_.prev_rate + rate) * dt;
+                        }
+                        heading_.pending_dtheta += dtheta;
                         heading_.pending_dt_s += dt;
                         heading_.pending = true;
                     }
                 }
-                heading_.have_prev  = true;
-                heading_.prev_rate  = rate;
-                heading_.prev_stamp = stored->measuredAt;
+                heading_.have_prev        = true;
+                heading_.prev_rate        = rate;
+                heading_.prev_accum       = sample->accumulated_angle_rad;
+                heading_.prev_has_accum   = sample->has_accumulated;
+                heading_.prev_accum_epoch = sample->accumulated_epoch;
+                heading_.prev_stamp       = stored->measuredAt;
             }
         }
     }
@@ -371,6 +439,7 @@ FunctionStatus TrackingWheelOdometry::run(const PreprocessingInput& in, Artifact
 
     ArtifactRecord record;
     record.measuredAt = newest;
+    record.receivedAt = last_received_;
     record.payload =
         TypedPayload::store(delta, payload_names::kPlanarMotionDelta);
     out[output_] = std::move(record);

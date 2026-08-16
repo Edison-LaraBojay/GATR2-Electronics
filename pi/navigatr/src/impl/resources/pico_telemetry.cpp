@@ -17,8 +17,11 @@ void PicoTelemetry::reset() {
     for (Channel& c : encoders_) {
         c = Channel{};
     }
-    gyro_  = Channel{};
-    accel_ = Channel{};
+    gyro_             = Channel{};
+    accel_            = Channel{};
+    gyro_accum_raw_   = 0.0;
+    gyro_accum_epoch_ = 0;
+    gyro_have_prev_   = false;
 }
 
 void PicoTelemetry::refresh(uint64_t cycle, Diagnostics* diagnostics) {
@@ -92,6 +95,23 @@ void PicoTelemetry::applyPacket(const gatr2::SensorSample& s, Diagnostics* diagn
         }
     }
     if (s.mask & gatr2::kSensorGyroZ) {
+        // Integrate every decoded packet so batching drops no rotation.
+        // Device reboots (stamp regression) and long gaps reseed instead of
+        // integrating garbage.
+        if (gyro_have_prev_) {
+            const int64_t gap_ms = stamp.ms - gyro_prev_stamp_.ms;
+            if (gap_ms > 0 && gap_ms <= kGyroGapMs) {
+                gyro_accum_raw_ += 0.5 *
+                                   (static_cast<double>(gyro_prev_raw_) +
+                                    static_cast<double>(s.gyro_z)) *
+                                   (static_cast<double>(gap_ms) / 1000.0);
+            } else {
+                ++gyro_accum_epoch_;   // dropped interval, not zero rotation
+            }
+        }
+        gyro_have_prev_  = true;
+        gyro_prev_raw_   = s.gyro_z;
+        gyro_prev_stamp_ = stamp;
         update(gyro_, s.gyro_z, 0);
     }
     if (s.mask & gatr2::kSensorAccelXY) {

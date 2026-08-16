@@ -4,7 +4,12 @@
 // detector-native optical and tag axes are converted; the conversion is one
 // fixed rotation pair, never per-configuration angle fudging.
 //
-//   <Perception type="apriltag_tag_observation">
+// Detection is target gated: with detect="on_demand" (the default) the
+// expensive detector runs only while a target is pending acquisition;
+// detect="always" is the explicit diagnostic mode. Camera capture itself is
+// unaffected either way.
+//
+//   <Perception type="apriltag_tag_observation" detect="on_demand">
 //       <Camera sensor_id="front_camera"/>
 //       <Detector resource_id="tag_detector"/>
 //       <Output observation_id="tag_observations"/>
@@ -33,13 +38,20 @@ public:
 
     std::vector<ObservationOutputDecl> produces() const override;
 
-    void reset() override { last_processed_sequence_ = 0; }
+    void reset() override {
+        has_processed_           = false;
+        last_processed_sequence_ = 0;
+    }
 
 private:
     TypedSensorBinding<CameraFramePayload> camera_;
     std::shared_ptr<TagDetector>           detector_;
     ObservationId                          output_;
+    bool                                   always_detect_ = false;
 
+    // has_processed_ distinguishes "never ran" from a first frame whose
+    // sequence happens to be zero.
+    bool     has_processed_           = false;
     uint32_t last_processed_sequence_ = 0;
 };
 

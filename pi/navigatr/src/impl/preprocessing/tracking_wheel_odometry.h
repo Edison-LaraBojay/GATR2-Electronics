@@ -80,12 +80,26 @@ private:
         long                          bias_samples = 200;
         long                          max_gap_ms   = 250;   // reseed across outages
 
+        // Startup lifecycle: bias collection is only valid while the robot
+        // sits still. Wheel travel during collection restarts it, and wheel
+        // baselines rebase continuously until calibration completes, so the
+        // first fused solve never combines stale wheel travel with a short
+        // gyro interval.
+        double max_calibration_travel_m = 0.005;
+        double cal_travel_m             = 0.0;
+
         bool     calibrated = false;
         long     cal_count  = 0;
         double   cal_sum    = 0.0;
+        bool     cal_have_accum  = false;
+        double   cal_accum_start = 0.0;
+        MonotonicTime cal_accum_start_stamp;
         double   bias_rad_s = 0.0;
         bool     have_prev  = false;
         double   prev_rate  = 0.0;
+        double   prev_accum = 0.0;
+        bool     prev_has_accum   = false;
+        uint64_t prev_accum_epoch = 0;
         MonotonicTime prev_stamp;
         uint64_t last_sequence = 0;
 
@@ -98,6 +112,10 @@ private:
     ArtifactId         output_;
     std::vector<Wheel> wheels_;
     HeadingConstraint  heading_;
+
+    // Host receipt of the newest consumed sample; rides on the artifact so
+    // the clock mapper pairs device stamps with actual receipt times.
+    MonotonicTime last_received_;
 };
 
 } // namespace navigatr

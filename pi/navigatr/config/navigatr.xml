@@ -76,7 +76,8 @@
                                measurement_angle_deg="90" direction="positive"/>
                 <!-- the constraint makes the wheel solve consistent with the
                      gyro instead of overriding heading after the fact -->
-                <HeadingConstraint sensor_id="robot_imu" bias_samples="200"/>
+                <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
+                                   max_calibration_travel_m="0.005"/>
                 <Output artifact_id="tracking_motion_delta"/>
             </Preprocessor>
 

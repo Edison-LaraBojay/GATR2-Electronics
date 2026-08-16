@@ -201,6 +201,29 @@ in O is valid only while the epoch matches, and cancellation is the V1
 policy. The framework keeps a short host-clock pose history so evidence
 with an exposure timestamp is evaluated against the pose at exposure.
 
+Pose history entries carry the time a pose was physically true, not the
+loop time it was computed at: wheel data is device stamped, so the
+estimator maintains a device-to-host clock mapping (`core/clock_sync.h`,
+minimum-latency offset over a sliding window). Observations pair each
+device stamp with the actual host receipt of that sample - artifacts carry
+`receivedAt` for exactly this - so pipeline delay never masquerades as
+clock offset, and the mapping declares itself valid only after a warm-up.
+It resets with the odometry epoch when the device clock restarts, and an
+epoch change also clears pose history outright: poses from a dead odometry
+frame are not history. A clock-map revision that moves a mapped time
+backward is clamped to the newest entry explicitly, keeping history
+monotonic. Only valid poses enter history, and an exposure timestamp in
+the future or further past the newest entry than sensor latency explains
+is rejected, never clamped. Motion gates on evidence (maximum angular
+speed) evaluate the yaw rate around the exposure time from that same
+history, not the rate at processing time. Gyro data survives packet batching
+because the telemetry decoder integrates every decoded packet into an
+accumulated angle that consumers difference; a latest-rate snapshot alone
+would silently drop rotation. Wheel/IMU startup is a lifecycle: while gyro
+bias collection runs the wheel baselines rebase continuously, motion above
+a small threshold restarts collection, and the first fused solve therefore
+never combines stale wheel travel with a short gyro interval.
+
 ## Targets and correction gating
 
 Navigation targets are configuration (`target_set` resource): a
@@ -212,9 +235,35 @@ prediction owns activation (edge triggered by the brain's select command),
 the vision policy (`none`, `acquire_once`; `continuous` is reserved),
 explicit timeout fallback, and generation stamping: evidence from a
 previous target generation or odometry epoch is discarded, never applied.
-Only the selected target's landmark ever mutates, and `PoseCorrection`
-stays `noop`: vision corrects or acquires the selected landmark-derived
-target, never the wheel/IMU robot estimate.
+
+Acquisition is transactional. Accepted evidence buffers privately, at most
+one candidate per camera frame (three mounts in one image are one
+observation, not three), until the configured number of consistent results
+from distinct frames arrives; the landmark update and the latched target
+then commit atomically. Nothing outside the buffer changes earlier, so one
+bad frame can never move a landmark, and the `use_nominal_target` timeout
+fallback reads the immutable field map nominal - zero visual correction
+with zero trace of unconfirmed evidence. Activation, robot-relative
+snapshotting, and association all require a valid robot estimate; a select
+command during startup defers until localization is real instead of
+latching zeros. The AprilTag detector itself is target gated
+(`detect="on_demand"`): the camera stays warm, but detection runs only
+while something is acquiring unless the diagnostic `detect="always"` mode
+is configured.
+
+Association accepts evidence only through, in order: detector quality
+(hamming, decision margin; the reprojection-error and alternate-pose
+ambiguity gates, when enabled, reject detections that do not report the
+value rather than treating absent as zero), physical plausibility (the tag
+in front of the camera, its outward normal toward the lens by at least the
+configured `min_facing_cos`, within range), expected mount visibility from
+the prior (in front, facing, projecting inside the calibrated image, at
+least `min_projected_size_px` across), the translation and heading gates,
+and a decisive combined-score margin over the runner-up. Anything less
+abstains. Frame identity everywhere is (camera, sequence): sequences are
+per device and never compared across cameras. Only the selected target's landmark ever mutates, and
+`PoseCorrection` stays `noop`: vision corrects or acquires the selected
+landmark-derived target, never the wheel/IMU robot estimate.
 
 ## Placeholder policy
 

@@ -278,6 +278,60 @@ TEST(TrackingWheelOdometry, TwoWheelsNeedHeadingConstraint) {
     EXPECT_GT(delta->dx_m, 0.015);               // accumulated travel, none lost
 }
 
+TEST(TrackingWheelOdometry, CalibrationRebasesWheelsAndRestartsOnMotion) {
+    Fixture     f;
+    std::string err;
+    auto        odom = f.makeOdometry(R"(
+<Preprocessor id="m" type="tracking_wheel_odometry">
+    <TrackingWheel sensor_id="enc_a" radius_m="0.0254" position_x_m="0"
+                   position_y_m="0" measurement_angle_deg="0" direction="positive"/>
+    <TrackingWheel sensor_id="enc_b" radius_m="0.0254" position_x_m="0"
+                   position_y_m="0" measurement_angle_deg="90" direction="positive"/>
+    <HeadingConstraint sensor_id="imu" bias_samples="2"/>
+    <Output artifact_id="motion"/>
+</Preprocessor>)",
+                               err);
+    ASSERT_NE(odom, nullptr) << err;
+    const double r = 0.0254;
+
+    ArtifactMap artifacts;
+    f.putEncoder("enc_a", 0.0, 1000, 1);
+    f.putEncoder("enc_b", 0.0, 1000, 1);
+    f.putImu(0.02, 1000, 1);
+    odom->run(f.input(), artifacts);   // seeds; bias sample 1
+
+    // the robot moves 20 mm while bias collection runs: collection restarts
+    f.putEncoder("enc_a", 0.02 / r, 1005, 2);
+    f.putEncoder("enc_b", 0.0, 1005, 2);
+    f.putImu(0.02, 1005, 2);
+    odom->run(f.input(), artifacts);
+    EXPECT_TRUE(artifacts.empty());
+
+    // stationary again: the second clean sample completes the restarted
+    // collection
+    f.putImu(0.02, 1010, 3);
+    odom->run(f.input(), artifacts);
+    EXPECT_TRUE(artifacts.empty());
+
+    // post-calibration motion: the first fused solve contains only travel
+    // accumulated after calibration, never the 20 mm moved during it
+    f.putEncoder("enc_a", 0.03 / r, 1015, 3);
+    f.putEncoder("enc_b", 0.0, 1015, 3);
+    f.putImu(0.02, 1015, 4);   // seeds the integrator
+    odom->run(f.input(), artifacts);
+    EXPECT_TRUE(artifacts.empty());
+    f.putEncoder("enc_a", 0.04 / r, 1020, 4);
+    f.putEncoder("enc_b", 0.0, 1020, 4);
+    f.putImu(0.02, 1020, 5);
+    EXPECT_EQ(odom->run(f.input(), artifacts), FunctionStatus::kOk);
+
+    const PlanarMotionDelta* delta =
+        artifacts.at(ArtifactId{"motion"}).payload.get<PlanarMotionDelta>();
+    ASSERT_NE(delta, nullptr);
+    EXPECT_NEAR(delta->dx_m, 0.02, 1e-9);   // 0.04 total would leak cal travel
+    EXPECT_NEAR(delta->dtheta_rad, 0.0, 1e-9);
+}
+
 TEST(TrackingWheelOdometry, ConfigurationErrors) {
     Fixture     f;
     std::string err;

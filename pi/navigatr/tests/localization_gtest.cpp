@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 
+#include "core/clock_sync.h"
 #include "impl/localization/wheel_imu_prediction.h"
 #include "math/angles.h"
 #include "payloads/preprocessing_products.h"
@@ -145,6 +146,50 @@ TEST(WheelImuPrediction, MissingMotionHoldsPose) {
     EXPECT_EQ(out.status, FunctionStatus::kNoData);
     EXPECT_NEAR(out.robot.fieldPose().x_m, 0.1, 1e-12);
     EXPECT_TRUE(out.robot.valid);
+}
+
+TEST(DeviceToHostClock, WarmsUpThenTracksMinimumLatencyOffset) {
+    DeviceToHostClock clock;
+    EXPECT_FALSE(clock.valid());
+
+    clock.observe(deviceTime(1000), hostTime(2030));   // 30 ms of latency
+    clock.observe(deviceTime(1010), hostTime(2015));   // 5 ms, the best pairing
+    clock.observe(deviceTime(1020), hostTime(2060));   // batched, 40 ms
+    EXPECT_FALSE(clock.valid());   // one pairing is not a clock model
+
+    for (int i = 0; i < 5; ++i) {
+        clock.observe(deviceTime(1030 + 10 * i), hostTime(2055 + 10 * i));   // 25 ms
+    }
+    ASSERT_TRUE(clock.valid());
+
+    // the minimum-latency offset wins: 2015 - 1010 = 1005
+    const MonotonicTime mapped = clock.toHost(deviceTime(1020));
+    EXPECT_EQ(mapped.ms, 2025);
+    EXPECT_EQ(mapped.domain, ClockDomain::kHost);
+
+    // wrong-domain observations are ignored, never poison the estimate
+    clock.observe(hostTime(5), hostTime(6));
+    EXPECT_EQ(clock.toHost(deviceTime(1020)).ms, 2025);
+}
+
+TEST(WheelImuPrediction, PoseTimeUsesDeviceToHostMappingAfterWarmup) {
+    Fixture f;
+    LocalizationOutput out;
+    for (int i = 0; i < 8; ++i) {
+        // device stamp stays 100; host receipt advances, so the first
+        // pairing (offset 50) is the window minimum
+        f.putMotion(0.01, 0.0, 0.0);
+        out = f.prediction->run(
+            {f.results, f.artifacts, f.command, f.previous, hostTime(150 + 10 * i)});
+        f.previous = out.robot;
+        if (i < 7) {
+            EXPECT_FALSE(out.robot.measuredAtHost.isSet());   // still warming up
+        }
+    }
+    ASSERT_TRUE(out.robot.measuredAtHost.isSet());
+    EXPECT_EQ(out.robot.measuredAtHost.domain, ClockDomain::kHost);
+    EXPECT_EQ(out.robot.measuredAtHost.ms, 150);   // 100 + minimum offset 50
+    EXPECT_EQ(out.robot.measuredAt.domain, ClockDomain::kDevice);
 }
 
 TEST(WheelImuPrediction, ReferencesValidateAtBuild) {

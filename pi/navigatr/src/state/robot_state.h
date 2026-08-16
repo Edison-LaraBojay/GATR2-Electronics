@@ -48,13 +48,19 @@ struct RobotState {
 
     MonotonicTime measuredAt;   // device clock of the newest folded measurement
 
+    // Host-clock estimate of when odom_pose was physically true, produced
+    // by the estimator's device-to-host clock mapping. Unset when no
+    // mapping exists yet; the framework then falls back to the loop time.
+    MonotonicTime measuredAtHost;
+
     std::deque<TimedOdomPose> history;   // host clock, oldest first
 
     Pose2D fieldPose() const { return compose(field_from_odom, odom_pose); }
 
     // T_odom_robot at a host timestamp, interpolated between history
-    // entries and clamped to the ends. False when there is no history or
-    // the timestamp is older than everything retained.
+    // entries. False when there is no history, the timestamp is older than
+    // everything retained, or it lies further past the newest entry than
+    // sensor latency explains: a future timestamp is rejected, not clamped.
     bool odomPoseAt(MonotonicTime t, Pose2D& out) const {
         if (history.empty()) {
             return false;
@@ -67,6 +73,9 @@ struct RobotState {
             return true;
         }
         if (t >= history.back().at) {
+            if ((t - history.back().at) > kHistoryClampMs) {
+                return false;
+            }
             out = history.back().T_odom_robot;
             return true;
         }
@@ -85,6 +94,28 @@ struct RobotState {
             }
         }
         out = history.back().T_odom_robot;
+        return true;
+    }
+
+    // Yaw rate around a host timestamp, from the pair of history entries
+    // bracketing it (nearest pair at the ends). Evidence gated on motion
+    // must use motion at its exposure time, not at processing time.
+    bool yawRateAt(MonotonicTime t, double& rate_rad_s) const {
+        if (history.size() < 2) {
+            return false;
+        }
+        std::size_t hi = 1;
+        while (hi < history.size() - 1 && history[hi].at < t) {
+            ++hi;
+        }
+        const TimedOdomPose& a  = history[hi - 1];
+        const TimedOdomPose& b  = history[hi];
+        const double         dt = secondsBetween(b.at, a.at);
+        if (dt <= 1e-6) {
+            return false;
+        }
+        rate_rad_s =
+            wrapAngle(b.T_odom_robot.heading_rad - a.T_odom_robot.heading_rad) / dt;
         return true;
     }
 

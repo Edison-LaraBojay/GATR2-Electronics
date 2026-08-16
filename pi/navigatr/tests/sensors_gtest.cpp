@@ -182,6 +182,46 @@ TEST(Sensors, PartialMaskOnlyUpdatesPresentChannels) {
               SensorState::kValid);
 }
 
+TEST(Sensors, BatchedGyroPacketsKeepAccumulatedRotation) {
+    Fixture f;
+    f.feed(packet(1, 1000, 0, 0, 0));
+    f.system->step(hostTime(1));
+
+    // two packets drained in one cycle: 100 deg/s for 10 ms, then zero for
+    // 10 ms. A latest-rate snapshot would lose the rotation entirely.
+    f.feed(packet(2, 1010, 0, 0, 100000));
+    f.feed(packet(3, 1020, 0, 0, 0));
+    f.system->step(hostTime(2));
+
+    const SensorRecord& imu = f.system->sensorResults().at(SensorId{"robot_imu"});
+    ASSERT_TRUE(imu.latest.has_value());
+    const ImuSample* sample = imu.latest->payload.get<ImuSample>();
+    ASSERT_NE(sample, nullptr);
+    ASSERT_TRUE(sample->has_accumulated);
+    // trapezoids: 0.5*(0+100)*0.01 + 0.5*(100+0)*0.01 = 1 degree
+    EXPECT_NEAR(sample->accumulated_angle_rad, degToRad(1.0), 1e-9);
+    EXPECT_NEAR(sample->yaw_rate_rad_s, 0.0, 1e-12);   // the snapshot alone lies
+}
+
+TEST(Sensors, GyroAccumulatorMarksDiscontinuitiesWithAnEpoch) {
+    Fixture f;
+    f.feed(packet(1, 1000, 0, 0, 100000));
+    f.system->step(hostTime(1));
+    const ImuSample first = *f.system->sensorResults()
+                                 .at(SensorId{"robot_imu"})
+                                 .latest->payload.get<ImuSample>();
+
+    // a one second silence: the dropped interval must not be integrated,
+    // and must not be mistakable for zero rotation
+    f.feed(packet(2, 2000, 0, 0, 100000));
+    f.system->step(hostTime(2));
+    const ImuSample second = *f.system->sensorResults()
+                                  .at(SensorId{"robot_imu"})
+                                  .latest->payload.get<ImuSample>();
+    EXPECT_EQ(second.accumulated_angle_rad, first.accumulated_angle_rad);
+    EXPECT_NE(second.accumulated_epoch, first.accumulated_epoch);
+}
+
 TEST(Sensors, SilentOpenLinkGoesUnavailableNotValidForever) {
     // freshness policy: an open link that stops publishing must not leave
     // its sensors Valid indefinitely

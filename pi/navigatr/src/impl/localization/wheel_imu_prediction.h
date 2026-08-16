@@ -19,6 +19,7 @@
 #include <string>
 
 #include "contracts/localization.h"
+#include "core/clock_sync.h"
 
 namespace navigatr
 {
@@ -39,6 +40,11 @@ private:
     ArtifactId orientation_ref_;   // empty when not configured
 
     uint64_t last_applied_init_ = 0;
+
+    // Maps the motion source's device stamps onto the host clock so pose
+    // history carries the time the pose was physically true, not the loop
+    // time it was computed at.
+    DeviceToHostClock clock_;
 };
 
 } // namespace navigatr

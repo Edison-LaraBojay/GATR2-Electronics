@@ -32,7 +32,8 @@ struct LandmarkPoseObservation {
     MonotonicTime exposureAt;   // host clock
     uint64_t      target_generation = 0;
     SensorId      camera;
-    double        confidence = 0.0;
+    uint32_t      frame_sequence = 0;   // one acquisition candidate per frame
+    double        confidence     = 0.0;
 };
 
 struct LandmarkPoseObservationSet {

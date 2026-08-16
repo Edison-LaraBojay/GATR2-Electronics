@@ -47,7 +47,8 @@
                                radius_m="0.0254"
                                position_x_m="0.000" position_y_m="0.000"
                                measurement_angle_deg="90" direction="positive"/>
-                <HeadingConstraint sensor_id="robot_imu" bias_samples="200"/>
+                <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
+                                   max_calibration_travel_m="0.005"/>
                 <Output artifact_id="tracking_motion_delta"/>
             </Preprocessor>
         </Preprocessing>

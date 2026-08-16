@@ -41,7 +41,10 @@ std::unique_ptr<Localization> WheelImuPrediction::create(const ConfigNode& node,
     return prediction;
 }
 
-void WheelImuPrediction::reset() { last_applied_init_ = 0; }
+void WheelImuPrediction::reset() {
+    last_applied_init_ = 0;
+    clock_.reset();
+}
 
 LocalizationOutput WheelImuPrediction::run(const LocalizationInput& in) {
     LocalizationOutput out;
@@ -102,9 +105,17 @@ LocalizationOutput WheelImuPrediction::run(const LocalizationInput& in) {
         r.vy_m_s         = 0.0;
         r.yaw_rate_rad_s = 0.0;
         r.measuredAt     = stamp;
+        clock_.reset();   // the device clock restarted; old offsets are void
         out.status       = FunctionStatus::kFault;
         return out;
     }
+
+    // Pair the device stamp with the actual host receipt of the newest
+    // consumed sample; pairing with the pipeline loop time would count
+    // preprocessing and cycle delay as clock offset.
+    clock_.observe(stamp, motion_it->second.receivedAt.isSet()
+                              ? motion_it->second.receivedAt
+                              : in.now);
 
     // chord of the constant-curvature arc across this step
     double lx = dx;
@@ -133,6 +144,9 @@ LocalizationOutput WheelImuPrediction::run(const LocalizationInput& in) {
     r.valid      = true;
     r.confidence = 1.0;
     r.measuredAt = stamp;
+    if (clock_.valid()) {
+        r.measuredAtHost = clock_.toHost(stamp);
+    }
     return out;
 }
 

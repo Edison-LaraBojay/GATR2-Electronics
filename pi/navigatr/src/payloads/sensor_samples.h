@@ -24,6 +24,17 @@ struct EncoderSample {
 
 struct ImuSample {
     double yaw_rate_rad_s = 0.0;   // sign normalized, bias not removed
+
+    // Yaw angle integrated by the producer across every decoded packet,
+    // bias included. Encoder counts survive packet batching because they
+    // are absolute; a latest-rate-only gyro sample does not, so consumers
+    // difference this accumulator when it is available instead of
+    // integrating published rates. accumulated_epoch bumps whenever the
+    // producer dropped an interval; a difference across epochs is a
+    // discontinuity, never zero rotation, and consumers must not take it.
+    double   accumulated_angle_rad = 0.0;
+    uint64_t accumulated_epoch     = 0;
+    bool     has_accumulated       = false;
 };
 
 } // namespace navigatr

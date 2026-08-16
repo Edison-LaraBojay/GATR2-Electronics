@@ -10,13 +10,21 @@
 //   landmark_relative + none: latch from the current landmark estimate
 //     (world state when valid, else the nominal map pose); zero visual
 //     correction, not a zero pose
-//   landmark_relative + acquire_once: consume associated landmark pose
-//     evidence stamped with the current generation until the configured
-//     number of consistent results arrives, latch their mean, and close the
-//     gate; on timeout apply the configured fallback explicitly
+//   landmark_relative + acquire_once: buffer accepted evidence privately,
+//     at most one candidate per camera frame, until the configured number
+//     of consistent results from distinct frames arrives; then commit the
+//     landmark update and the latched target pose atomically and close the
+//     gate. Nothing mutates before the lock: one bad frame can never move
+//     the landmark. On timeout the configured fallback applies explicitly,
+//     and use_nominal_target reads the immutable field map nominal, never
+//     a possibly-touched world estimate.
+//
+// Activation, snapshotting, and acquisition all require a valid robot
+// estimate; a select command during startup defers until localization is
+// real instead of latching zeros.
 //
 // Only the selected target's landmark ever mutates in world state, and only
-// while acquiring. It also seeds nominal poses for map landmarks so a
+// as a lock commit. It also seeds nominal poses for map landmarks so a
 // selected-but-unseen landmark still has an estimate.
 //
 //   <WorldPrediction type="target_tracker">
@@ -50,21 +58,36 @@ public:
     void reset() override {
         last_seen_object_sequence_ = 0;
         generation_counter_        = 0;
-        candidates_.clear();
+        acquisition_               = AcquisitionBuffer{};
     }
 
 private:
-    Pose2D nominalTargetPose(const TargetDecl& decl, const WorldPredictionInput& in,
-                             const WorldState& world) const;
+    // Private evidence buffer for the current generation; nothing here is
+    // visible outside until a lock commits it. Frame identity is
+    // (camera, sequence): sequences are per device and collide across
+    // cameras.
+    struct AcquisitionBuffer {
+        std::vector<Pose2D> target_candidates;   // consistent run, one per frame
+        std::vector<Pose2D> landmark_poses;      // odom frame, same run
+        std::vector<double> confidences;
+        bool                have_frame          = false;
+        SensorId            last_frame_camera;
+        uint32_t            last_frame_sequence = 0;
+    };
+
+    Pose2D estimateTargetPose(const TargetDecl& decl, const WorldPredictionInput& in,
+                              const WorldState& world) const;
+    Pose2D mapNominalTargetPose(const TargetDecl& decl,
+                                const WorldPredictionInput& in) const;
 
     std::shared_ptr<const TargetSet> targets_;
     std::shared_ptr<const FieldMap>  field_;   // null when no landmark targets
     AssociationId                    association_ref_;   // empty when never acquiring
     double                           blend_ = 1.0;
 
-    uint64_t            last_seen_object_sequence_ = 0;
-    uint64_t            generation_counter_        = 0;
-    std::vector<Pose2D> candidates_;   // consistent-run window while acquiring
+    uint64_t          last_seen_object_sequence_ = 0;
+    uint64_t          generation_counter_        = 0;
+    AcquisitionBuffer acquisition_;
 };
 
 } // namespace navigatr

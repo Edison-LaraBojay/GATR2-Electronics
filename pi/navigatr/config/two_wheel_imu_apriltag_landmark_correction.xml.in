@@ -304,7 +304,8 @@ landmark-derived target, never the wheel/IMU robot estimate.
                     position_y_m="@MEASURE_WHEEL_B_POSITION_Y_M@"
                     measurement_angle_deg="@MEASURE_WHEEL_B_ANGLE_DEG@"
                     direction="@CONFIRM_WHEEL_B_DIRECTION@"/>
-                <HeadingConstraint sensor_id="robot_imu" bias_samples="200"/>
+                <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
+                    max_calibration_travel_m="@SELECT_MAX_CALIBRATION_TRAVEL_M@"/>
                 <Output artifact_id="tracking_motion_delta"/>
             </Preprocessor>
         </Preprocessing>
@@ -325,6 +326,8 @@ landmark-derived target, never the wheel/IMU robot estimate.
             <RobotFrames resource_id="robot_geometry"/>
             <Targets resource_id="targets"/>
             <Gates max_translation_error_m="0.5" max_heading_error_deg="30"
+                   max_range_m="@SELECT_MAX_TAG_RANGE_M@"
+                   min_decision_margin="@SELECT_MIN_DECISION_MARGIN@"
                    ambiguity_margin_m="0.15"/>
             <Output association_id="landmark_pose_observations"/>
         </Association>

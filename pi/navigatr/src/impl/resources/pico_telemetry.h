@@ -50,6 +50,17 @@ public:
     const Channel& gyro() const { return gyro_; }
     const Channel& accel() const { return accel_; }
 
+    // Yaw integrated over every decoded packet in raw wire units times
+    // seconds (millidegrees), so a drained batch loses no rotation the way
+    // a latest-rate snapshot would. Intervals longer than kGyroGapMs are
+    // dropped and reseeded, never integrated; every dropped interval bumps
+    // the accumulator epoch so consumers can tell a discontinuity from
+    // zero rotation.
+    double   gyroAccumulatedRaw() const { return gyro_accum_raw_; }
+    uint64_t gyroAccumulatedEpoch() const { return gyro_accum_epoch_; }
+
+    static constexpr int64_t kGyroGapMs = 250;
+
     bool linkDead() const { return link_dead_; }
 
     void reset();
@@ -64,6 +75,12 @@ private:
     Channel encoders_[kEncoderChannels];
     Channel gyro_;
     Channel accel_;
+
+    double        gyro_accum_raw_   = 0.0;   // mdeg (mdps integrated over s)
+    uint64_t      gyro_accum_epoch_ = 0;     // bumps on every dropped interval
+    bool          gyro_have_prev_   = false;
+    int32_t       gyro_prev_raw_    = 0;
+    MonotonicTime gyro_prev_stamp_;
 
     bool     have_seq_        = false;
     uint8_t  last_seq_        = 0;

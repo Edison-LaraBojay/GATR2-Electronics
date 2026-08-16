@@ -71,6 +71,7 @@ using SensorResultsMap = std::unordered_map<SensorId, SensorRecord, SensorId::Ha
 
 struct ArtifactRecord {
     MonotonicTime measuredAt;
+    MonotonicTime receivedAt;   // host receipt of the newest consumed sample
     TypedPayload  payload;
 };
 

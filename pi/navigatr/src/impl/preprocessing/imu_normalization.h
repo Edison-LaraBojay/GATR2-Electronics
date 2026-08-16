@@ -51,8 +51,11 @@ private:
     double   cal_sum_       = 0.0;
     double   bias_rad_s_    = 0.0;
 
-    bool          have_prev_ = false;
-    double        prev_rate_ = 0.0;
+    bool          have_prev_        = false;
+    double        prev_rate_        = 0.0;
+    double        prev_accum_       = 0.0;
+    bool          prev_has_accum_   = false;
+    uint64_t      prev_accum_epoch_ = 0;
     MonotonicTime prev_stamp_;
 };
 
