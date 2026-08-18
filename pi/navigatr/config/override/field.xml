@@ -1,0 +1,645 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Resource id="override_field" type="field_map">
+    <!--
+    V5RC Override 2026-2027 nominal field geometry.
+
+    Field frame, viewed from the Audience View:
+      origin        = inside bottom-left of the 3566.4 mm nominal field
+      +x            = right
+      +y            = toward the top / 0-degree wall in the VEX drawing
+      +z            = up
+      planar angle  = counterclockwise from +x
+
+    Landmark origins are the plan-view centers of the goals projected onto
+    the field floor. Every landmark frame is aligned with the field frame,
+    so every NominalPose heading is zero. Tag surface frames use +x as the
+    outward surface normal and +z as the decoded printed top.
+
+    Geometry is derived from the official 2026-04-26 STEP and remains
+    provisional until checked against physical field elements. The
+    tagCircle21h7 detection size is the detector-corner edge, not the
+    carrier plate or outer printed graphic.
+    -->
+
+    <!-- short neutral goal; all four physical faces decode observed ID 4. -->
+    <Landmark id="neutral_goal_4_north">
+        <NominalPose
+            calibration_status="provisional"
+            x_m="1.185141466"
+            y_m="2.979317068"
+            heading_deg="0"/>
+
+        <TagMount
+            instance_id="neutral_goal_4_north_east_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="4"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0.04863581744"
+                y_m="0"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="0"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_4_north_north_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="4"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="0.04863581744"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="90"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_4_north_west_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="4"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="-0.04863581744"
+                y_m="0"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="180"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_4_north_south_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="4"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="-0.04863581744"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="-90"/>
+        </TagMount>
+    </Landmark>
+
+    <!-- blue alliance goal; all four physical faces decode observed ID 3. -->
+    <Landmark id="blue_goal_3_north">
+        <NominalPose
+            calibration_status="provisional"
+            x_m="2.381258534"
+            y_m="2.979317068"
+            heading_deg="0"/>
+
+        <TagMount
+            instance_id="blue_goal_3_north_east_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="3"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0.04863581744"
+                y_m="0"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="0"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="blue_goal_3_north_north_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="3"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="0.04863581744"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="90"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="blue_goal_3_north_west_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="3"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="-0.04863581744"
+                y_m="0"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="180"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="blue_goal_3_north_south_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="3"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="-0.04863581744"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="-90"/>
+        </TagMount>
+    </Landmark>
+
+    <!-- short neutral goal; all four physical faces decode observed ID 1. -->
+    <Landmark id="neutral_goal_1_west">
+        <NominalPose
+            calibration_status="provisional"
+            x_m="0.587082932"
+            y_m="2.381258534"
+            heading_deg="0"/>
+
+        <TagMount
+            instance_id="neutral_goal_1_west_east_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="1"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0.04863581744"
+                y_m="0"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="0"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_1_west_north_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="1"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="0.04863581744"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="90"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_1_west_west_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="1"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="-0.04863581744"
+                y_m="0"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="180"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_1_west_south_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="1"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="-0.04863581744"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="-90"/>
+        </TagMount>
+    </Landmark>
+
+    <!-- blue alliance goal; all four physical faces decode observed ID 2. -->
+    <Landmark id="blue_goal_2_east">
+        <NominalPose
+            calibration_status="provisional"
+            x_m="2.979317068"
+            y_m="2.381258534"
+            heading_deg="0"/>
+
+        <TagMount
+            instance_id="blue_goal_2_east_east_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="2"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0.04863581744"
+                y_m="0"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="0"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="blue_goal_2_east_north_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="2"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="0.04863581744"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="90"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="blue_goal_2_east_west_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="2"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="-0.04863581744"
+                y_m="0"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="180"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="blue_goal_2_east_south_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="2"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="-0.04863581744"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="-90"/>
+        </TagMount>
+    </Landmark>
+
+    <!-- tall neutral goal; all four physical faces decode observed ID 0. -->
+    <Landmark id="neutral_goal_0_center">
+        <NominalPose
+            calibration_status="provisional"
+            x_m="1.783200000"
+            y_m="1.783200000"
+            heading_deg="0"/>
+
+        <TagMount
+            instance_id="neutral_goal_0_center_east_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="0"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0.04863581744"
+                y_m="0"
+                z_m="0.1780522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="0"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_0_center_north_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="0"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="0.04863581744"
+                z_m="0.1780522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="90"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_0_center_west_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="0"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="-0.04863581744"
+                y_m="0"
+                z_m="0.1780522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="180"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_0_center_south_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="0"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="-0.04863581744"
+                z_m="0.1780522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="-90"/>
+        </TagMount>
+    </Landmark>
+
+    <!-- red alliance goal; all four physical faces decode observed ID 2. -->
+    <Landmark id="red_goal_2_west">
+        <NominalPose
+            calibration_status="provisional"
+            x_m="0.587082932"
+            y_m="1.185141466"
+            heading_deg="0"/>
+
+        <TagMount
+            instance_id="red_goal_2_west_east_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="2"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0.04863581744"
+                y_m="0"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="0"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="red_goal_2_west_north_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="2"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="0.04863581744"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="90"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="red_goal_2_west_west_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="2"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="-0.04863581744"
+                y_m="0"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="180"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="red_goal_2_west_south_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="2"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="-0.04863581744"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="-90"/>
+        </TagMount>
+    </Landmark>
+
+    <!-- short neutral goal; all four physical faces decode observed ID 1. -->
+    <Landmark id="neutral_goal_1_east">
+        <NominalPose
+            calibration_status="provisional"
+            x_m="2.979317068"
+            y_m="1.185141466"
+            heading_deg="0"/>
+
+        <TagMount
+            instance_id="neutral_goal_1_east_east_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="1"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0.04863581744"
+                y_m="0"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="0"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_1_east_north_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="1"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="0.04863581744"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="90"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_1_east_west_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="1"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="-0.04863581744"
+                y_m="0"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="180"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_1_east_south_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="1"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="-0.04863581744"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="-90"/>
+        </TagMount>
+    </Landmark>
+
+    <!-- red alliance goal; all four physical faces decode observed ID 3. -->
+    <Landmark id="red_goal_3_south">
+        <NominalPose
+            calibration_status="provisional"
+            x_m="1.185141466"
+            y_m="0.587082932"
+            heading_deg="0"/>
+
+        <TagMount
+            instance_id="red_goal_3_south_east_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="3"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0.04863581744"
+                y_m="0"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="0"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="red_goal_3_south_north_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="3"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="0.04863581744"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="90"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="red_goal_3_south_west_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="3"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="-0.04863581744"
+                y_m="0"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="180"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="red_goal_3_south_south_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="3"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="-0.04863581744"
+                z_m="0.0378522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="-90"/>
+        </TagMount>
+    </Landmark>
+
+    <!-- short neutral goal; all four physical faces decode observed ID 4. -->
+    <Landmark id="neutral_goal_4_south">
+        <NominalPose
+            calibration_status="provisional"
+            x_m="2.381258534"
+            y_m="0.587082932"
+            heading_deg="0"/>
+
+        <TagMount
+            instance_id="neutral_goal_4_south_east_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="4"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0.04863581744"
+                y_m="0"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="0"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_4_south_north_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="4"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="0.04863581744"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="90"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_4_south_west_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="4"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="-0.04863581744"
+                y_m="0"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="180"/>
+        </TagMount>
+
+        <TagMount
+            instance_id="neutral_goal_4_south_south_tag"
+            calibration_status="provisional"
+            family="tagCircle21h7"
+            observed_id="4"
+            detection_size_m="0.01761272">
+            <PoseOfTagSurfaceInLandmark
+                x_m="0"
+                y_m="-0.04863581744"
+                z_m="0.1018522596"
+                roll_deg="0"
+                pitch_deg="-5"
+                yaw_deg="-90"/>
+        </TagMount>
+    </Landmark>
+</Resource>
+
