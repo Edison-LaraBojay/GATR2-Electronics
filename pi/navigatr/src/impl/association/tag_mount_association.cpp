@@ -51,9 +51,13 @@ std::unique_ptr<Association> TagMountAssociation::create(const ConfigNode& node,
         return true;
     };
     if (!requireResource("FieldMap", assoc->field_) ||
-        !requireResource("RobotFrames", assoc->frames_) ||
-        !requireResource("Targets", assoc->targets_)) {
+        !requireResource("RobotFrames", assoc->frames_)) {
         return nullptr;
+    }
+    if (node.child("Targets").valid()) {
+        if (!requireResource("Targets", assoc->targets_)) {
+            return nullptr;
+        }
     }
 
     const ConfigNode gates = node.child("Gates");
@@ -107,16 +111,22 @@ std::vector<AssociationOutputDecl> TagMountAssociation::produces() const {
 AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
     AssociationOutput out;
 
-    // Gating: association evidence exists to acquire the selected target.
-    // No target pending acquisition means no work and no correction commit,
-    // and an invalid robot estimate can anchor nothing.
-    if (!in.robot.valid || !in.target.active ||
-        in.target.status != TargetStatus::kPendingAcquisition) {
+    // An invalid robot estimate can anchor nothing.
+    if (!in.robot.valid) {
         return out;
     }
-    const TargetDecl* decl = targets_->findById(in.target.target_id);
-    if (decl == nullptr || decl->kind != TargetKind::kLandmarkRelative) {
-        return out;
+    // Target mode gates on the selected target; diagnostic mode (no
+    // configured target set) associates everything decisively visible.
+    const TargetDecl* decl = nullptr;
+    if (targets_ != nullptr) {
+        if (!in.target.active ||
+            in.target.status != TargetStatus::kPendingAcquisition) {
+            return out;
+        }
+        decl = targets_->findById(in.target.target_id);
+        if (decl == nullptr || decl->kind != TargetKind::kLandmarkRelative) {
+            return out;
+        }
     }
 
     const auto obs_it = in.observations.find(observations_ref_);
@@ -128,7 +138,7 @@ AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
         out.status = FunctionStatus::kFault;
         return out;
     }
-    if (!decl->vision.preferred_camera.empty() &&
+    if (decl != nullptr && !decl->vision.preferred_camera.empty() &&
         set->camera != decl->vision.preferred_camera) {
         return out;
     }
@@ -283,24 +293,26 @@ AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
             continue;
         }
 
-        // Evidence serves the active target; a decisive winner on another
-        // landmark is simply not this target's evidence.
-        if (best->landmark->id != decl->landmark) {
-            continue;
-        }
-
-        // A route may allow only specific mounts; a decisive winner outside
-        // that list abstains rather than being forced onto an allowed one.
-        if (!decl->vision.allowed_mounts.empty()) {
-            bool allowed = false;
-            for (const std::string& instance : decl->vision.allowed_mounts) {
-                if (instance == best->mount->instance_id) {
-                    allowed = true;
-                    break;
-                }
-            }
-            if (!allowed) {
+        if (decl != nullptr) {
+            // Evidence serves the active target; a decisive winner on
+            // another landmark is simply not this target's evidence.
+            if (best->landmark->id != decl->landmark) {
                 continue;
+            }
+            // A route may allow only specific mounts; a decisive winner
+            // outside that list abstains rather than being forced onto an
+            // allowed one.
+            if (!decl->vision.allowed_mounts.empty()) {
+                bool allowed = false;
+                for (const std::string& instance : decl->vision.allowed_mounts) {
+                    if (instance == best->mount->instance_id) {
+                        allowed = true;
+                        break;
+                    }
+                }
+                if (!allowed) {
+                    continue;
+                }
             }
         }
 
@@ -309,7 +321,7 @@ AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
         entry.mount_instance    = best->mount->instance_id;
         entry.T_odom_landmark   = best->implied;
         entry.exposureAt        = set->exposureAt;
-        entry.target_generation = in.target.generation;
+        entry.target_generation = decl != nullptr ? in.target.generation : 0;
         entry.camera            = set->camera;
         entry.frame_sequence    = set->frame_sequence;
         // confidence reflects the same combined score the ranking used;

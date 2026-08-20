@@ -515,7 +515,7 @@
       "plot": "../gerbers/",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "../3DMOdel/RP4Hat.stl",
+      "step": "../3DMOdel/RP4Hat.step",
       "svg": "",
       "vrml": ""
     },

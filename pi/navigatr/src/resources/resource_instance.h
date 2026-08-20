@@ -8,6 +8,7 @@
 // erasure in TypedPayload.
 
 #pragma once
+#include <functional>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -53,10 +54,21 @@ public:
 
     const char* contractName() const { return contract_name_; }
 
+    // Optional back-to-power-on hook. Shared resources are reset exactly
+    // once through this, never repeatedly by every consumer that captured
+    // them.
+    void setResetHook(std::function<void()> hook) { reset_hook_ = std::move(hook); }
+    void resetOnce() const {
+        if (reset_hook_) {
+            reset_hook_();
+        }
+    }
+
 private:
     std::type_index       contract_ = std::type_index(typeid(void));
     std::shared_ptr<void> object_;
     const char*           contract_name_ = "none";
+    std::function<void()> reset_hook_;
 };
 
 } // namespace navigatr

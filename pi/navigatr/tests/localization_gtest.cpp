@@ -28,9 +28,9 @@ struct Fixture {
     std::unique_ptr<Localization> prediction;
 
     explicit Fixture(const char* xml = R"(
-        <LocalizationPrediction type="wheel_imu_prediction">
+        <Localization type="wheel_imu_prediction">
             <Motion artifact_id="motion"/>
-        </LocalizationPrediction>)") {
+        </Localization>)") {
         EXPECT_EQ(doc.Parse(xml), tinyxml2::XML_SUCCESS);
         SlotInitializationContext context;
         context.artifacts = {
@@ -127,10 +127,10 @@ TEST(WheelImuPrediction, InitEdgeTriggered) {
 
 TEST(WheelImuPrediction, OrientationOverridesMotionHeading) {
     Fixture f(R"(
-        <LocalizationPrediction type="wheel_imu_prediction">
+        <Localization type="wheel_imu_prediction">
             <Motion artifact_id="motion"/>
             <Orientation artifact_id="orientation"/>
-        </LocalizationPrediction>)");
+        </Localization>)");
     f.putMotion(0.0, 0.0, 0.5);        // wheels say half a radian
     f.putOrientation(0.25);            // gyro says a quarter
     f.run();
@@ -195,9 +195,9 @@ TEST(WheelImuPrediction, PoseTimeUsesDeviceToHostMappingAfterWarmup) {
 TEST(WheelImuPrediction, ReferencesValidateAtBuild) {
     tinyxml2::XMLDocument doc;
     ASSERT_EQ(doc.Parse(R"(
-        <LocalizationPrediction type="wheel_imu_prediction">
+        <Localization type="wheel_imu_prediction">
             <Motion artifact_id="ghost"/>
-        </LocalizationPrediction>)"),
+        </Localization>)"),
               tinyxml2::XML_SUCCESS);
     SlotInitializationContext context;   // no artifacts declared
     std::string               err;

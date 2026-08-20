@@ -28,6 +28,7 @@ namespace navigatr
 
 struct Diagnostics;
 class SensorCatalog;
+class ResourceMap;
 
 struct PreprocessingInput {
     const SensorResultsMap& sensorResults;
@@ -76,6 +77,7 @@ public:
 
 struct PreprocessorInitializationContext {
     const SensorCatalog*      sensors   = nullptr;
+    const ResourceMap*        resources = nullptr;
     const FunctionRegistry*   functions = nullptr;
     std::vector<std::string>* warnings  = nullptr;
 };

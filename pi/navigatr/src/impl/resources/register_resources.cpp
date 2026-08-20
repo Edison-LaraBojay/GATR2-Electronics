@@ -7,6 +7,7 @@
 #include "impl/resources/serial_links.h"
 #include "impl/resources/tag_detectors.h"
 #include "impl/resources/target_set_resource.h"
+#include "impl/resources/wheel_geometry_resource.h"
 #include "resources/resource_map.h"
 #include "runtime/register_all.h"
 
@@ -28,6 +29,8 @@ void register_resources(FunctionRegistry& functions) {
     registerOrDie<ResourceMakeFunction>(functions, "apriltag_detector",
                                         &make_apriltag_detector);
     registerOrDie<ResourceMakeFunction>(functions, "target_set", &make_target_set);
+    registerOrDie<ResourceMakeFunction>(functions, "wheel_geometry",
+                                        &make_wheel_geometry);
 }
 
 } // namespace navigatr

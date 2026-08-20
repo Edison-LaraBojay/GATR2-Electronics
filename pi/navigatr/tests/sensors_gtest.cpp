@@ -43,11 +43,9 @@ const char* kConfig = R"(
     <Pipeline>
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
-        <LocalizationPrediction type="noop"/>
-        <Perception type="noop"/>
-        <Association type="noop"/>
-        <PoseCorrection type="noop"/>
-        <WorldPrediction type="noop"/>
+        <Localization type="noop"/>
+        <WorldEstimation type="noop"/>
+        <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
 </System>
@@ -243,11 +241,9 @@ TEST(Sensors, SilentOpenLinkGoesUnavailableNotValidForever) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
-        <LocalizationPrediction type="noop"/>
-        <Perception type="noop"/>
-        <Association type="noop"/>
-        <PoseCorrection type="noop"/>
-        <WorldPrediction type="noop"/>
+        <Localization type="noop"/>
+        <WorldEstimation type="noop"/>
+        <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
 </System>
@@ -330,11 +326,9 @@ TEST(Sensors, FaultRetainsHistoricalSample) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
-        <LocalizationPrediction type="noop"/>
-        <Perception type="noop"/>
-        <Association type="noop"/>
-        <PoseCorrection type="noop"/>
-        <WorldPrediction type="noop"/>
+        <Localization type="noop"/>
+        <WorldEstimation type="noop"/>
+        <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
 </System>
@@ -371,11 +365,9 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
-        <LocalizationPrediction type="noop"/>
-        <Perception type="noop"/>
-        <Association type="noop"/>
-        <PoseCorrection type="noop"/>
-        <WorldPrediction type="noop"/>
+        <Localization type="noop"/>
+        <WorldEstimation type="noop"/>
+        <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
 </System>

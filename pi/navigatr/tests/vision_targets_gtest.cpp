@@ -273,28 +273,33 @@ std::string configXml(double camera_yaw_deg, double ambiguity_margin_m) {
   <Pipeline>
     <CommandCollection type="scripted_commands"/>
     <Preprocessing type="noop"/>
-    <LocalizationPrediction type="scripted_localization"/>
-    <Perception type="apriltag_tag_observation">
-      <Camera sensor_id="front_camera"/>
-      <Detector resource_id="detector"/>
-      <Output observation_id="tag_observations"/>
-    </Perception>
-    <Association type="tag_mount_association">
-      <Observations observation_id="tag_observations"/>
+    <Localization type="scripted_localization"/>
+    <WorldEstimation type="landmark_world">
       <FieldMap resource_id="game_field"/>
-      <RobotFrames resource_id="robot_geometry"/>
-      <Targets resource_id="targets"/>
-      <Gates max_translation_error_m="0.5" max_heading_error_deg="30" @MARGIN@
-             max_range_m="3.0" min_decision_margin="20"
-             min_projected_size_px="4"/>
-      <Output association_id="landmark_pose_observations"/>
-    </Association>
-    <PoseCorrection type="noop"/>
-    <WorldPrediction type="target_tracker">
+      <Pipeline>
+        <ObservationExtraction type="apriltag_tag_observation">
+          <Camera sensor_id="front_camera"/>
+          <Detector resource_id="detector"/>
+          <Output observation_id="tag_observations"/>
+        </ObservationExtraction>
+        <Association type="tag_mount_association">
+          <Observations observation_id="tag_observations"/>
+          <FieldMap resource_id="game_field"/>
+          <RobotFrames resource_id="robot_geometry"/>
+          <Targets resource_id="targets"/>
+          <Gates max_translation_error_m="0.5" max_heading_error_deg="30" @MARGIN@
+                 max_range_m="3.0" min_decision_margin="20"
+                 min_projected_size_px="4"/>
+          <Output association_id="landmark_pose_observations"/>
+        </Association>
+        <Estimator type="landmark_estimator" commit="on_target_lock"/>
+      </Pipeline>
+    </WorldEstimation>
+    <TargetResolution type="configured_targets">
       <Targets resource_id="targets"/>
       <FieldMap resource_id="game_field"/>
-      <Associations association_id="landmark_pose_observations"/>
-    </WorldPrediction>
+      <Evidence association_id="landmark_pose_observations"/>
+    </TargetResolution>
     <Publishing type="noop"/>
   </Pipeline>
 </System>)";
@@ -465,6 +470,7 @@ TEST(VisionTargets, SevenDegreeCameraYawMatchesStraightCamera) {
         }
         ASSERT_EQ(f.system->target().status, TargetStatus::kLockedVision);
         latched[i] = f.system->target().T_odom_robot_target;
+        f.stepOnce();   // the estimator folds the locked window next cycle
 
         // synthetic projection and pose recovery agree: the observed
         // landmark equals the ground truth it was projected from
@@ -638,6 +644,7 @@ TEST(VisionTargets, RepeatedPrintedIdsDisambiguateByFullPose) {
     f.pushFrame({f.detectionFor(Pose2D{3.0, 0.6, 0.0}, kCenterMount, 1)});
     f.stepOnce();
     ASSERT_EQ(f.system->target().status, TargetStatus::kLockedVision);
+    f.stepOnce();   // the estimator folds the locked window next cycle
 
     const WorldObject& right = f.system->world().objects.at(WorldObjectId{"right_goal"});
     EXPECT_EQ(right.source, EstimateSource::kObserved);
@@ -664,10 +671,17 @@ TEST(VisionTargets, PartialEvidenceNeverMutatesWorldBeforeLock) {
         EXPECT_FALSE(goal.observed);
     }
 
-    // the third frame locks; landmark and target commit atomically
+    // the third frame locks; the estimator folds the locked window on the
+    // following cycle, and nothing before the lock ever touched the world
     f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
     f.stepOnce();
     ASSERT_EQ(f.system->target().status, TargetStatus::kLockedVision);
+    {
+        const WorldObject& pre =
+            f.system->world().objects.at(WorldObjectId{"center_goal"});
+        EXPECT_EQ(pre.source, EstimateSource::kFieldMap);   // not yet folded
+    }
+    f.stepOnce();
     const WorldObject& goal = f.system->world().objects.at(WorldObjectId{"center_goal"});
     EXPECT_EQ(goal.source, EstimateSource::kObserved);
     EXPECT_TRUE(goal.observed);

@@ -6,6 +6,7 @@
 #include <set>
 #include <sstream>
 
+#include "config/composition.h"
 #include "config/config_node.h"
 #include "impl/resources/serial_links.h"
 #include "tinyxml2/tinyxml2.h"
@@ -57,11 +58,32 @@ bool checkChildren(const ConfigNode& parent, const std::set<std::string>& allowe
 std::unique_ptr<System> System::buildFromFile(const std::string& path,
                                               const FunctionRegistry& functions,
                                               std::string& err, const BuildOptions& options) {
+    bool composed = false;
+    if (!isComposedConfiguration(path, composed, err)) {
+        return nullptr;
+    }
+    if (composed) {
+        ResolvedConfiguration resolved;
+        if (!resolveConfiguration(path, resolved, err)) {
+            return nullptr;
+        }
+        auto system = buildFromString(resolved.xml.c_str(), functions, err, options);
+        if (system != nullptr) {
+            system->configuration_id_     = resolved.id;
+            system->configuration_digest_ = resolved.digest;
+        }
+        return system;
+    }
     std::string xml;
     if (!readFile(path, xml, err)) {
         return nullptr;
     }
-    return buildFromString(xml.c_str(), functions, err, options);
+    auto system = buildFromString(xml.c_str(), functions, err, options);
+    if (system != nullptr) {
+        system->configuration_id_     = path;
+        system->configuration_digest_ = contentDigest(0, xml);
+    }
+    return system;
 }
 
 std::unique_ptr<System> System::buildFromString(const char*             xml,
@@ -193,9 +215,8 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
         return false;
     }
     if (!checkChildren(pipeline,
-                       {"CommandCollection", "Preprocessing", "LocalizationPrediction",
-                        "Perception", "Association", "PoseCorrection", "WorldPrediction",
-                        "Publishing"},
+                       {"CommandCollection", "Preprocessing", "Localization",
+                        "WorldEstimation", "TargetResolution", "Publishing"},
                        {}, err)) {
         return false;
     }
@@ -251,6 +272,7 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
 
     PreprocessorInitializationContext preprocessing_context;
     preprocessing_context.sensors   = &catalog_;
+    preprocessing_context.resources = &resources_;
     preprocessing_context.functions = &functions;
     preprocessing_context.warnings  = &warnings_;
     if (!buildSlot("Preprocessing", preprocessing_, Tag<PreprocessingMakeFunction>{},
@@ -258,33 +280,30 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
         return false;
     }
     slot_context.artifacts = preprocessing_->produces();
+    artifact_decls_        = slot_context.artifacts;
 
-    if (!buildSlot("LocalizationPrediction", localization_, Tag<LocalizationMakeFunction>{},
+    if (!buildSlot("Localization", localization_, Tag<LocalizationMakeFunction>{},
                    slot_context, slot_labels_[2])) {
         return false;
     }
-    if (!buildSlot("Perception", perception_, Tag<PerceptionMakeFunction>{}, slot_context,
-                   slot_labels_[3])) {
+    if (!buildSlot("WorldEstimation", world_estimation_,
+                   Tag<WorldEstimationMakeFunction>{}, slot_context, slot_labels_[3])) {
         return false;
     }
-    slot_context.observations = perception_->produces();
+    // Later slots reference only what world estimation declares it
+    // publishes across the boundary, never a composite implementation
+    // detail.
+    slot_context.observations = world_estimation_->producesObservations();
+    slot_context.associations = world_estimation_->producesAssociations();
+    observation_decls_        = slot_context.observations;
+    association_decls_        = slot_context.associations;
 
-    if (!buildSlot("Association", association_, Tag<AssociationMakeFunction>{},
-                   slot_context, slot_labels_[4])) {
-        return false;
-    }
-    slot_context.associations = association_->produces();
-
-    if (!buildSlot("PoseCorrection", pose_correction_, Tag<PoseCorrectionMakeFunction>{},
-                   slot_context, slot_labels_[5])) {
-        return false;
-    }
-    if (!buildSlot("WorldPrediction", world_prediction_, Tag<WorldPredictionMakeFunction>{},
-                   slot_context, slot_labels_[6])) {
+    if (!buildSlot("TargetResolution", target_resolution_,
+                   Tag<TargetResolutionMakeFunction>{}, slot_context, slot_labels_[4])) {
         return false;
     }
     if (!buildSlot("Publishing", publishing_, Tag<PublishingMakeFunction>{}, slot_context,
-                   slot_labels_[7])) {
+                   slot_labels_[5])) {
         return false;
     }
     return true;
@@ -302,11 +321,20 @@ void System::step(MonotonicTime now) {
     sensor_input.diagnostics = &diagnostics_;
 
     for (SensorMap::Entry& entry : sensors_.executionOrder()) {
-        const SensorPollResult poll   = entry.sensor.execute(sensor_input);
-        SensorRecord&          record = sensor_results_[entry.id];
-        record.state                  = poll.state;
-        record.lastPolledAt           = now;
-        record.diagnostic             = poll.diagnostic;
+        SensorPollResult poll   = entry.sensor.execute(sensor_input);
+        SensorRecord&    record = sensor_results_[entry.id];
+        record.state            = poll.state;
+        record.lastPolledAt     = now;
+        record.diagnostic       = poll.diagnostic;
+        // Declared-output enforcement: a publication contradicting the
+        // sensor's declared payload never enters the record.
+        if (poll.publication.has_value() &&
+            !entry.sensor.outputPayload.matches(poll.publication->payload.cppType())) {
+            poll.publication.reset();
+            record.state      = SensorState::kFault;
+            record.diagnostic = "published a payload contradicting the declared " +
+                                std::string(entry.sensor.outputPayload.stable_name);
+        }
         if (poll.publication.has_value()) {
             StoredSensorSample stored;
             stored.measuredAt = poll.publication->measuredAt;
@@ -331,6 +359,7 @@ void System::step(MonotonicTime now) {
 
     PreprocessingOutput pre_out =
         preprocessing_->run({sensor_results_, now, cycle_, &diagnostics_});
+    enforceDeclared(pre_out.artifacts, artifact_decls_, slot_labels_[1]);
     diagnostics_.note(slot_labels_[1], pre_out.status);
 
     const uint64_t epoch_before = robot_.odometry_epoch;
@@ -369,30 +398,23 @@ void System::step(MonotonicTime now) {
         }
     }
 
-    PerceptionOutput per_out =
-        perception_->run({sensor_results_, pre_out.artifacts, target_, now});
-    diagnostics_.note(slot_labels_[3], per_out.status);
+    WorldEstimationOutput world_out = world_estimation_->run(
+        {sensor_results_, pre_out.artifacts, robot_, world_, command_, target_, now});
+    enforceDeclared(world_out.observations, observation_decls_, slot_labels_[3]);
+    enforceDeclared(world_out.associations, association_decls_, slot_labels_[3]);
+    world_ = world_out.world;
+    diagnostics_.note(slot_labels_[3], world_out.status);
 
-    AssociationOutput assoc_out =
-        association_->run({per_out.observations, robot_, world_, command_, target_, now});
-    diagnostics_.note(slot_labels_[4], assoc_out.status);
-
-    PoseCorrectionOutput corr_out = pose_correction_->run(
-        {pre_out.artifacts, per_out.observations, assoc_out.associations, robot_, now});
-    robot_ = corr_out.robot;
-    diagnostics_.note(slot_labels_[5], corr_out.status);
-
-    WorldPredictionOutput world_out = world_prediction_->run(
-        {per_out.observations, assoc_out.associations, robot_, world_, command_, target_,
-         now});
-    world_  = world_out.world;
-    target_ = world_out.target;
-    diagnostics_.note(slot_labels_[6], world_out.status);
+    TargetResolutionOutput target_out = target_resolution_->run(
+        {command_, robot_, world_, world_out.observations, world_out.associations,
+         target_, now});
+    target_ = target_out.target;
+    diagnostics_.note(slot_labels_[4], target_out.status);
 
     PublishingOutput pub_out =
-        publishing_->run({sensor_results_, pre_out.artifacts, per_out.observations,
-                          assoc_out.associations, robot_, world_, command_, target_, now});
-    diagnostics_.note(slot_labels_[7], pub_out.status);
+        publishing_->run({sensor_results_, pre_out.artifacts, world_out.observations,
+                          world_out.associations, robot_, world_, command_, target_, now});
+    diagnostics_.note(slot_labels_[5], pub_out.status);
 }
 
 void System::reset() {
@@ -402,13 +424,12 @@ void System::reset() {
         }
         sensor_results_[entry.id] = SensorRecord{};
     }
+    resources_.resetAll();   // shared resources reset once, not per consumer
     commands_->reset();
     preprocessing_->reset();
     localization_->reset();
-    perception_->reset();
-    association_->reset();
-    pose_correction_->reset();
-    world_prediction_->reset();
+    world_estimation_->reset();
+    target_resolution_->reset();
     publishing_->reset();
 
     // A hard reset is an odometry discontinuity: the new odometry frame

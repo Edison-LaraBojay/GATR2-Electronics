@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <string>
 
+#include "core/ids.h"
 #include "core/time.h"
 #include "math/transforms.h"
 
@@ -50,6 +51,15 @@ struct TargetState {
     Pose2D   T_odom_robot_target;
     bool     latched        = false;
     uint64_t odometry_epoch = 0;   // epoch the latch belongs to
+
+    // Vision locks only: the consistent window's mean landmark pose that
+    // produced the latch. This is the single piece of camera evidence world
+    // estimation may fold (per its commit policy); rejected or unconfirmed
+    // evidence never appears here, so it can never reach WorldState.
+    bool          has_locked_landmark = false;
+    WorldObjectId locked_landmark;
+    Pose2D        T_odom_landmark_locked;
+    double        locked_confidence = 0.0;
 
     MonotonicTime activatedAt;   // host clock
 };

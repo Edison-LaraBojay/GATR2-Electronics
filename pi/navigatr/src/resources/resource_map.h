@@ -75,6 +75,14 @@ public:
 
     const std::vector<Record>& records() const { return records_; }
 
+    // Back to power-on for every resource that registered a reset hook,
+    // once each, in build order.
+    void resetAll() const {
+        for (const Record& r : records_) {
+            r.value.resetOnce();
+        }
+    }
+
 private:
     friend class ResourceMapBuilder;
     std::vector<Record> records_;   // build order; destroyed in reverse

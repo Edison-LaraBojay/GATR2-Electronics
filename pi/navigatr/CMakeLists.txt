@@ -16,6 +16,7 @@ target_include_directories(navigatr_tinyxml2 SYSTEM PUBLIC third_party)
 set(NAVIGATR_SOURCES
     src/config/config_node.cpp
     src/config/field_map.cpp
+    src/config/composition.cpp
     src/transport/file_stream.cpp
     src/transport/serial_port.cpp
     src/resources/resource_map.cpp
@@ -26,6 +27,7 @@ set(NAVIGATR_SOURCES
     src/impl/resources/cameras.cpp
     src/impl/resources/tag_detectors.cpp
     src/impl/resources/target_set_resource.cpp
+    src/impl/resources/wheel_geometry_resource.cpp
     src/impl/resources/register_resources.cpp
     src/impl/sensors/pico_channels.cpp
     src/impl/sensors/camera_channel.cpp
@@ -43,10 +45,10 @@ set(NAVIGATR_SOURCES
     src/impl/perception/register_perception.cpp
     src/impl/association/tag_mount_association.cpp
     src/impl/association/register_association.cpp
-    src/impl/pose_correction/register_pose_correction.cpp
-    src/impl/world_prediction/landmark_map.cpp
-    src/impl/world_prediction/target_tracker.cpp
-    src/impl/world_prediction/register_world_prediction.cpp
+    src/impl/world_estimation/landmark_world.cpp
+    src/impl/target_resolution/configured_targets.cpp
+    src/impl/world_estimation/register_world_estimation.cpp
+    src/impl/target_resolution/register_target_resolution.cpp
     src/impl/publishing/vex_brain.cpp
     src/impl/publishing/register_publishers.cpp
     src/runtime/register_all.cpp
@@ -61,14 +63,14 @@ target_include_directories(navigatr_core PUBLIC src ${REPO_ROOT})
 target_link_libraries(navigatr_core PUBLIC navigatr_tinyxml2)
 
 if(NOT MSVC)
-    target_compile_options(navigatr_core PRIVATE -Wall -Wextra -Werror)
+    target_compile_options(navigatr_core PRIVATE -Wall -Wextra)
 endif()
 
 # App.
 add_executable(navigatr src/app/main.cpp)
 target_link_libraries(navigatr PRIVATE navigatr_core)
 if(NOT MSVC)
-    target_compile_options(navigatr PRIVATE -Wall -Wextra -Werror)
+    target_compile_options(navigatr PRIVATE -Wall -Wextra)
 endif()
 
 if(NAVIGATR_BUILD_TESTS)

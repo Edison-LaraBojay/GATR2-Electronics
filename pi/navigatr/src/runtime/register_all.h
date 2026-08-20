@@ -25,8 +25,8 @@ void register_preprocessing(FunctionRegistry& functions);
 void register_localization(FunctionRegistry& functions);
 void register_perception(FunctionRegistry& functions);
 void register_association(FunctionRegistry& functions);
-void register_pose_correction(FunctionRegistry& functions);
-void register_world_prediction(FunctionRegistry& functions);
+void register_world_estimation(FunctionRegistry& functions);
+void register_target_resolution(FunctionRegistry& functions);
 void register_publishers(FunctionRegistry& functions);
 
 // All of the above, in order.

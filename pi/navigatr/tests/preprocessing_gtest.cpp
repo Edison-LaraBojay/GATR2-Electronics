@@ -347,7 +347,7 @@ TEST(TrackingWheelOdometry, ConfigurationErrors) {
 
     // duplicate sensor reference
     EXPECT_EQ(f.makeOdometry(threeWheelXml("enc_a", "enc_a", "enc_c"), err), nullptr);
-    EXPECT_NE(err.find("more than one TrackingWheel"), std::string::npos);
+    EXPECT_NE(err.find("more than one wheel"), std::string::npos);
 
     // zero radius
     std::string bad = threeWheelXml("enc_a", "enc_b", "enc_c");
@@ -374,6 +374,68 @@ TEST(TrackingWheelOdometry, ConfigurationErrors) {
     bad.erase(pos, 20);
     EXPECT_EQ(f.makeOdometry(bad, err), nullptr);
     EXPECT_NE(err.find("missing required attribute position_y_m"), std::string::npos);
+}
+
+
+TEST(TrackingWheelOdometry, ImuOutageDropsTheWholeFusionWindow) {
+    // Wheels keep ticking while the IMU is silent. When the IMU returns
+    // past max_gap_ms, the gyro interval is dropped - and the wheel travel
+    // spanning the same window must go with it, or the next solve fuses a
+    // long wheel interval with a short gyro interval.
+    Fixture     f;
+    std::string err;
+    auto        odom = f.makeOdometry(R"(
+<Preprocessor id="m" type="tracking_wheel_odometry">
+    <TrackingWheel sensor_id="enc_a" radius_m="0.0254" position_x_m="0"
+                   position_y_m="0" measurement_angle_deg="0" direction="positive"/>
+    <TrackingWheel sensor_id="enc_b" radius_m="0.0254" position_x_m="0"
+                   position_y_m="0" measurement_angle_deg="90" direction="positive"/>
+    <HeadingConstraint sensor_id="imu" bias_samples="0" max_gap_ms="250"/>
+    <Output artifact_id="motion"/>
+</Preprocessor>)",
+                                      err);
+    ASSERT_NE(odom, nullptr) << err;
+    const double r = 0.0254;
+    ArtifactMap  artifacts;
+
+    // seed and one healthy fused step of 0.10 m forward
+    f.putEncoder("enc_a", 0.0, 1000, 1);
+    f.putEncoder("enc_b", 0.0, 1000, 1);
+    f.putImu(0.0, 1000, 1);
+    odom->run(f.input(), artifacts);
+    f.putEncoder("enc_a", 0.10 / r, 1005, 2);
+    f.putEncoder("enc_b", 0.0, 1005, 2);
+    f.putImu(0.0, 1005, 2);
+    ASSERT_EQ(odom->run(f.input(), artifacts), FunctionStatus::kOk);
+    {
+        const auto* d = artifacts.at(ArtifactId{"motion"}).payload.get<PlanarMotionDelta>();
+        ASSERT_NE(d, nullptr);
+        EXPECT_NEAR(d->dx_m, 0.10, 1e-9);
+    }
+    artifacts.clear();
+
+    // IMU outage: the wheels travel 0.60 m that no gyro interval covers
+    f.putEncoder("enc_a", 0.40 / r, 1010, 3);
+    f.putEncoder("enc_b", 0.0, 1010, 3);
+    odom->run(f.input(), artifacts);
+    f.putEncoder("enc_a", 0.70 / r, 1310, 4);
+    f.putEncoder("enc_b", 0.0, 1310, 4);
+    odom->run(f.input(), artifacts);
+    EXPECT_TRUE(artifacts.empty());
+
+    // the IMU returns past max_gap_ms: the whole window is dropped
+    f.putImu(0.0, 1320, 3);
+    odom->run(f.input(), artifacts);
+    EXPECT_TRUE(artifacts.empty());
+
+    // the next matched interval fuses only its own motion
+    f.putEncoder("enc_a", 0.72 / r, 1325, 5);
+    f.putEncoder("enc_b", 0.0, 1325, 5);
+    f.putImu(0.0, 1325, 4);
+    ASSERT_EQ(odom->run(f.input(), artifacts), FunctionStatus::kOk);
+    const auto* d = artifacts.at(ArtifactId{"motion"}).payload.get<PlanarMotionDelta>();
+    ASSERT_NE(d, nullptr);
+    EXPECT_NEAR(d->dx_m, 0.02, 1e-9);   // not 0.62: the outage travel is gone
 }
 
 TEST(ConfiguredCollection, DuplicateArtifactOutputsFail) {

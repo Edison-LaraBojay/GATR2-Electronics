@@ -19,21 +19,26 @@ semantic sequence:
 
 ```text
 Sensor Collection -> Command Collection -> Preprocessing
-  -> Localization Prediction -> Perception -> Association
-  -> Pose Correction -> World Prediction / Target Resolution -> Publishing
+  -> Localization -> World Estimation -> Target Resolution -> Publishing
 ```
+
+Each position holds one selected implementation behind one contract. An
+implementation may be a leaf, an explicit `noop`, or a composite that
+privately owns a nested pipeline (for example `landmark_world` internally
+runs observation extraction, association, and a landmark estimator). The
+coordinator never learns how many internal children exist, children are
+reachable only through their parent, and a child fault never partially
+commits the parent output.
 
 | Position | Standard input | Standard output | Responsibility |
 |---|---|---|---|
 | Sensor Collection | cycle time and each initialized sensor executable | `SensorResultsMap` | Poll every configured sensor and retain its latest typed sample, state, timestamps, and diagnostic. |
 | Command Collection | previous `CommandState`, time, and the configured command transport | `CommandState` | Apply newly received command edges and otherwise carry the previous command forward. |
 | Preprocessing | sensor results and time | `ArtifactMap` | Convert raw samples into implementation-defined typed artifacts, such as a wheel/IMU motion increment. |
-| Localization Prediction | sensor results, artifacts, previous robot state, and command state | `RobotState` | Advance smooth odometry and maintain the pose history needed to evaluate delayed observations at exposure time. |
-| Perception | sensor results and preprocessing artifacts | `ObservationMap` | Turn camera frames or other perceptual inputs into timestamped observations in standard engineering frames. |
-| Association | observations, predicted robot state, world state, command state, and active target state | `AssociationMap` | Decide which configured physical landmark instance could have produced target-relevant evidence. |
-| Pose Correction | predicted robot state plus artifacts, observations, and associations | `RobotState` | Optionally correct robot localization. The AprilTag target profiles deliberately select `noop` here so vision does not jump wheel/IMU odometry. |
-| World Prediction / Target Resolution | previous world and target state, associations, robot state, commands, and time | `WorldState` and `TargetState` | Maintain configured world estimates and resolve or latch the selected target. |
-| Publishing | all standard results and states | status/side effects | Publish the configured robot/target data and health without changing estimation state. |
+| Localization | sensor results, artifacts, previous robot state, and command state | `RobotState` | Advance smooth odometry, maintain the exposure-time pose history, and (in a future composite) own any robot pose correction internally so vision never jumps wheel/IMU odometry from outside. |
+| World Estimation | sensor results, artifacts, robot state, previous world, commands, and previous target state | `WorldState` plus published observation/association evidence | Estimate external state. The `landmark_world` composite privately runs observation extraction, association, and a landmark estimator with an explicit commit policy (`always`, `never`, `on_target_lock`). |
+| Target Resolution | commands, robot state, world state, and the published evidence | `TargetState` | Focused domain logic driven by the configured target set: activation edges, robot-relative snapshots, acquire-once latching, timeouts, epoch cancellation. Not an open plugin point. |
+| Publishing | all standard results and states | status/side effects | Publish the configured robot/target data and health without changing estimation state. Focused boundary logic driven by the configured transports. |
 
 Every position has one explicitly selected `type`, including intentional
 absence such as `<Perception type="noop"/>`. Missing types, missing references,
@@ -58,10 +63,13 @@ selects it by a stable wire id at runtime:
   `none`, `acquire_once`, or a future separately implemented policy.
 
 Selecting a target must not select a file, infer a wheel layout, or rebuild the
-pipeline. The intended startup contract is an allowlisted profile id resolving
-to a complete XML file, with the active profile identity/hash made visible to
-the Brain and diagnostics. Passing an arbitrary pathname is a bring-up
-mechanism, not the final deployment-selection contract.
+pipeline. A profile is a `<Configuration>` document composing a Robot
+description, optional Field data, and a Pipeline fragment by file, resolved
+relative to the referencing file with strict fragment roots, no repeated or
+template includes, and no cross-file duplicate ids. The resolved profile
+carries its declared id and a content digest over every contributing file,
+printed at startup and visible to diagnostics. Passing a plain `<System>`
+pathname remains a bring-up mechanism, not the deployment-selection contract.
 
 ## Odometry and landmark evidence
 
@@ -102,21 +110,31 @@ does not move the target.
 
 ## Configuration set
 
-- `config/three_wheel_imu_no_landmark_correction.xml` - internal three-wheel +
-  IMU odometry bring-up rig; all downstream behavior is explicitly disabled.
-- `config/two_wheel_imu_no_landmark_correction.xml` - internal two-wheel + IMU
-  odometry bring-up rig; the IMU heading constraint is mandatory.
-- `config/three_wheel_imu_apriltag_landmark_correction.xml.in` - non-runnable
-  three-wheel camera/target calibration template.
-- `config/two_wheel_imu_apriltag_landmark_correction.xml.in` - non-runnable
-  two-wheel camera/target calibration template.
-- `config/navigatr.xml` - transitional legacy profile; it is not the canonical
-  profile-selection mechanism.
+```text
+config/
+  shared/
+    robots/gatr2_as5047_bno08x.xml.in     measured robot description template
+    pipelines/
+      two_wheel_bno08x_no_correction.xml
+      three_wheel_bno08x_no_correction.xml
+      two_wheel_bno08x_camera_diagnostic.xml
+      three_wheel_bno08x_camera_diagnostic.xml
+  override/
+    field.xml                             nine landmarks, 36 tag mounts
+    diagnostics/*.xml.in                  composed diagnostic profiles
+    blue/routes/  red/routes/             deliberately empty
+```
 
-The odometry bring-up files do not publish a pose to the Brain. The AprilTag
-templates are not runnable merely because their placeholders have been filled:
-deployment additionally requires the real libcamera capture backend, AprilTag
-detector adapter, and a physical Brain-to-Pi command return path.
+The robot template owns every physical fact (transports, encoder channels,
+wheel geometry, robot frames, camera); the pipeline fragments restate no
+measurement and differ only through which declared wheels they reference.
+The diagnostic profiles are templates on purpose: they reference the
+measured `gatr2_as5047_bno08x.xml`, which exists only after every `@...@`
+token is replaced with a measured value. The former root-level XMLs with
+guessed geometry have been removed; nothing runnable carries an unmeasured
+number. Even a fully measured camera profile additionally requires the real
+libcamera capture backend, the AprilTag detector adapter, and a physical
+Brain-to-Pi command return path before the vision stack is live.
 
 ## Build and host-side checks
 

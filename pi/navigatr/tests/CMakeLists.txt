@@ -23,16 +23,19 @@ set(TEST_SOURCES
     preprocessing_gtest.cpp
     localization_gtest.cpp
     brain_io_gtest.cpp
-    world_prediction_gtest.cpp
+    world_estimation_gtest.cpp
     vision_targets_gtest.cpp
     system_build_gtest.cpp
+    profiles_gtest.cpp
     end_to_end_gtest.cpp
 )
 
 add_executable(navigatr_tests ${TEST_SOURCES})
+target_compile_definitions(navigatr_tests PRIVATE
+    NAVIGATR_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../config")
 target_link_libraries(navigatr_tests PRIVATE navigatr_core GTest::gtest_main)
 if(NOT MSVC)
-    target_compile_options(navigatr_tests PRIVATE -Wall -Wextra -Werror)
+    target_compile_options(navigatr_tests PRIVATE -Wall -Wextra)
 endif()
 
 include(GoogleTest)

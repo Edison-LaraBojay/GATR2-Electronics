@@ -21,25 +21,43 @@ The framework knows that sensors, resources, preprocessing, localization, and
 publishing exist. It does not know which particular sensors or algorithms
 exist.
 
-## Fixed semantic pipeline
+## Fixed semantic pipeline, hierarchical implementations
 
 ```text
 Sensor Collection -> Command Collection -> Preprocessing
-  -> Localization Prediction -> Perception -> Association
-  -> Pose Correction -> World Prediction -> Publishing
+  -> Localization -> World Estimation -> Target Resolution -> Publishing
 ```
 
 Resources initialize before runtime; they are not a pipeline step. The order
 is the framework's, not the document's: slots may appear in any order in XML
-and execute in this sequence (there is a test that proves it). A selected
-implementation may contain a nested configurable collection, as
-`configured_collection` does with its PreprocessingMap of preprocessors, but
-the top-level sequence never changes and never becomes a user-defined graph.
+and execute in this sequence (there is a test that proves it).
+
+Each slot holds one selected implementation behind one contract, and that
+implementation may be a leaf, an explicit noop, or a composite that
+privately owns a nested pipeline. `configured_collection` nests a
+PreprocessingMap of preprocessors; `landmark_world` nests observation
+extraction (Perception contract), association (Association contract), and a
+landmark estimator with an explicit commit policy. Nested children are
+built from the same registry categories with explicit types, run only when
+their parent runs, are reachable only through their parent, and can never
+leak private intermediates: what crosses a slot boundary is exactly what
+the parent declares it publishes. A child fault never partially commits the
+parent output. The top-level sequence never changes and never becomes a
+user-defined graph, and adding a new composite requires no coordinator
+change.
+
+Genericity is selective. Resources, sensors, preprocessing, localization,
+and world estimation are open registry categories because the robot is
+expected to vary there. Target Resolution and Publishing are focused domain
+logic driven by configuration (the target set, the transports); they have
+an explicit noop and a configured implementation, not an open plugin
+ecosystem.
 
 Each step has a standard input and output contract (`contracts/`); the only
-cross-step data path is the standard result maps. Localization prediction
-runs before perception so association works against the current cycle's
-predicted pose; corrections from associated evidence land in Pose Correction.
+cross-step data path is the standard result maps and states. Localization
+runs before world estimation so association inside it works against the
+current cycle's predicted pose; any future robot pose correction belongs
+inside a localization composite, never bolted on from outside.
 
 ## Explicit selection
 
@@ -47,16 +65,32 @@ Every slot names its implementation with `type`, including intentional
 absence:
 
 ```xml
-<Perception type="noop"/>
+<WorldEstimation type="noop"/>
 ```
 
 Configuration errors, never silent behavior: missing slot, missing type,
 unknown type, missing dependency, incompatible payload type, duplicate id,
 duplicate output id. There are no implicit algorithm defaults, and each
 category has its own registered noop with documented semantics (preprocessing
-produces no artifacts, pose correction passes the prediction through, world
-prediction preserves the previous world, publishing publishes nothing
-successfully, command collection carries the previous state forward).
+produces no artifacts, world estimation preserves the previous world and
+publishes no evidence, target resolution preserves the previous target,
+publishing publishes nothing successfully, command collection carries the
+previous state forward). Composite children select their noops the same
+way.
+
+## Composed profiles
+
+A deployable profile is a `<Configuration>` document naming its parts by
+file: one Robot description (resources and sensors, every physical fact),
+optional Field data, one Pipeline fragment. Paths resolve relative to the
+referencing file; fragment roots are validated; missing files, repeated
+includes, `.xml.in` templates, leftover `@...@` placeholder tokens, and
+cross-file duplicate ids all fail with the include chain named. The
+resolved profile carries its declared id and an FNV-1a digest over every
+contributing file, so the running configuration is identifiable exactly.
+Wheel geometry lives in the robot description as a `wheel_geometry`
+resource; pipeline fragments only reference declared wheels and never
+restate a measurement.
 
 ## Identity, type, references
 
@@ -236,14 +270,18 @@ the vision policy (`none`, `acquire_once`; `continuous` is reserved),
 explicit timeout fallback, and generation stamping: evidence from a
 previous target generation or odometry epoch is discarded, never applied.
 
-Acquisition is transactional. Accepted evidence buffers privately, at most
-one candidate per camera frame (three mounts in one image are one
-observation, not three), until the configured number of consistent results
-from distinct frames arrives; the landmark update and the latched target
-then commit atomically. Nothing outside the buffer changes earlier, so one
-bad frame can never move a landmark, and the `use_nominal_target` timeout
-fallback reads the immutable field map nominal - zero visual correction
-with zero trace of unconfirmed evidence. Activation, robot-relative
+Acquisition is transactional with one acceptance path. Accepted evidence
+buffers privately inside target resolution, at most one candidate per
+(camera, frame) - three mounts in one image are one observation, not three
+- until the configured number of consistent results from distinct frames
+arrives. The lock latches the target and records the window's mean landmark
+pose in `TargetState`; that locked landmark is the only camera evidence the
+world estimation estimator may fold (`commit="on_target_lock"`, once per
+generation, on the following cycle). Evidence the resolver rejected or
+never confirmed does not exist anywhere else, so it can never move a
+landmark, and the `use_nominal_target` timeout fallback reads the immutable
+field map nominal - zero visual correction with zero trace of unconfirmed
+evidence. Activation, robot-relative
 snapshotting, and association all require a valid robot estimate; a select
 command during startup defers until localization is real instead of
 latching zeros. The AprilTag detector itself is target gated
@@ -261,8 +299,9 @@ the prior (in front, facing, projecting inside the calibrated image, at
 least `min_projected_size_px` across), the translation and heading gates,
 and a decisive combined-score margin over the runner-up. Anything less
 abstains. Frame identity everywhere is (camera, sequence): sequences are
-per device and never compared across cameras. Only the selected target's landmark ever mutates, and
-`PoseCorrection` stays `noop`: vision corrects or acquires the selected
+per device and never compared across cameras. Only the selected target's
+landmark ever mutates, and the Localization estimate is untouchable from
+outside its own slot: vision corrects or acquires the selected
 landmark-derived target, never the wheel/IMU robot estimate.
 
 ## Placeholder policy
@@ -285,7 +324,7 @@ Brain wire object ids live in publisher and command configuration, not in
 `WorldState`. Frame math (`T_a_b` compose/inverse, `FramedPose2D`) is shared
 infrastructure; how it is used belongs to the selected implementations.
 
-Adding next season's sensor, perception algorithm, world predictor, or
+Adding next season's sensor, observation extractor, world estimator, or
 nested classifier means: implement the standard interface, define private
 payload and config types, register the factory, write the XML, add tests.
 The executor, the generic builders, the registries, the map storage, and the

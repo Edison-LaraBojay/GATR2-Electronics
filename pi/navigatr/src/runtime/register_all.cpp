@@ -14,8 +14,8 @@ void registerAll(FunctionRegistry& functions) {
     register_localization(functions);
     register_perception(functions);
     register_association(functions);
-    register_pose_correction(functions);
-    register_world_prediction(functions);
+    register_world_estimation(functions);
+    register_target_resolution(functions);
     register_publishers(functions);
 }
 

@@ -5,9 +5,13 @@
 // must both pass the geometric gates and beat the runner-up by the
 // ambiguity margin; anything less abstains.
 //
-// Processing is gated by the active target: evidence exists to acquire the
+// Two modes, selected by configuration. With a <Targets> reference,
+// processing is gated by the active target: evidence exists to acquire the
 // selected landmark-derived target, so with no target pending acquisition
-// no association work runs and no correction can commit.
+// no association work runs and no correction can commit. Without <Targets>
+// (diagnostic mode), every decisive observation associates against the
+// whole field map so live overlays and estimators can see evidence with no
+// autonomous target configured.
 //
 // Acceptance requires, in order: a valid robot pose and non-future exposure
 // inside retained history; detector quality (hamming, decision margin, and
@@ -20,7 +24,7 @@
 //       <Observations observation_id="tag_observations"/>
 //       <FieldMap resource_id="game_field"/>
 //       <RobotFrames resource_id="robot_geometry"/>
-//       <Targets resource_id="targets"/>
+//       <Targets resource_id="targets"/>          optional; absent = diagnostic
 //       <Gates max_translation_error_m="0.5" max_heading_error_deg="30"
 //              ambiguity_margin_m="0.15" max_range_m="3.0"
 //              min_decision_margin="20" max_hamming="0"
