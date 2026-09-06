@@ -1,12 +1,13 @@
-// landmark_world.cpp
+// landmark_field.cpp
 
-#include "impl/world_estimation/landmark_world.h"
+#include "impl/field_estimation/landmark_field.h"
 
 #include <cmath>
+#include <map>
 #include <typeindex>
 
 #include "math/angles.h"
-#include "payloads/landmark_pose_observations.h"
+#include "payloads/field_object_evidence.h"
 #include "resources/resource_map.h"
 
 namespace navigatr
@@ -50,9 +51,9 @@ bool exactlyOne(const ConfigNode& parent, const char* name, ConfigNode& out,
 
 } // namespace
 
-std::unique_ptr<WorldEstimation> LandmarkWorldEstimation::create(
+std::unique_ptr<FieldEstimation> LandmarkFieldEstimation::create(
     const ConfigNode& node, SlotInitializationContext& context, std::string& err) {
-    auto composite = std::make_unique<LandmarkWorldEstimation>();
+    auto composite = std::make_unique<LandmarkFieldEstimation>();
 
     if (context.resources == nullptr) {
         err = node.path() + ": no resources available";
@@ -146,11 +147,9 @@ std::unique_ptr<WorldEstimation> LandmarkWorldEstimation::create(
         composite->commit_ = CommitPolicy::kAlways;
     } else if (commit == "never") {
         composite->commit_ = CommitPolicy::kNever;
-    } else if (commit == "on_target_lock") {
-        composite->commit_ = CommitPolicy::kOnTargetLock;
     } else {
-        err = estimator.path() + ": commit must be always, never, or on_target_lock, "
-              "not \"" + commit + "\"";
+        err = estimator.path() + ": commit must be always or never, not \"" + commit +
+              "\"";
         return nullptr;
     }
     if (!estimator.getDouble("blend", 1.0, composite->blend_, err)) {
@@ -164,7 +163,7 @@ std::unique_ptr<WorldEstimation> LandmarkWorldEstimation::create(
     // The estimator folds the association child's published evidence. One
     // declared landmark-pose output is the supported shape; none is legal
     // only when the estimator never commits.
-    const std::type_index evidence_type(typeid(LandmarkPoseObservationSet));
+    const std::type_index evidence_type(typeid(FieldObjectPoseEvidenceSet));
     for (const auto& decl : association_decls) {
         if (!decl.payload.matches(evidence_type)) {
             continue;
@@ -185,29 +184,29 @@ std::unique_ptr<WorldEstimation> LandmarkWorldEstimation::create(
     return composite;
 }
 
-std::vector<ObservationOutputDecl> LandmarkWorldEstimation::producesObservations() const {
+std::vector<ObservationOutputDecl> LandmarkFieldEstimation::producesObservations() const {
     return observation_extraction_->produces();
 }
 
-std::vector<AssociationOutputDecl> LandmarkWorldEstimation::producesAssociations() const {
+std::vector<AssociationOutputDecl> LandmarkFieldEstimation::producesAssociations() const {
     return association_->produces();
 }
 
-WorldEstimationOutput LandmarkWorldEstimation::run(const WorldEstimationInput& in) {
-    WorldEstimationOutput out;
-    out.world = in.previousWorld;
+FieldEstimationOutput LandmarkFieldEstimation::run(const FieldEstimationInput& in) {
+    FieldEstimationOutput out;
+    out.field = in.previousField;
 
-    // Children in fixed order. A child fault leaves the previous world
-    // untouched and publishes nothing: no partial commit.
-    auto per_out = observation_extraction_->run(
-        {in.sensorResults, in.artifacts, in.previousTarget, in.now});
+    // Children in fixed order. A child fault leaves the previous field
+    // state untouched and publishes nothing: no partial commit.
+    auto per_out =
+        observation_extraction_->run({in.sensorResults, in.artifacts, in.now});
     if (per_out.status == FunctionStatus::kFault) {
         out.status = FunctionStatus::kFault;
         return out;
     }
 
-    auto assoc_out = association_->run({per_out.observations, in.robot, in.previousWorld,
-                                        in.command, in.previousTarget, in.now});
+    auto assoc_out = association_->run(
+        {per_out.observations, in.robot, in.previousField, in.now});
     if (assoc_out.status == FunctionStatus::kFault) {
         out.status = FunctionStatus::kFault;
         return out;
@@ -216,74 +215,91 @@ WorldEstimationOutput LandmarkWorldEstimation::run(const WorldEstimationInput& i
     // Estimator: seed every mapped landmark, then fold accepted evidence
     // per the explicit commit policy.
     for (const auto& decl : field_->landmarks) {
-        if (out.world.objects.find(decl.id) != out.world.objects.end()) {
+        if (out.field.objects.find(decl.id) != out.field.objects.end()) {
             continue;
         }
-        WorldObject obj;
+        FieldObjectState obj;
         obj.pose.frame      = FrameId{"field"};
         obj.pose.pose       = decl.nominal;
         obj.pose.measuredAt = in.now;
         obj.confidence      = 0.5;
         obj.valid           = true;
         obj.source          = EstimateSource::kFieldMap;
-        out.world.objects.emplace(decl.id, obj);
+        out.field.objects.emplace(decl.id, obj);
     }
-    for (auto& kv : out.world.objects) {
+    for (auto& kv : out.field.objects) {
         kv.second.observed = false;
     }
 
-    const auto fold = [&](const LandmarkPoseObservation& entry) {
-        auto& obj = out.world.objects[entry.landmark];
-        const auto T_field_landmark =
-            compose(in.robot.field_from_odom, entry.T_odom_landmark);
-        if (!obj.valid) {
-            obj.pose.frame = FrameId{"field"};
-            obj.pose.pose  = T_field_landmark;
-        } else {
-            obj.pose.pose.x_m += (T_field_landmark.x_m - obj.pose.pose.x_m) * blend_;
-            obj.pose.pose.y_m += (T_field_landmark.y_m - obj.pose.pose.y_m) * blend_;
-            obj.pose.pose.heading_rad = wrapAngle(
-                obj.pose.pose.heading_rad +
-                wrapAngle(T_field_landmark.heading_rad - obj.pose.pose.heading_rad) *
-                    blend_);
-        }
-        obj.pose.measuredAt = in.now;
-        obj.valid           = true;
-        obj.observed        = true;
-        obj.source          = EstimateSource::kObserved;
-        obj.confidence      = entry.confidence;
-    };
-
-    const LandmarkPoseObservationSet* evidence = nullptr;
+    const FieldObjectPoseEvidenceSet* evidence = nullptr;
     if (!evidence_ref_.empty()) {
         const auto it = assoc_out.associations.find(evidence_ref_);
         if (it != assoc_out.associations.end()) {
-            evidence = it->second.payload.get<LandmarkPoseObservationSet>();
+            evidence = it->second.payload.get<FieldObjectPoseEvidenceSet>();
             if (evidence == nullptr) {
                 out.status = FunctionStatus::kFault;
-                out.world  = in.previousWorld;
+                out.field  = in.previousField;
                 return out;
             }
         }
     }
 
     if (commit_ == CommitPolicy::kAlways && evidence != nullptr) {
+        // Deterministic fusion: several accepted measurements of one object
+        // in one cycle combine by confidence-weighted planar mean and
+        // circular heading mean, so unordered container or detector
+        // iteration order can never pick the result. Non-finite evidence is
+        // rejected before it reaches state.
+        struct Accumulated {
+            double        wx = 0.0, wy = 0.0, wsin = 0.0, wcos = 0.0;
+            double        weight = 0.0, wconf = 0.0;
+            MonotonicTime newest;
+        };
+        std::map<FieldObjectId, Accumulated> merged;
         for (const auto& entry : evidence->entries) {
-            fold(entry);
+            if (entry.frame != FrameId{"odometry"}) {
+                continue;   // this estimator folds odometry-frame evidence
+            }
+            const auto& p = entry.T_frame_object;
+            if (!std::isfinite(p.x_m) || !std::isfinite(p.y_m) ||
+                !std::isfinite(p.heading_rad) || !std::isfinite(entry.confidence) ||
+                entry.confidence < 0.0) {
+                continue;
+            }
+            const auto T_field_object = compose(in.robot.field_from_odom, p);
+            const auto w              = std::max(entry.confidence, 1e-6);
+            auto&      a              = merged[entry.object];
+            a.wx += w * T_field_object.x_m;
+            a.wy += w * T_field_object.y_m;
+            a.wsin += w * std::sin(T_field_object.heading_rad);
+            a.wcos += w * std::cos(T_field_object.heading_rad);
+            a.weight += w;
+            a.wconf += w * entry.confidence;
+            if (!a.newest.isSet() || entry.measuredAt > a.newest) {
+                a.newest = entry.measuredAt;
+            }
         }
-    } else if (commit_ == CommitPolicy::kOnTargetLock) {
-        // One acceptance path: fold exactly what the resolver locked, once
-        // per generation. Nominal fallbacks and cancellations carry no
-        // locked landmark, so they leave zero camera trace.
-        const auto& t = in.previousTarget;
-        if (t.active && t.status == TargetStatus::kLockedVision &&
-            t.has_locked_landmark && t.generation != last_committed_generation_) {
-            LandmarkPoseObservation locked;
-            locked.landmark        = t.locked_landmark;
-            locked.T_odom_landmark = t.T_odom_landmark_locked;
-            locked.confidence      = t.locked_confidence;
-            fold(locked);
-            last_committed_generation_ = t.generation;
+        for (const auto& kv : merged) {
+            const auto&  a = kv.second;
+            const Pose2D fused{a.wx / a.weight, a.wy / a.weight,
+                               std::atan2(a.wsin, a.wcos)};
+            auto& obj = out.field.objects[kv.first];
+            if (!obj.valid) {
+                obj.pose.frame = FrameId{"field"};
+                obj.pose.pose  = fused;
+            } else {
+                obj.pose.pose.x_m += (fused.x_m - obj.pose.pose.x_m) * blend_;
+                obj.pose.pose.y_m += (fused.y_m - obj.pose.pose.y_m) * blend_;
+                obj.pose.pose.heading_rad = wrapAngle(
+                    obj.pose.pose.heading_rad +
+                    wrapAngle(fused.heading_rad - obj.pose.pose.heading_rad) * blend_);
+            }
+            obj.pose.measuredAt = a.newest;
+            obj.lastObservedAt  = a.newest;
+            obj.valid           = true;
+            obj.observed        = true;
+            obj.source          = EstimateSource::kObserved;
+            obj.confidence      = a.wconf / a.weight;
         }
     }
 

@@ -44,12 +44,12 @@ public:
     AssociationOutput run(const AssociationInput&) override { return AssociationOutput{}; }
 };
 
-class NoopWorldEstimation : public WorldEstimation
+class NoopFieldEstimation : public FieldEstimation
 {
 public:
-    WorldEstimationOutput run(const WorldEstimationInput& in) override {
-        WorldEstimationOutput out;
-        out.world = in.previousWorld;
+    FieldEstimationOutput run(const FieldEstimationInput& in) override {
+        FieldEstimationOutput out;
+        out.field = in.previousField;
         return out;
     }
 };
@@ -97,10 +97,10 @@ std::unique_ptr<Association> makeNoopAssociation(const ConfigNode&,
     return std::make_unique<NoopAssociation>();
 }
 
-std::unique_ptr<WorldEstimation> makeNoopWorldEstimation(const ConfigNode&,
+std::unique_ptr<FieldEstimation> makeNoopFieldEstimation(const ConfigNode&,
                                                          SlotInitializationContext&,
                                                          std::string&) {
-    return std::make_unique<NoopWorldEstimation>();
+    return std::make_unique<NoopFieldEstimation>();
 }
 
 std::unique_ptr<TargetResolution> makeNoopTargetResolution(const ConfigNode&,

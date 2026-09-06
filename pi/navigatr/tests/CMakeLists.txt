@@ -23,7 +23,7 @@ set(TEST_SOURCES
     preprocessing_gtest.cpp
     localization_gtest.cpp
     brain_io_gtest.cpp
-    world_estimation_gtest.cpp
+    field_estimation_gtest.cpp
     vision_targets_gtest.cpp
     system_build_gtest.cpp
     profiles_gtest.cpp

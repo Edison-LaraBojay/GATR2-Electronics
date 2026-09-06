@@ -84,14 +84,14 @@ const char* kFullConfig = R"(
         <Localization type="wheel_imu_prediction">
             <Motion artifact_id="tracking_motion_delta"/>
         </Localization>
-        <WorldEstimation type="landmark_world">
+        <FieldEstimation type="landmark_field">
             <FieldMap resource_id="override_field"/>
             <Pipeline>
                 <ObservationExtraction type="noop"/>
                 <Association type="noop"/>
                 <Estimator type="landmark_estimator" commit="never"/>
             </Pipeline>
-        </WorldEstimation>
+        </FieldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="vex_brain">
             <Serial resource_id="brain_uart"/>
@@ -102,7 +102,7 @@ const char* kFullConfig = R"(
                 <Gyro sensor_id="robot_imu"/>
                 <BiasCal artifact_id="imu_orientation"/>
             </Health>
-            <WorldObject object_id="center_goal" wire_id="1"/>
+            <FieldObject object_id="center_goal" wire_id="1"/>
         </Publishing>
     </Pipeline>
 </System>
@@ -295,7 +295,7 @@ TEST(EndToEnd, NothingAttachedStillRunsAndPublishesHealth) {
     EXPECT_FALSE(last.status & gatr2::kStatusEncHealthy);
 
     // the map-seeded world exists with no data at all
-    EXPECT_EQ(rig.system->world().objects.count(WorldObjectId{"center_goal"}), 1u);
+    EXPECT_EQ(rig.system->field().objects.count(FieldObjectId{"center_goal"}), 1u);
 }
 
 namespace
@@ -370,7 +370,7 @@ std::string fusedConfig(bool three_wheel) {
         <Localization type="wheel_imu_prediction">
             <Motion artifact_id="tracking_motion_delta"/>
         </Localization>
-        <WorldEstimation type="noop"/>
+        <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>

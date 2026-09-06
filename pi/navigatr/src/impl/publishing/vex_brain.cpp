@@ -111,16 +111,16 @@ std::unique_ptr<Publishing> VexBrainPublisher::create(const ConfigNode& node,
     }
 
     bool ok = true;
-    node.forEach("WorldObject", [&](const ConfigNode& w) {
+    node.forEach("FieldObject", [&](const ConfigNode& w) {
         if (!ok) {
             return;
         }
         WireObject wire;
-        wire.object = WorldObjectId{w.attr("object_id")};
+        wire.object = FieldObjectId{w.attr("object_id")};
         long id     = -1;
         if (wire.object.empty() || !w.getInt("wire_id", -1, id, err)) {
             if (err.empty()) {
-                err = w.path() + ": WorldObject needs object_id and wire_id";
+                err = w.path() + ": FieldObject needs object_id and wire_id";
             }
             ok = false;
             return;
@@ -133,7 +133,7 @@ std::unique_ptr<Publishing> VexBrainPublisher::create(const ConfigNode& node,
         wire.wire_id = static_cast<uint8_t>(id);
         for (const WireObject& seen : publisher->wire_objects_) {
             if (seen.wire_id == wire.wire_id || seen.object == wire.object) {
-                err = w.path() + ": duplicate WorldObject mapping";
+                err = w.path() + ": duplicate FieldObject mapping";
                 ok  = false;
                 return;
             }
@@ -244,8 +244,8 @@ PublishingOutput VexBrainPublisher::run(const PublishingInput& in) {
                 if (wire.wire_id != in.command.object_wire_id) {
                     continue;
                 }
-                const auto it = in.world.objects.find(wire.object);
-                if (it != in.world.objects.end() && it->second.valid) {
+                const auto it = in.field.objects.find(wire.object);
+                if (it != in.field.objects.end() && it->second.valid) {
                     status |= gatr2::kStatusObjValid;
                     if (it->second.observed) {
                         status |= gatr2::kStatusObjObserved;

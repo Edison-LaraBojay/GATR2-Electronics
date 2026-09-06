@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Three-wheel + IMU odometry plus the camera/AprilTag diagnostic stack.
-     Detection runs on every frame (detect="always"), association runs in
+     Detection runs on every frame, association runs
      diagnostic mode against the whole field map (no configured targets),
      and the landmark estimator commits what association accepts. Nothing
      here modifies RobotState and no autonomous target is required. The
@@ -27,10 +27,10 @@
         <Motion artifact_id="tracking_motion_delta"/>
     </Localization>
 
-    <WorldEstimation type="landmark_world">
+    <FieldEstimation type="landmark_field">
         <FieldMap resource_id="override_field"/>
         <Pipeline>
-            <ObservationExtraction type="apriltag_tag_observation" detect="always">
+            <ObservationExtraction type="apriltag_tag_observation">
                 <Camera sensor_id="front_camera"/>
                 <Detector resource_id="tag_detector"/>
                 <Output observation_id="tag_observations"/>
@@ -49,7 +49,7 @@
             </Association>
             <Estimator type="landmark_estimator" commit="always" blend="1.0"/>
         </Pipeline>
-    </WorldEstimation>
+    </FieldEstimation>
 
     <TargetResolution type="noop"/>
 

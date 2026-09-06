@@ -70,7 +70,7 @@ const char* kPipelineFragment = R"(
   <Localization type="wheel_imu_prediction">
     <Motion artifact_id="motion_delta"/>
   </Localization>
-  <WorldEstimation type="noop"/>
+  <FieldEstimation type="noop"/>
   <TargetResolution type="noop"/>
   <Publishing type="noop"/>
 </Pipeline>
@@ -258,7 +258,7 @@ TEST(Profiles, WheelGeometryReferenceFormMatchesInlineAndValidates) {
       </Preprocessor>
     </Preprocessing>
     <Localization type="noop"/>
-    <WorldEstimation type="noop"/>
+    <FieldEstimation type="noop"/>
     <TargetResolution type="noop"/>
     <Publishing type="noop"/>
   </Pipeline>
@@ -280,7 +280,7 @@ TEST(Profiles, WheelGeometryReferenceFormMatchesInlineAndValidates) {
     <CommandCollection type="noop"/>
     <Preprocessing type="noop"/>
     <Localization type="noop"/>
-    <WorldEstimation type="noop"/>
+    <FieldEstimation type="noop"/>
     <TargetResolution type="noop"/>
     <Publishing type="noop"/>
   </Pipeline>

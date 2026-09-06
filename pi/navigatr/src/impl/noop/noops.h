@@ -10,7 +10,7 @@
 //   localization/noop       preserves the previous robot state
 //   perception/noop         produces no observations
 //   association/noop        produces no associations
-//   world_estimation/noop   preserves the previous world, publishes no evidence
+//   field_estimation/noop   preserves the previous world, publishes no evidence
 //   target_resolution/noop  preserves the previous target state
 //   publishing/noop         publishes nothing, successfully
 
@@ -25,7 +25,7 @@
 #include "contracts/preprocessing.h"
 #include "contracts/publishing.h"
 #include "contracts/target_resolution.h"
-#include "contracts/world_estimation.h"
+#include "contracts/field_estimation.h"
 
 namespace navigatr
 {
@@ -44,7 +44,7 @@ std::unique_ptr<Perception>     makeNoopPerception(const ConfigNode&,
 std::unique_ptr<Association>    makeNoopAssociation(const ConfigNode&,
                                                     SlotInitializationContext&,
                                                     std::string&);
-std::unique_ptr<WorldEstimation>  makeNoopWorldEstimation(const ConfigNode&,
+std::unique_ptr<FieldEstimation>  makeNoopFieldEstimation(const ConfigNode&,
                                                           SlotInitializationContext&,
                                                           std::string&);
 std::unique_ptr<TargetResolution> makeNoopTargetResolution(const ConfigNode&,

@@ -19,12 +19,12 @@ semantic sequence:
 
 ```text
 Sensor Collection -> Command Collection -> Preprocessing
-  -> Localization -> World Estimation -> Target Resolution -> Publishing
+  -> Localization -> Field Estimation -> Target Resolution -> Publishing
 ```
 
 Each position holds one selected implementation behind one contract. An
 implementation may be a leaf, an explicit `noop`, or a composite that
-privately owns a nested pipeline (for example `landmark_world` internally
+privately owns a nested pipeline (for example `landmark_field` internally
 runs observation extraction, association, and a landmark estimator). The
 coordinator never learns how many internal children exist, children are
 reachable only through their parent, and a child fault never partially
@@ -36,12 +36,12 @@ commits the parent output.
 | Command Collection | previous `CommandState`, time, and the configured command transport | `CommandState` | Apply newly received command edges and otherwise carry the previous command forward. |
 | Preprocessing | sensor results and time | `ArtifactMap` | Convert raw samples into implementation-defined typed artifacts, such as a wheel/IMU motion increment. |
 | Localization | sensor results, artifacts, previous robot state, and command state | `RobotState` | Advance smooth odometry, maintain the exposure-time pose history, and (in a future composite) own any robot pose correction internally so vision never jumps wheel/IMU odometry from outside. |
-| World Estimation | sensor results, artifacts, robot state, previous world, commands, and previous target state | `WorldState` plus published observation/association evidence | Estimate external state. The `landmark_world` composite privately runs observation extraction, association, and a landmark estimator with an explicit commit policy (`always`, `never`, `on_target_lock`). |
-| Target Resolution | commands, robot state, world state, and the published evidence | `TargetState` | Focused domain logic driven by the configured target set: activation edges, robot-relative snapshots, acquire-once latching, timeouts, epoch cancellation. Not an open plugin point. |
+| Field Estimation | sensor results, artifacts, robot state, and the previous field state | `FieldState` plus published observation/association evidence | Estimate external field-object state, continuously and independently of any target. The `landmark_field` composite privately runs observation extraction, association, and a landmark estimator with an explicit commit policy (`always`, `never`). |
+| Target Resolution | commands, robot state, field state, and the published evidence | `TargetState` | Focused domain logic driven by the configured target set: activation edges, robot-relative snapshots, acquire-once latching with intent filtering (requested object, allowed mounts, preferred source, freshness, activation time), timeouts, epoch cancellation. Not an open plugin point. |
 | Publishing | all standard results and states | status/side effects | Publish the configured robot/target data and health without changing estimation state. Focused boundary logic driven by the configured transports. |
 
 Every position has one explicitly selected `type`, including intentional
-absence such as `<Perception type="noop"/>`. Missing types, missing references,
+absence such as `<FieldEstimation type="noop"/>`. Missing types, missing references,
 duplicate ids, incompatible payloads, and malformed calibration are startup
 errors rather than implicit behavior.
 

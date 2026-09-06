@@ -6,7 +6,7 @@
 #include <typeindex>
 
 #include "math/angles.h"
-#include "payloads/landmark_pose_observations.h"
+#include "payloads/field_object_evidence.h"
 #include "payloads/tag_observations.h"
 #include "resources/resource_map.h"
 
@@ -21,6 +21,16 @@ std::unique_ptr<Association> TagMountAssociation::create(const ConfigNode& node,
     if (context.resources == nullptr) {
         err = node.path() + ": no resources available";
         return nullptr;
+    }
+    // Strict schema: navigation intent (Targets, preferred cameras, allowed
+    // mounts) does not belong here and is rejected, not ignored.
+    for (auto child = node.child(); child.valid(); child = child.next()) {
+        const std::string name = child.name();
+        if (name != "Observations" && name != "FieldMap" && name != "RobotFrames" &&
+            name != "Gates" && name != "Output") {
+            err = node.path() + " has unknown element " + name;
+            return nullptr;
+        }
     }
 
     assoc->observations_ref_ =
@@ -53,11 +63,6 @@ std::unique_ptr<Association> TagMountAssociation::create(const ConfigNode& node,
     if (!requireResource("FieldMap", assoc->field_) ||
         !requireResource("RobotFrames", assoc->frames_)) {
         return nullptr;
-    }
-    if (node.child("Targets").valid()) {
-        if (!requireResource("Targets", assoc->targets_)) {
-            return nullptr;
-        }
     }
 
     const ConfigNode gates = node.child("Gates");
@@ -104,8 +109,8 @@ std::unique_ptr<Association> TagMountAssociation::create(const ConfigNode& node,
 
 std::vector<AssociationOutputDecl> TagMountAssociation::produces() const {
     return {AssociationOutputDecl{
-        output_, PayloadDescriptor::of<LandmarkPoseObservationSet>(
-                     payload_names::kLandmarkPoseObservationSet)}};
+        output_, PayloadDescriptor::of<FieldObjectPoseEvidenceSet>(
+                     payload_names::kFieldObjectPoseEvidenceSet)}};
 }
 
 AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
@@ -115,19 +120,6 @@ AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
     if (!in.robot.valid) {
         return out;
     }
-    // Target mode gates on the selected target; diagnostic mode (no
-    // configured target set) associates everything decisively visible.
-    const TargetDecl* decl = nullptr;
-    if (targets_ != nullptr) {
-        if (!in.target.active ||
-            in.target.status != TargetStatus::kPendingAcquisition) {
-            return out;
-        }
-        decl = targets_->findById(in.target.target_id);
-        if (decl == nullptr || decl->kind != TargetKind::kLandmarkRelative) {
-            return out;
-        }
-    }
 
     const auto obs_it = in.observations.find(observations_ref_);
     if (obs_it == in.observations.end()) {
@@ -136,10 +128,6 @@ AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
     const TagObservationSet* set = obs_it->second.payload.get<TagObservationSet>();
     if (set == nullptr) {
         out.status = FunctionStatus::kFault;
-        return out;
-    }
-    if (decl != nullptr && !decl->vision.preferred_camera.empty() &&
-        set->camera != decl->vision.preferred_camera) {
         return out;
     }
     if (set->exposureAt > in.now) {
@@ -164,7 +152,7 @@ AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
     // heading gate costs as much as one full translation gate.
     const double heading_weight = max_translation_error_m_ / max_heading_error_rad_;
 
-    LandmarkPoseObservationSet result;
+    FieldObjectPoseEvidenceSet result;
     for (const TagObservation& tag : set->tags) {
         // Detector quality first: bad decodes are not evidence. An enabled
         // gate whose value the detector did not report rejects; absent is
@@ -211,8 +199,8 @@ AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
             // Prior landmark pose in the odometry frame: the current world
             // estimate when one exists, else the nominal map pose.
             Pose2D T_field_landmark = lm.nominal;
-            const auto world_it     = in.world.objects.find(lm.id);
-            if (world_it != in.world.objects.end() && world_it->second.valid) {
+            const auto world_it     = in.field.objects.find(lm.id);
+            if (world_it != in.field.objects.end() && world_it->second.valid) {
                 T_field_landmark = world_it->second.pose.pose;
             }
             const Pose2D prior =
@@ -293,37 +281,14 @@ AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
             continue;
         }
 
-        if (decl != nullptr) {
-            // Evidence serves the active target; a decisive winner on
-            // another landmark is simply not this target's evidence.
-            if (best->landmark->id != decl->landmark) {
-                continue;
-            }
-            // A route may allow only specific mounts; a decisive winner
-            // outside that list abstains rather than being forced onto an
-            // allowed one.
-            if (!decl->vision.allowed_mounts.empty()) {
-                bool allowed = false;
-                for (const std::string& instance : decl->vision.allowed_mounts) {
-                    if (instance == best->mount->instance_id) {
-                        allowed = true;
-                        break;
-                    }
-                }
-                if (!allowed) {
-                    continue;
-                }
-            }
-        }
-
-        LandmarkPoseObservation entry;
-        entry.landmark          = best->landmark->id;
-        entry.mount_instance    = best->mount->instance_id;
-        entry.T_odom_landmark   = best->implied;
-        entry.exposureAt        = set->exposureAt;
-        entry.target_generation = decl != nullptr ? in.target.generation : 0;
-        entry.camera            = set->camera;
-        entry.frame_sequence    = set->frame_sequence;
+        FieldObjectPoseEvidence entry;
+        entry.object           = best->landmark->id;
+        entry.feature_instance = best->mount->instance_id;
+        entry.frame            = FrameId{"odometry"};
+        entry.T_frame_object   = best->implied;
+        entry.measuredAt       = set->exposureAt;
+        entry.source           = set->camera;
+        entry.source_sequence  = set->frame_sequence;
         // confidence reflects the same combined score the ranking used;
         // its maximum possible value is one translation gate plus one
         // heading gate worth of weighted error
@@ -335,7 +300,7 @@ AssociationOutput TagMountAssociation::run(const AssociationInput& in) {
         AssociationRecord record;
         record.measuredAt = set->exposureAt;
         record.payload    = TypedPayload::store(
-            std::move(result), payload_names::kLandmarkPoseObservationSet);
+            std::move(result), payload_names::kFieldObjectPoseEvidenceSet);
         out.associations.emplace(output_, std::move(record));
     }
     return out;

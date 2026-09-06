@@ -11,7 +11,10 @@
 //   landmark_relative + none: latch from the current committed landmark
 //     estimate (world state when valid, else the nominal map pose); zero
 //     visual correction, not a zero pose
-//   landmark_relative + acquire_once: buffer accepted evidence privately,
+//   landmark_relative + acquire_once: filter the generic field evidence by
+//     navigation intent (requested object, allowed feature mounts,
+//     preferred source, freshness, activation time - evidence measured
+//     before activation never acquires), buffer accepted evidence privately,
 //     at most one candidate per (camera, frame) so several mounts in one
 //     image count once, until the configured number of consistent results
 //     from distinct frames arrives; then latch the window's mean target
@@ -20,8 +23,9 @@
 //     use_nominal_target reads the immutable field map nominal, never a
 //     possibly-touched world estimate.
 //
-// World estimates are never mutated here: landmark estimation belongs to
-// the World Estimation slot and its explicit commit policy.
+// Field estimates are never mutated here: object estimation belongs to the
+// Field Estimation slot and its explicit commit policy, which runs
+// continuously and independently of any target.
 //
 // Activation, snapshotting, and acquisition all require a valid robot
 // estimate; a select command during startup defers until localization is

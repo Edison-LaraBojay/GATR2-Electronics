@@ -45,7 +45,7 @@ struct Fixture {
     ObservationMap   observations;
     AssociationMap   associations;
     RobotState       robot;
-    WorldState       world;
+    FieldState       field;
     CommandState     command;
     TargetState      target;
 
@@ -107,7 +107,7 @@ struct Fixture {
 
     PublishingInput publishingInput(int64_t now_ms = 100) {
         return PublishingInput{results, artifacts, observations, associations,
-                               robot,   world,     command,      target,
+                               robot,   field,     command,      target,
                                hostTime(now_ms)};
     }
 
@@ -187,7 +187,7 @@ TEST(BrainPublisher, WireMappingHealthAndUnits) {
                         <Gyro sensor_id="imu"/>
                         <BiasCal artifact_id="imu_orientation"/>
                     </Health>
-                    <WorldObject object_id="center_goal" wire_id="1"/>
+                    <FieldObject object_id="center_goal" wire_id="1"/>
                    </Publishing>)"),
         f.context, err);
     ASSERT_NE(publisher, nullptr) << err;
@@ -204,11 +204,11 @@ TEST(BrainPublisher, WireMappingHealthAndUnits) {
 
     f.command.object_requested = true;
     f.command.object_wire_id   = 1;
-    WorldObject goal;
+    FieldObjectState goal;
     goal.valid          = true;
     goal.pose.pose.x_m  = 1.8;
     goal.pose.pose.y_m  = 1.8;
-    f.world.objects[WorldObjectId{"center_goal"}] = goal;
+    f.field.objects[FieldObjectId{"center_goal"}] = goal;
 
     EXPECT_EQ(publisher->run(f.publishingInput()).status, FunctionStatus::kOk);
     const gatr2::PoseFrame p = f.decode();
@@ -239,7 +239,7 @@ TEST(BrainPublisher, UnmappedWireIdStaysInvalid) {
     ASSERT_NE(publisher, nullptr) << err;
 
     f.command.object_requested = true;
-    f.command.object_wire_id   = 99;   // no WorldObject mapping configured
+    f.command.object_wire_id   = 99;   // no FieldObject mapping configured
     publisher->run(f.publishingInput());
     const gatr2::PoseFrame p = f.decode();
     EXPECT_TRUE(p.status & gatr2::kStatusObjRequested);
@@ -253,7 +253,7 @@ TEST(BrainPublisher, LandmarkEntriesMapAndClamp) {
     auto        publisher = VexBrainPublisher::create(
         f.parse(R"(<Publishing type="vex_brain">
                     <Serial resource_id="brain_uart"/>
-                    <WorldObject object_id="center_goal" wire_id="9"/>
+                    <FieldObject object_id="center_goal" wire_id="9"/>
                     <Landmarks association_id="landmarks"/>
                    </Publishing>)"),
         f.context, err);
@@ -261,7 +261,7 @@ TEST(BrainPublisher, LandmarkEntriesMapAndClamp) {
 
     LandmarkAssociationSet set;
     LandmarkAssociationEntry seen;
-    seen.landmark    = WorldObjectId{"center_goal"};
+    seen.landmark    = FieldObjectId{"center_goal"};
     seen.dx_m        = 0.1234;
     seen.dy_m        = -99.0;   // beyond int16 mm on the wire
     seen.bearing_rad = 0.5;
@@ -269,7 +269,7 @@ TEST(BrainPublisher, LandmarkEntriesMapAndClamp) {
     set.entries.push_back(seen);
 
     LandmarkAssociationEntry unmapped;
-    unmapped.landmark = WorldObjectId{"mystery"};   // no wire id: not publishable
+    unmapped.landmark = FieldObjectId{"mystery"};   // no wire id: not publishable
     unmapped.quality  = 0.9;
     set.entries.push_back(unmapped);
 
@@ -306,8 +306,8 @@ TEST(BrainPublisher, StreamOffSendsNothingAndConfigErrors) {
     EXPECT_EQ(VexBrainPublisher::create(
                   f.parse(R"(<Publishing type="vex_brain">
                     <Serial resource_id="brain_uart"/>
-                    <WorldObject object_id="a" wire_id="1"/>
-                    <WorldObject object_id="b" wire_id="1"/>
+                    <FieldObject object_id="a" wire_id="1"/>
+                    <FieldObject object_id="b" wire_id="1"/>
                    </Publishing>)"),
                   f.context, err),
               nullptr);

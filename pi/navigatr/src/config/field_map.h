@@ -44,7 +44,7 @@ struct ApproachFrameDecl {
 };
 
 struct LandmarkDecl {
-    WorldObjectId id;
+    FieldObjectId id;
     Pose2D        nominal;   // T_field_landmark from the map
     std::vector<ApproachFrameDecl> approaches;
     std::vector<TagMountDecl>      mounts;
@@ -71,7 +71,7 @@ struct LandmarkDecl {
 struct FieldMap {
     std::vector<LandmarkDecl> landmarks;
 
-    const LandmarkDecl* find(const WorldObjectId& id) const {
+    const LandmarkDecl* find(const FieldObjectId& id) const {
         for (const LandmarkDecl& l : landmarks) {
             if (l.id == id) {
                 return &l;

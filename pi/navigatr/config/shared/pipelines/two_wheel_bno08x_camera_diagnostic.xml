@@ -24,10 +24,10 @@
         <Motion artifact_id="tracking_motion_delta"/>
     </Localization>
 
-    <WorldEstimation type="landmark_world">
+    <FieldEstimation type="landmark_field">
         <FieldMap resource_id="override_field"/>
         <Pipeline>
-            <ObservationExtraction type="apriltag_tag_observation" detect="always">
+            <ObservationExtraction type="apriltag_tag_observation">
                 <Camera sensor_id="front_camera"/>
                 <Detector resource_id="tag_detector"/>
                 <Output observation_id="tag_observations"/>
@@ -46,7 +46,7 @@
             </Association>
             <Estimator type="landmark_estimator" commit="always" blend="1.0"/>
         </Pipeline>
-    </WorldEstimation>
+    </FieldEstimation>
 
     <TargetResolution type="noop"/>
 

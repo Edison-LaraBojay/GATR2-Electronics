@@ -6,7 +6,7 @@
 #include <typeindex>
 
 #include "math/angles.h"
-#include "payloads/landmark_pose_observations.h"
+#include "payloads/field_object_evidence.h"
 #include "resources/resource_map.h"
 
 namespace navigatr
@@ -56,7 +56,7 @@ std::unique_ptr<TargetResolution> ConfiguredTargetResolution::create(
     const auto evidence = node.child("Evidence");
     if (evidence.valid()) {
         resolver->evidence_ref_ = AssociationId{evidence.attr("association_id")};
-        const std::type_index expected(typeid(LandmarkPoseObservationSet));
+        const std::type_index expected(typeid(FieldObjectPoseEvidenceSet));
         if (resolver->evidence_ref_.empty() ||
             !context.requireAssociation(resolver->evidence_ref_, &expected,
                                         evidence.path(), err)) {
@@ -81,8 +81,8 @@ Pose2D ConfiguredTargetResolution::estimateTargetPose(
     if (const auto* lm = field_->find(decl.landmark)) {
         T_field_landmark = lm->nominal;
     }
-    const auto it = in.world.objects.find(decl.landmark);
-    if (it != in.world.objects.end() && it->second.valid) {
+    const auto it = in.field.objects.find(decl.landmark);
+    if (it != in.field.objects.end() && it->second.valid) {
         T_field_landmark = it->second.pose.pose;
     }
     const auto T_odom_landmark =
@@ -174,27 +174,51 @@ TargetResolutionOutput ConfiguredTargetResolution::run(const TargetResolutionInp
     if (!evidence_ref_.empty() && in.robot.valid) {
         const auto it = in.associations.find(evidence_ref_);
         if (it != in.associations.end()) {
-            const auto* set = it->second.payload.get<LandmarkPoseObservationSet>();
+            const auto* set = it->second.payload.get<FieldObjectPoseEvidenceSet>();
             if (set == nullptr) {
                 out.status = FunctionStatus::kFault;
                 return out;
             }
-            // Best acceptable entry of this frame, by confidence.
-            const LandmarkPoseObservation* accepted = nullptr;
+            // Navigation-intent filtering happens here, never in generic
+            // association: the requested object, the route's allowed
+            // feature mounts and preferred source, freshness, and the
+            // activation time all gate which generic evidence may acquire
+            // this target. Best acceptable entry of this frame wins by
+            // confidence.
+            const FieldObjectPoseEvidence* accepted = nullptr;
             for (const auto& entry : set->entries) {
-                if (entry.target_generation != ts.generation ||
-                    entry.landmark != decl->landmark) {
-                    continue;   // stale generation or someone else's evidence
+                if (entry.object != decl->landmark ||
+                    entry.frame != FrameId{"odometry"}) {
+                    continue;   // someone else's evidence or a foreign frame
                 }
-                if ((in.now - entry.exposureAt) >
+                if (entry.measuredAt < ts.activatedAt) {
+                    continue;   // evidence older than activation never acquires
+                }
+                if ((in.now - entry.measuredAt) >
                     decl->vision.maximum_observation_age_ms) {
                     continue;
+                }
+                if (!decl->vision.preferred_camera.empty() &&
+                    entry.source != decl->vision.preferred_camera) {
+                    continue;
+                }
+                if (!decl->vision.allowed_mounts.empty()) {
+                    bool allowed = false;
+                    for (const auto& instance : decl->vision.allowed_mounts) {
+                        if (instance == entry.feature_instance) {
+                            allowed = true;
+                            break;
+                        }
+                    }
+                    if (!allowed) {
+                        continue;
+                    }
                 }
                 // Motion is gated at the moment of exposure, not at
                 // processing time: with camera latency those differ.
                 auto rate_at_exposure = std::fabs(in.robot.yaw_rate_rad_s);
                 double sampled        = 0.0;
-                if (in.robot.yawRateAt(entry.exposureAt, sampled)) {
+                if (in.robot.yawRateAt(entry.measuredAt, sampled)) {
                     rate_at_exposure = std::fabs(sampled);
                 }
                 if (rate_at_exposure >
@@ -202,8 +226,8 @@ TargetResolutionOutput ConfiguredTargetResolution::run(const TargetResolutionInp
                     continue;
                 }
                 if (acquisition_.have_frame &&
-                    entry.camera == acquisition_.last_frame_camera &&
-                    entry.frame_sequence == acquisition_.last_frame_sequence) {
+                    entry.source == acquisition_.last_frame_camera &&
+                    entry.source_sequence == acquisition_.last_frame_sequence) {
                     continue;   // this frame already contributed
                 }
                 if (accepted == nullptr || entry.confidence > accepted->confidence) {
@@ -213,11 +237,11 @@ TargetResolutionOutput ConfiguredTargetResolution::run(const TargetResolutionInp
 
             if (accepted != nullptr) {
                 acquisition_.have_frame          = true;
-                acquisition_.last_frame_camera   = accepted->camera;
-                acquisition_.last_frame_sequence = accepted->frame_sequence;
+                acquisition_.last_frame_camera   = accepted->source;
+                acquisition_.last_frame_sequence = accepted->source_sequence;
 
                 const auto candidate =
-                    decl->resolveFromLandmark(accepted->T_odom_landmark);
+                    decl->resolveFromLandmark(accepted->T_frame_object);
                 if (!acquisition_.target_candidates.empty()) {
                     const auto& prev = acquisition_.target_candidates.back();
                     const auto  dt =
@@ -233,7 +257,7 @@ TargetResolutionOutput ConfiguredTargetResolution::run(const TargetResolutionInp
                     }
                 }
                 acquisition_.target_candidates.push_back(candidate);
-                acquisition_.landmark_poses.push_back(accepted->T_odom_landmark);
+                acquisition_.landmark_poses.push_back(accepted->T_frame_object);
                 acquisition_.confidences.push_back(accepted->confidence);
 
                 if (static_cast<long>(acquisition_.target_candidates.size()) >=
@@ -260,13 +284,7 @@ TargetResolutionOutput ConfiguredTargetResolution::run(const TargetResolutionInp
                     ts.T_odom_robot_target = decl->resolveFromLandmark(landmark_odom);
                     ts.latched             = true;
                     ts.status              = TargetStatus::kLockedVision;
-                    // The single committed evidence handoff: exactly the
-                    // window that produced the latch, nothing else.
-                    ts.has_locked_landmark    = true;
-                    ts.locked_landmark        = decl->landmark;
-                    ts.T_odom_landmark_locked = landmark_odom;
-                    ts.locked_confidence      = conf / n;
-                    acquisition_              = AcquisitionBuffer{};
+                    acquisition_           = AcquisitionBuffer{};
                     return out;   // gate closed for this generation
                 }
             }

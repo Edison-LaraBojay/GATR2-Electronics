@@ -1,6 +1,6 @@
-// landmark_world.h
+// landmark_field.h
 // Composite world estimation for fiducial landmarks. It privately owns a
-// nested pipeline of three children and satisfies the same WorldEstimation
+// nested pipeline of three children and satisfies the same FieldEstimation
 // contract a leaf or a noop would:
 //
 //   ObservationExtraction (Perception contract)  camera frames -> canonical
@@ -18,16 +18,16 @@
 //
 // The estimator is deliberately not an open plugin point yet: it seeds
 // nominal poses from the field map, and its commit policy is explicit
-// configuration. commit="always" folds every decisive observation
-// (diagnostic and estimation profiles); commit="never" publishes evidence
-// without moving the world (traces only); commit="on_target_lock" folds
-// exactly the locked landmark estimate that target resolution latched
-// (TargetState.locked_landmark), once per generation. There is one
-// acceptance path: evidence the resolver rejected or never confirmed does
-// not exist here, so it can never move a landmark, and a nominal fallback
-// or cancellation leaves zero camera trace.
+// configuration. commit="always" (the normal mode) folds every accepted
+// evidence record; commit="never" publishes evidence without moving the
+// estimates (traces only). Estimation is continuous and target-blind: it
+// runs every cycle on whatever association accepted, and navigation state
+// can neither start, stop, nor reset it. Several accepted measurements of
+// one object in one cycle fuse deterministically by confidence-weighted
+// planar mean and circular heading mean, independent of iteration order,
+// and non-finite evidence never reaches state.
 //
-//   <WorldEstimation type="landmark_world">
+//   <FieldEstimation type="landmark_field">
 //       <FieldMap resource_id="game_field"/>
 //       <Pipeline>
 //           <ObservationExtraction type="apriltag_tag_observation">
@@ -38,7 +38,7 @@
 //           </Association>
 //           <Estimator type="landmark_estimator" commit="always" blend="1.0"/>
 //       </Pipeline>
-//   </WorldEstimation>
+//   </FieldEstimation>
 
 #pragma once
 #include <memory>
@@ -47,20 +47,20 @@
 #include "config/field_map.h"
 #include "contracts/association.h"
 #include "contracts/perception.h"
-#include "contracts/world_estimation.h"
-#include "payloads/landmark_pose_observations.h"
+#include "contracts/field_estimation.h"
+#include "payloads/field_object_evidence.h"
 
 namespace navigatr
 {
 
-class LandmarkWorldEstimation : public WorldEstimation
+class LandmarkFieldEstimation : public FieldEstimation
 {
 public:
-    static std::unique_ptr<WorldEstimation> create(const ConfigNode& node,
+    static std::unique_ptr<FieldEstimation> create(const ConfigNode& node,
                                                    SlotInitializationContext& context,
                                                    std::string& err);
 
-    WorldEstimationOutput run(const WorldEstimationInput& in) override;
+    FieldEstimationOutput run(const FieldEstimationInput& in) override;
 
     std::vector<ObservationOutputDecl> producesObservations() const override;
     std::vector<AssociationOutputDecl> producesAssociations() const override;
@@ -68,11 +68,10 @@ public:
     void reset() override {
         observation_extraction_->reset();
         association_->reset();
-        last_committed_generation_ = 0;
     }
 
 private:
-    enum class CommitPolicy { kAlways, kNever, kOnTargetLock };
+    enum class CommitPolicy { kAlways, kNever };
 
     std::unique_ptr<Perception>  observation_extraction_;
     std::unique_ptr<Association> association_;
@@ -81,10 +80,6 @@ private:
     AssociationId                   evidence_ref_;   // association child's output
     CommitPolicy                    commit_ = CommitPolicy::kAlways;
     double                          blend_  = 1.0;
-
-    // on_target_lock only: the last generation whose locked landmark was
-    // folded, so each lock commits exactly once.
-    uint64_t last_committed_generation_ = 0;
 };
 
 } // namespace navigatr

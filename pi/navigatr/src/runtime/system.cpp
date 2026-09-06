@@ -216,7 +216,7 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     }
     if (!checkChildren(pipeline,
                        {"CommandCollection", "Preprocessing", "Localization",
-                        "WorldEstimation", "TargetResolution", "Publishing"},
+                        "FieldEstimation", "TargetResolution", "Publishing"},
                        {}, err)) {
         return false;
     }
@@ -286,15 +286,15 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
                    slot_context, slot_labels_[2])) {
         return false;
     }
-    if (!buildSlot("WorldEstimation", world_estimation_,
-                   Tag<WorldEstimationMakeFunction>{}, slot_context, slot_labels_[3])) {
+    if (!buildSlot("FieldEstimation", field_estimation_,
+                   Tag<FieldEstimationMakeFunction>{}, slot_context, slot_labels_[3])) {
         return false;
     }
     // Later slots reference only what world estimation declares it
     // publishes across the boundary, never a composite implementation
     // detail.
-    slot_context.observations = world_estimation_->producesObservations();
-    slot_context.associations = world_estimation_->producesAssociations();
+    slot_context.observations = field_estimation_->producesObservations();
+    slot_context.associations = field_estimation_->producesAssociations();
     observation_decls_        = slot_context.observations;
     association_decls_        = slot_context.associations;
 
@@ -398,22 +398,22 @@ void System::step(MonotonicTime now) {
         }
     }
 
-    WorldEstimationOutput world_out = world_estimation_->run(
-        {sensor_results_, pre_out.artifacts, robot_, world_, command_, target_, now});
-    enforceDeclared(world_out.observations, observation_decls_, slot_labels_[3]);
-    enforceDeclared(world_out.associations, association_decls_, slot_labels_[3]);
-    world_ = world_out.world;
-    diagnostics_.note(slot_labels_[3], world_out.status);
+    FieldEstimationOutput field_out = field_estimation_->run(
+        {sensor_results_, pre_out.artifacts, robot_, field_, now});
+    enforceDeclared(field_out.observations, observation_decls_, slot_labels_[3]);
+    enforceDeclared(field_out.associations, association_decls_, slot_labels_[3]);
+    field_ = field_out.field;
+    diagnostics_.note(slot_labels_[3], field_out.status);
 
     TargetResolutionOutput target_out = target_resolution_->run(
-        {command_, robot_, world_, world_out.observations, world_out.associations,
+        {command_, robot_, field_, field_out.observations, field_out.associations,
          target_, now});
     target_ = target_out.target;
     diagnostics_.note(slot_labels_[4], target_out.status);
 
     PublishingOutput pub_out =
-        publishing_->run({sensor_results_, pre_out.artifacts, world_out.observations,
-                          world_out.associations, robot_, world_, command_, target_, now});
+        publishing_->run({sensor_results_, pre_out.artifacts, field_out.observations,
+                          field_out.associations, robot_, field_, command_, target_, now});
     diagnostics_.note(slot_labels_[5], pub_out.status);
 }
 
@@ -428,7 +428,7 @@ void System::reset() {
     commands_->reset();
     preprocessing_->reset();
     localization_->reset();
-    world_estimation_->reset();
+    field_estimation_->reset();
     target_resolution_->reset();
     publishing_->reset();
 
@@ -438,7 +438,7 @@ void System::reset() {
 
     robot_                = RobotState{};
     robot_.odometry_epoch = next_epoch;
-    world_                = WorldState{};
+    field_                = FieldState{};
     command_              = CommandState{};
     target_               = TargetState{};
 }

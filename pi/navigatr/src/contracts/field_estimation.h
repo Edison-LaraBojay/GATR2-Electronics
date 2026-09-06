@@ -1,4 +1,4 @@
-// world_estimation.h
+// field_estimation.h
 // World Estimation slot: external-state estimation, nothing else. The
 // selected implementation may be a leaf, an explicit noop, or a composite
 // that privately owns observation extraction, association, and one or more
@@ -10,9 +10,9 @@
 // boundary because target resolution and publishing genuinely consume them;
 // everything else a composite computes stays private to it.
 //
-// Autonomous intent does not live here: TargetState belongs to the Target
-// Resolution slot. The previous target state is an input only so evidence
-// gating (which target generation produced this) stays possible.
+// Autonomous intent does not live here at all: field estimation runs every
+// cycle on whatever evidence its children accept, whether or not any
+// navigation target exists, and TargetState belongs to Target Resolution.
 
 #pragma once
 #include <functional>
@@ -23,37 +23,33 @@
 #include "contracts/slot_init.h"
 #include "core/function_status.h"
 #include "core/records.h"
-#include "state/command_state.h"
 #include "state/robot_state.h"
-#include "state/target_state.h"
-#include "state/world_state.h"
+#include "state/field_state.h"
 
 namespace navigatr
 {
 
-struct WorldEstimationInput {
+struct FieldEstimationInput {
     const SensorResultsMap& sensorResults;
     const ArtifactMap&      artifacts;
     const RobotState&       robot;   // this cycle's estimate, with history
-    const WorldState&       previousWorld;
-    const CommandState&     command;
-    const TargetState&      previousTarget;
+    const FieldState&       previousField;
     MonotonicTime           now;   // host clock
 };
 
-struct WorldEstimationOutput {
-    WorldState     world;
+struct FieldEstimationOutput {
+    FieldState     field;
     ObservationMap observations;   // published evidence, may be empty
     AssociationMap associations;   // published evidence, may be empty
     FunctionStatus status = FunctionStatus::kOk;
 };
 
-class WorldEstimation
+class FieldEstimation
 {
 public:
-    virtual ~WorldEstimation() = default;
+    virtual ~FieldEstimation() = default;
 
-    virtual WorldEstimationOutput run(const WorldEstimationInput& in) = 0;
+    virtual FieldEstimationOutput run(const FieldEstimationInput& in) = 0;
 
     // Declared published outputs, for build-time reference checks by later
     // slots. A composite reports what its children publish across the
@@ -64,7 +60,7 @@ public:
     virtual void reset() {}
 };
 
-using WorldEstimationMakeFunction = std::function<std::unique_ptr<WorldEstimation>(
+using FieldEstimationMakeFunction = std::function<std::unique_ptr<FieldEstimation>(
     const ConfigNode&, SlotInitializationContext&, std::string& err)>;
 
 } // namespace navigatr

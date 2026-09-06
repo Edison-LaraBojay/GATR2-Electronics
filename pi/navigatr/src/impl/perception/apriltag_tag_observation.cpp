@@ -47,14 +47,6 @@ std::unique_ptr<Perception> AprilTagObservationPerception::create(
         return nullptr;
     }
 
-    const std::string detect = node.attr("detect", "on_demand");
-    if (detect == "always") {
-        perception->always_detect_ = true;
-    } else if (detect != "on_demand") {
-        err = node.path() + ": detect must be on_demand or always, not \"" + detect +
-              "\"";
-        return nullptr;
-    }
     return perception;
 }
 
@@ -66,13 +58,6 @@ std::vector<ObservationOutputDecl> AprilTagObservationPerception::produces() con
 
 PerceptionOutput AprilTagObservationPerception::run(const PerceptionInput& in) {
     PerceptionOutput out;
-
-    // The camera stays warm; the detector only earns its cycle time while
-    // something is actually acquiring, unless diagnostics ask for always.
-    if (!always_detect_ &&
-        !(in.target.active && in.target.status == TargetStatus::kPendingAcquisition)) {
-        return out;
-    }
 
     const StoredSensorSample* stored = camera_.freshStored(in.sensorResults);
     if (stored == nullptr) {

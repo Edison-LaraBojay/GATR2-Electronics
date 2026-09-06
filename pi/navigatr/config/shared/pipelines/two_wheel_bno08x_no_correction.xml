@@ -23,7 +23,7 @@
         <Motion artifact_id="tracking_motion_delta"/>
     </Localization>
 
-    <WorldEstimation type="noop"/>
+    <FieldEstimation type="noop"/>
 
     <TargetResolution type="noop"/>
 

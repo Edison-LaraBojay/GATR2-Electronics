@@ -44,7 +44,7 @@ const char* kConfig = R"(
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
         <Localization type="noop"/>
-        <WorldEstimation type="noop"/>
+        <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -242,7 +242,7 @@ TEST(Sensors, SilentOpenLinkGoesUnavailableNotValidForever) {
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
         <Localization type="noop"/>
-        <WorldEstimation type="noop"/>
+        <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -327,7 +327,7 @@ TEST(Sensors, FaultRetainsHistoricalSample) {
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
         <Localization type="noop"/>
-        <WorldEstimation type="noop"/>
+        <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -366,7 +366,7 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
         <Localization type="noop"/>
-        <WorldEstimation type="noop"/>
+        <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>

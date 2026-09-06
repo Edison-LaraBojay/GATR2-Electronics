@@ -20,7 +20,7 @@ constexpr const char* kLandmarkAssociationSet = "association.landmark_set";
 } // namespace payload_names
 
 struct LandmarkAssociationEntry {
-    WorldObjectId landmark;   // matches a configured landmark object
+    FieldObjectId landmark;   // matches a configured landmark object
 
     // live relative transform, robot frame
     double dx_m        = 0.0;

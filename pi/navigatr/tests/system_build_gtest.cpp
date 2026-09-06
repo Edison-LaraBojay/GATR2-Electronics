@@ -25,7 +25,7 @@ const char* kAllNoop = R"(
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
         <Localization type="noop"/>
-        <WorldEstimation type="noop"/>
+        <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -59,7 +59,7 @@ TEST(SystemBuild, AllNoopBuildsStepsAndPersistsCommandState) {
     }
     EXPECT_EQ(system->cycle(), 5u);
     EXPECT_FALSE(system->robot().valid);
-    EXPECT_TRUE(system->world().objects.empty());
+    EXPECT_TRUE(system->field().objects.empty());
     // no update carries the previous command state forward unchanged
     EXPECT_TRUE(system->command().stream_on);
     EXPECT_EQ(system->command().init_sequence, 0u);
@@ -68,11 +68,11 @@ TEST(SystemBuild, AllNoopBuildsStepsAndPersistsCommandState) {
 
 TEST(SystemBuild, MissingSlotIsAnError) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<WorldEstimation type=\"noop\"/>", "")
+    EXPECT_EQ(tryBuild(withSlot("<FieldEstimation type=\"noop\"/>", "")
                            .c_str(),
                        err),
               nullptr);
-    EXPECT_NE(err.find("WorldEstimation"), std::string::npos);
+    EXPECT_NE(err.find("FieldEstimation"), std::string::npos);
     EXPECT_NE(err.find("noop"), std::string::npos);   // the message names the fix
 }
 
@@ -110,16 +110,16 @@ TEST(SystemBuild, WrongCategoryKeyCannotBeConstructed) {
 
 TEST(SystemBuild, DuplicateSlotAndUnknownChildrenRejected) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<WorldEstimation type=\"noop\"/>",
-                                "<WorldEstimation type=\"noop\"/>"
-                                "<WorldEstimation type=\"noop\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<FieldEstimation type=\"noop\"/>",
+                                "<FieldEstimation type=\"noop\"/>"
+                                "<FieldEstimation type=\"noop\"/>")
                            .c_str(),
                        err),
               nullptr);
-    EXPECT_NE(err.find("more than one WorldEstimation"), std::string::npos);
+    EXPECT_NE(err.find("more than one FieldEstimation"), std::string::npos);
 
-    EXPECT_EQ(tryBuild(withSlot("<WorldEstimation type=\"noop\"/>",
-                                "<WorldEstimation type=\"noop\"/>"
+    EXPECT_EQ(tryBuild(withSlot("<FieldEstimation type=\"noop\"/>",
+                                "<FieldEstimation type=\"noop\"/>"
                                 "<Perceptron type=\"noop\"/>")
                            .c_str(),
                        err),
@@ -166,7 +166,7 @@ TEST(SystemBuild, ErrorsCarryPathIdAndType) {
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
         <Localization type="noop"/>
-        <WorldEstimation type="noop"/>
+        <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -212,7 +212,7 @@ TEST(SystemBuild, DeclarationReorderingChangesNothing) {
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
         <Localization type="noop"/>
-        <WorldEstimation type="noop"/>
+        <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -251,10 +251,10 @@ TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
         });
 
     // A world estimation that emits an observation it never declared.
-    struct LiarWorld : WorldEstimation {
-        WorldEstimationOutput run(const WorldEstimationInput& in) override {
-            WorldEstimationOutput out;
-            out.world = in.previousWorld;
+    struct LiarWorld : FieldEstimation {
+        FieldEstimationOutput run(const FieldEstimationInput& in) override {
+            FieldEstimationOutput out;
+            out.field = in.previousField;
             ObservationRecord record;
             record.payload = TypedPayload::store(ImuSample{1.0},
                                                  payload_names::kImuSample);
@@ -262,8 +262,8 @@ TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
             return out;
         }
     };
-    functions.add<WorldEstimationMakeFunction>(
-        FunctionKey{"liar_world"},
+    functions.add<FieldEstimationMakeFunction>(
+        FunctionKey{"liar_field"},
         [](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<LiarWorld>();
         });
@@ -299,7 +299,7 @@ TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
         <Localization type="noop"/>
-        <WorldEstimation type="liar_world"/>
+        <FieldEstimation type="liar_field"/>
         <TargetResolution type="capture"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -318,7 +318,7 @@ TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
     // the undeclared observation was dropped before anyone downstream saw it
     EXPECT_EQ(*seen, 0u);
     EXPECT_EQ(system->diagnostics()
-                  .functions.count("WorldEstimation/liar_world/undeclared_output:ghost"),
+                  .functions.count("FieldEstimation/liar_field/undeclared_output:ghost"),
               1u);
 }
 
@@ -357,14 +357,14 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
             return LocalizationOutput{in.previous, FunctionStatus::kOk};
         }
     };
-    struct ProbeWorld : WorldEstimation {
+    struct ProbeField : FieldEstimation {
         std::shared_ptr<std::vector<std::string>> log;
-        explicit ProbeWorld(std::shared_ptr<std::vector<std::string>> l)
+        explicit ProbeField(std::shared_ptr<std::vector<std::string>> l)
             : log(std::move(l)) {}
-        WorldEstimationOutput run(const WorldEstimationInput& in) override {
-            log->push_back("world_estimation");
-            WorldEstimationOutput out;
-            out.world = in.previousWorld;
+        FieldEstimationOutput run(const FieldEstimationInput& in) override {
+            log->push_back("field_estimation");
+            FieldEstimationOutput out;
+            out.field = in.previousField;
             return out;
         }
     };
@@ -402,10 +402,10 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<ProbeLocalization>(log);
         });
-    functions.add<WorldEstimationMakeFunction>(
+    functions.add<FieldEstimationMakeFunction>(
         FunctionKey{"probe"},
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
-            return std::make_unique<ProbeWorld>(log);
+            return std::make_unique<ProbeField>(log);
         });
     functions.add<TargetResolutionMakeFunction>(
         FunctionKey{"probe"},
@@ -426,7 +426,7 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
         <Publishing type="probe"/>
         <TargetResolution type="probe"/>
         <CommandCollection type="probe"/>
-        <WorldEstimation type="probe"/>
+        <FieldEstimation type="probe"/>
         <Localization type="probe"/>
         <Preprocessing type="probe"/>
     </Pipeline>
@@ -438,6 +438,6 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
 
     system->step(hostTime(1));
     EXPECT_EQ(*log, (std::vector<std::string>{"commands", "preprocessing", "localization",
-                                              "world_estimation", "target_resolution",
+                                              "field_estimation", "target_resolution",
                                               "publishing"}));
 }

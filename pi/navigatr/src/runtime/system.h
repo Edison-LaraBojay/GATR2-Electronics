@@ -32,7 +32,7 @@
 #include "contracts/publishing.h"
 #include "contracts/sensor.h"
 #include "contracts/target_resolution.h"
-#include "contracts/world_estimation.h"
+#include "contracts/field_estimation.h"
 #include "core/diagnostics.h"
 #include "core/function_registry.h"
 #include "resources/resource_map.h"
@@ -41,7 +41,7 @@
 #include "state/command_state.h"
 #include "state/robot_state.h"
 #include "state/target_state.h"
-#include "state/world_state.h"
+#include "state/field_state.h"
 
 namespace navigatr
 {
@@ -86,7 +86,7 @@ public:
 
     const SensorResultsMap& sensorResults() const { return sensor_results_; }
     const RobotState&       robot() const { return robot_; }
-    const WorldState&       world() const { return world_; }
+    const FieldState&       field() const { return field_; }
     const CommandState&     command() const { return command_; }
     const TargetState&      target() const { return target_; }
     Diagnostics&            diagnostics() { return diagnostics_; }
@@ -149,7 +149,7 @@ private:
     std::unique_ptr<Commands>         commands_;
     std::unique_ptr<Preprocessing>    preprocessing_;
     std::unique_ptr<Localization>     localization_;
-    std::unique_ptr<WorldEstimation>  world_estimation_;
+    std::unique_ptr<FieldEstimation>  field_estimation_;
     std::unique_ptr<TargetResolution> target_resolution_;
     std::unique_ptr<Publishing>       publishing_;
     std::string                       slot_labels_[6];
@@ -157,7 +157,7 @@ private:
     uint64_t         cycle_ = 0;
     SensorResultsMap sensor_results_;
     RobotState       robot_;
-    WorldState       world_;
+    FieldState       field_;
     CommandState     command_;
     TargetState      target_;
     Diagnostics      diagnostics_;

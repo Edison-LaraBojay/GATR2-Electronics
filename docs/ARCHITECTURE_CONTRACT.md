@@ -140,8 +140,8 @@ transports the record without interpreting its payload.
 | `SensorResultsMap` | `SensorRecord` | Retained sensor publications and their metadata. |
 | `ArtifactMap` | `ArtifactRecord` | Preprocessed computational values. |
 | `ObservationMap` | `ObservationRecord` or typed observation collection | Facts inferred from artifacts before association. |
-| `AssociationMap` | `AssociationRecord` | Accepted observation-to-world relationships or explicit abstentions. |
-| `WorldState` | `WorldObjectRecord` | Estimates of external objects, including landmarks. |
+| `AssociationMap` | `AssociationRecord` | Accepted observation-to-field-object relationships or explicit abstentions. |
+| `FieldState` | `FieldObjectState` | Estimates of configured field objects, including landmarks. |
 
 `ResourceMap` and `SensorMap` store active runtime objects. They do not store
 sensor measurements. `SensorResultsMap` is the output of executing the
@@ -286,10 +286,10 @@ Sensor Collection -> SensorResultsMap -> Preprocessing -> ArtifactMap
                                                        Corrected RobotState
                                                                     |
                                                                     v
-                                                          World Estimation
+                                                          Field Estimation
                                                                     |
                                                                     v
-                                                               WorldState
+                                                               FieldState
                                                                     |
                                     CommandState + target definitions + robot state
                                                                     |
@@ -307,9 +307,17 @@ Observation Extraction may run independently of the current pose prediction.
 Association often requires the predicted robot pose to determine which
 physical world object could have produced an observation. Robot Pose
 Correction consumes the prediction it may correct; it is not an independent
-replacement for Localization. World Estimation runs before Target Resolution
+replacement for Localization. Field Estimation runs before Target Resolution
 so a newly committed landmark estimate can affect the resolved target in the
 same logical update.
+
+In the implemented runtime the top-level slots are Command Collection,
+Preprocessing, Localization, Field Estimation, Target Resolution, and
+Publishing. Observation Extraction and Association execute as private
+children of the selected Field Estimation composite, behind the same
+standard contracts drawn above; Robot Pose Correction belongs inside the
+selected Localization implementation. A parent may be a leaf, an explicit
+no-op, or a composite - the coordinator never learns which.
 
 The architectural name is **Observation Extraction** rather than a
 camera-specific interpretation of perception. It may produce AprilTag
@@ -384,13 +392,16 @@ object produced them.
 ### Association
 
 ```text
-Input:  ObservationMap + Predicted RobotState + WorldState + active context
+Input:  ObservationMap + Predicted RobotState + prior FieldState
 Output: AssociationMap
 ```
 
-It determines which physical world object, if any, could have produced an
-observation. Abstention is a valid result when the evidence is ambiguous or
-invalid.
+It determines which physical field object and configured feature, if any,
+could have produced an observation, and emits immutable associated evidence
+with provenance (`FieldObjectPoseEvidence`). Abstention is a valid result
+when the evidence is ambiguous or invalid. Association is target-blind:
+navigation intent (requested object, allowed features, preferred sources,
+activation time) is filtered in Target Resolution, never here.
 
 ### Robot Pose Correction
 
@@ -407,27 +418,38 @@ The initial AprilTag behavior does **not** correct the robot. Its configured
 Robot Pose Correction implementation is explicitly `type="noop"`, whose output
 is the unchanged predicted `RobotState`.
 
-### World Estimation
+### Field Estimation
 
 ```text
-Input:  previous WorldState + Corrected RobotState + observations/associations
-Output: WorldState
+Input:  previous FieldState + Corrected RobotState + observations/associations
+Output: FieldState
 ```
 
 It updates external state such as landmark estimates, tracked objects, or
-occupancy. It does not own the robot pose.
+occupancy. It does not own the robot pose, and it runs every cycle
+regardless of navigation state: no target request can start, stop, gate, or
+reset it. Estimates are field-framed and unbounded - shared global frame
+error cancels during relative targeting, so an estimate is never clamped to
+or rejected for the nominal field boundary. A fault in a child leaves the
+prior FieldState untouched. Multiple accepted measurements of one object in
+one cycle fuse deterministically, independent of iteration order.
 
 ### Target Resolution
 
 ```text
 Input:  CommandState + configured target definitions
-        + Corrected RobotState + WorldState
+        + Corrected RobotState + FieldState + published evidence
 Output: ResolvedTargetState
 ```
 
 It converts a semantic target selection into a concrete navigation target.
 Examples include a one-time robot-relative displacement, an absolute field
-target, and an offset from an estimated landmark.
+target, and an offset from an estimated landmark. All navigation-intent
+filtering of generic evidence lives here: the requested field object, the
+route's allowed feature instances and preferred source, freshness, and the
+activation time (evidence measured before activation never acquires the
+target). Selecting or clearing a target must not reset FieldState or
+disable extraction and association.
 
 ### Publishing
 
@@ -454,7 +476,7 @@ tracking wheels + IMU
     -> no-op Observation Extraction
     -> no-op Association
     -> no-op Robot Pose Correction
-    -> no-op World Estimation
+    -> no-op Field Estimation
 ```
 
 The architecture remains unchanged when more capable implementations are
@@ -468,15 +490,15 @@ must declare what is treated as the anchor.
 
 ### Trust robot odometry and estimate the landmark
 
-This is the initial AprilTag target-acquisition policy:
+This is the initial AprilTag policy:
 
 ```text
 Localization:             wheel/IMU prediction
-Observation Extraction:   AprilTag observations
-Association:              physical tag-mount association
+Observation Extraction:   AprilTag observations (continuous)
+Association:              physical tag-mount association (continuous)
 Robot Pose Correction:    explicit no-op
-World Estimation:          acquire-once landmark estimation
-Target Resolution:        landmark-relative target resolution
+Field Estimation:         continuous landmark estimation
+Target Resolution:        acquire-once landmark-relative target resolution
 ```
 
 The observation is transformed as:
@@ -486,17 +508,18 @@ T_odom_landmark =
     T_odom_robot * T_robot_camera * T_camera_tag * T_tag_landmark
 ```
 
-After a configured number of fresh, mutually consistent observations, World
-Estimation atomically commits the selected landmark estimate. Target Resolution
-then composes that committed landmark with the configured landmark-to-target
-offset. Wheel/IMU odometry remains smooth and unchanged.
+Field Estimation folds accepted evidence into the landmark estimates every
+cycle. Independently, after a configured number of fresh, mutually
+consistent observations measured since target activation, Target Resolution
+latches the navigation target from its own privately buffered evidence
+window. Wheel/IMU odometry remains smooth and unchanged in both paths.
 
 ### Trust an absolute landmark and correct the robot
 
 A future implementation may instead hold a verified landmark map fixed and use
-the observation to estimate robot pose. That implementation belongs in Robot
-Pose Correction and must explicitly describe how it updates the robot state or
-field-to-odometry transform.
+the observation to estimate robot pose. That implementation belongs to a
+robot-pose-correcting localization implementation and must explicitly
+describe how it updates the robot state or field-to-odometry transform.
 
 ### Do not double-count evidence
 
@@ -526,7 +549,7 @@ XML file, infer a wheel layout, or rebuild the pipeline.
 
 The contract describes the intended extensible system, not a claim that every
 example sensor or algorithm is currently implemented. In particular, the
-initial supported AprilTag direction is landmark estimation and target
-resolution with Robot Pose Correction configured as no-op. Real camera capture,
+initial supported AprilTag direction is continuous field estimation and
+acquire-once target resolution with robot pose correction absent (no-op). Real camera capture,
 tag detection, calibration, and deployment protocols must be verified
 independently before that profile is considered operational.

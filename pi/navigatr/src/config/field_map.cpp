@@ -16,7 +16,7 @@ bool parseFieldMap(const ConfigNode& node, bool allow_provisional, FieldMap& out
             return;
         }
         LandmarkDecl decl;
-        decl.id = WorldObjectId{lm.attr("id")};
+        decl.id = FieldObjectId{lm.attr("id")};
         if (decl.id.empty()) {
             err = lm.path() + ": Landmark needs id";
             ok  = false;

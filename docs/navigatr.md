@@ -1,7 +1,7 @@
 # navigatr architecture
 
 navigatr is the estimation program on the Pi. Sensors, sensor counts, wiring,
-shared buses, algorithms, wheel layouts, cameras, world estimation, and
+shared buses, algorithms, wheel layouts, cameras, field estimation, and
 publishers change through XML configuration and separately registered
 implementations, not through edits to the generic runtime.
 
@@ -25,7 +25,7 @@ exist.
 
 ```text
 Sensor Collection -> Command Collection -> Preprocessing
-  -> Localization -> World Estimation -> Target Resolution -> Publishing
+  -> Localization -> Field Estimation -> Target Resolution -> Publishing
 ```
 
 Resources initialize before runtime; they are not a pipeline step. The order
@@ -35,7 +35,7 @@ and execute in this sequence (there is a test that proves it).
 Each slot holds one selected implementation behind one contract, and that
 implementation may be a leaf, an explicit noop, or a composite that
 privately owns a nested pipeline. `configured_collection` nests a
-PreprocessingMap of preprocessors; `landmark_world` nests observation
+PreprocessingMap of preprocessors; `landmark_field` nests observation
 extraction (Perception contract), association (Association contract), and a
 landmark estimator with an explicit commit policy. Nested children are
 built from the same registry categories with explicit types, run only when
@@ -47,7 +47,7 @@ user-defined graph, and adding a new composite requires no coordinator
 change.
 
 Genericity is selective. Resources, sensors, preprocessing, localization,
-and world estimation are open registry categories because the robot is
+and field estimation are open registry categories because the robot is
 expected to vary there. Target Resolution and Publishing are focused domain
 logic driven by configuration (the target set, the transports); they have
 an explicit noop and a configured implementation, not an open plugin
@@ -55,7 +55,7 @@ ecosystem.
 
 Each step has a standard input and output contract (`contracts/`); the only
 cross-step data path is the standard result maps and states. Localization
-runs before world estimation so association inside it works against the
+runs before field estimation so association inside it works against the
 current cycle's predicted pose; any future robot pose correction belongs
 inside a localization composite, never bolted on from outside.
 
@@ -65,14 +65,14 @@ Every slot names its implementation with `type`, including intentional
 absence:
 
 ```xml
-<WorldEstimation type="noop"/>
+<FieldEstimation type="noop"/>
 ```
 
 Configuration errors, never silent behavior: missing slot, missing type,
 unknown type, missing dependency, incompatible payload type, duplicate id,
 duplicate output id. There are no implicit algorithm defaults, and each
 category has its own registered noop with documented semantics (preprocessing
-produces no artifacts, world estimation preserves the previous world and
+produces no artifacts, field estimation preserves the previous field state and
 publishes no evidence, target resolution preserves the previous target,
 publishing publishes nothing successfully, command collection carries the
 previous state forward). Composite children select their noops the same
@@ -258,36 +258,45 @@ bias collection runs the wheel baselines rebase continuously, motion above
 a small threshold restarts collection, and the first fused solve therefore
 never combines stale wheel travel with a short gyro interval.
 
-## Targets and correction gating
+## Field estimation and targets
+
+Field estimation is continuous and target-blind. Extraction, association,
+and the estimator run every cycle on whatever the sensors saw; navigation
+state can neither start, stop, nor reset them, and clearing a target
+request changes reporting, never estimation. The estimator's commit policy
+is explicit configuration: `always` (the normal mode) folds every accepted
+evidence record into the field estimates, `never` publishes evidence
+without moving them. Several accepted measurements of one object in one
+cycle fuse deterministically (confidence-weighted planar mean plus a
+circular heading mean), and non-finite evidence never reaches state.
+
+Association emits generic `FieldObjectPoseEvidence`: the configured object,
+the configured feature instance that won (a physical tag mount today, a
+line pair tomorrow), the implied object pose in its named frame, the
+exposure time, and source provenance. Nothing in it is navigation intent.
 
 Navigation targets are configuration (`target_set` resource): a
 landmark-relative target names a landmark, one of its approach frames, a
 controlled robot frame (`front_contact`, `rear_contact`, ...), and the
 desired controlled-frame pose; a robot-relative target names a delta
-snapshotted once per new command sequence. The `target_tracker` world
-prediction owns activation (edge triggered by the brain's select command),
-the vision policy (`none`, `acquire_once`; `continuous` is reserved),
-explicit timeout fallback, and generation stamping: evidence from a
-previous target generation or odometry epoch is discarded, never applied.
+snapshotted once per new command sequence. The `configured_targets`
+resolver owns activation (edge triggered by the brain's select command),
+the vision policy (`none`, `acquire_once`; `continuous` is reserved), and
+the explicit timeout fallback - and it alone filters the generic evidence
+by intent: the requested object, the route's allowed feature mounts and
+preferred source, freshness, and the activation time. Evidence measured
+before activation or in a previous odometry epoch never acquires a target.
 
-Acquisition is transactional with one acceptance path. Accepted evidence
-buffers privately inside target resolution, at most one candidate per
-(camera, frame) - three mounts in one image are one observation, not three
-- until the configured number of consistent results from distinct frames
-arrives. The lock latches the target and records the window's mean landmark
-pose in `TargetState`; that locked landmark is the only camera evidence the
-world estimation estimator may fold (`commit="on_target_lock"`, once per
-generation, on the following cycle). Evidence the resolver rejected or
-never confirmed does not exist anywhere else, so it can never move a
-landmark, and the `use_nominal_target` timeout fallback reads the immutable
-field map nominal - zero visual correction with zero trace of unconfirmed
-evidence. Activation, robot-relative
-snapshotting, and association all require a valid robot estimate; a select
-command during startup defers until localization is real instead of
-latching zeros. The AprilTag detector itself is target gated
-(`detect="on_demand"`): the camera stays warm, but detection runs only
-while something is acquiring unless the diagnostic `detect="always"` mode
-is configured.
+Acquisition is transactional. Accepted evidence buffers privately inside
+target resolution, at most one candidate per (source, frame) - three
+mounts in one image are one observation, not three - until the configured
+number of consistent results from distinct frames arrives; then the target
+latches in the odometry frame and the gate closes. The
+`use_nominal_target` timeout fallback reads the immutable field map
+nominal - zero visual correction - even when the continuous field estimate
+has legitimately moved. Activation, robot-relative snapshotting, and
+association all require a valid robot estimate; a select command during
+startup defers until localization is real instead of latching zeros.
 
 Association accepts evidence only through, in order: detector quality
 (hamming, decision margin; the reprojection-error and alternate-pose
@@ -321,10 +330,10 @@ names, a camera, an IMU, a field map, VEX wire ids, a publisher protocol, or
 one world estimator. Field maps are a typed resource
 (`field_map`) consumed only by implementations that reference them.
 Brain wire object ids live in publisher and command configuration, not in
-`WorldState`. Frame math (`T_a_b` compose/inverse, `FramedPose2D`) is shared
+`FieldState`. Frame math (`T_a_b` compose/inverse, `FramedPose2D`) is shared
 infrastructure; how it is used belongs to the selected implementations.
 
-Adding next season's sensor, observation extractor, world estimator, or
+Adding next season's sensor, observation extractor, field estimator, or
 nested classifier means: implement the standard interface, define private
 payload and config types, register the factory, write the XML, add tests.
 The executor, the generic builders, the registries, the map storage, and the

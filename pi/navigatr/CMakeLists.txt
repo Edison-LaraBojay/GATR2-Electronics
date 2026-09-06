@@ -45,9 +45,9 @@ set(NAVIGATR_SOURCES
     src/impl/perception/register_perception.cpp
     src/impl/association/tag_mount_association.cpp
     src/impl/association/register_association.cpp
-    src/impl/world_estimation/landmark_world.cpp
+    src/impl/field_estimation/landmark_field.cpp
     src/impl/target_resolution/configured_targets.cpp
-    src/impl/world_estimation/register_world_estimation.cpp
+    src/impl/field_estimation/register_field_estimation.cpp
     src/impl/target_resolution/register_target_resolution.cpp
     src/impl/publishing/vex_brain.cpp
     src/impl/publishing/register_publishers.cpp

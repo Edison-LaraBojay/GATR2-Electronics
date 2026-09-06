@@ -21,7 +21,7 @@
 #include "state/command_state.h"
 #include "state/robot_state.h"
 #include "state/target_state.h"
-#include "state/world_state.h"
+#include "state/field_state.h"
 
 namespace navigatr
 {
@@ -29,7 +29,7 @@ namespace navigatr
 struct TargetResolutionInput {
     const CommandState&   command;
     const RobotState&     robot;
-    const WorldState&     world;          // committed estimates only
+    const FieldState&     field;          // committed estimates only
     const ObservationMap& observations;   // world estimation's published evidence
     const AssociationMap& associations;
     const TargetState&    previous;

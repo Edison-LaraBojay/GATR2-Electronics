@@ -190,7 +190,7 @@ ResourceInstance make_target_set(const ConfigNode&              node,
                 ok = false;
                 return;
             }
-            decl.landmark         = WorldObjectId{landmark_raw};
+            decl.landmark         = FieldObjectId{landmark_raw};
             decl.approach_frame   = FrameId{approach_raw};
             decl.controlled_frame = FrameId{controlled_raw};
 
