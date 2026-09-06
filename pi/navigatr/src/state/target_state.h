@@ -51,7 +51,8 @@ struct TargetState {
     bool     latched        = false;
     uint64_t odometry_epoch = 0;   // epoch the latch belongs to
 
-    MonotonicTime activatedAt;   // host clock
+    MonotonicTime activatedAt;   // host clock; evidence older than this
+                                 // never acquires the target
 };
 
 } // namespace navigatr

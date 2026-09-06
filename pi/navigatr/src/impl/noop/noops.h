@@ -2,16 +2,17 @@
 // The explicit do-nothing implementation for every slot category, each with
 // its own registered key and documented semantics; there is no universal
 // noop callable. Selecting one in XML is a decision; omitting a slot is a
-// configuration error.
+// configuration error. Perception and association noops exist for composite
+// children as much as for slots.
 //
-//   preprocessing/noop     produces no artifacts
-//   perception/noop        produces no observations
-//   association/noop       produces no associations
-//   pose_correction/noop   passes the predicted pose through unchanged
-//   world_prediction/noop  preserves the previous world state
-//   publishing/noop        publishes nothing, successfully
-//   commands/noop          carries the previous command state forward
-//   localization/noop      preserves the previous robot state
+//   commands/noop           carries the previous command state forward
+//   preprocessing/noop      produces no artifacts
+//   localization/noop       preserves the previous robot state
+//   perception/noop         produces no observations
+//   association/noop        produces no associations
+//   field_estimation/noop   preserves the previous world, publishes no evidence
+//   target_resolution/noop  preserves the previous target state
+//   publishing/noop         publishes nothing, successfully
 
 #pragma once
 #include <memory>
@@ -21,10 +22,10 @@
 #include "contracts/commands.h"
 #include "contracts/localization.h"
 #include "contracts/perception.h"
-#include "contracts/pose_correction.h"
 #include "contracts/preprocessing.h"
 #include "contracts/publishing.h"
-#include "contracts/world_prediction.h"
+#include "contracts/target_resolution.h"
+#include "contracts/field_estimation.h"
 
 namespace navigatr
 {
@@ -43,14 +44,14 @@ std::unique_ptr<Perception>     makeNoopPerception(const ConfigNode&,
 std::unique_ptr<Association>    makeNoopAssociation(const ConfigNode&,
                                                     SlotInitializationContext&,
                                                     std::string&);
-std::unique_ptr<PoseCorrection> makeNoopPoseCorrection(const ConfigNode&,
-                                                       SlotInitializationContext&,
-                                                       std::string&);
-std::unique_ptr<WorldPrediction> makeNoopWorldPrediction(const ConfigNode&,
-                                                         SlotInitializationContext&,
-                                                         std::string&);
-std::unique_ptr<Publishing>      makeNoopPublishing(const ConfigNode&,
-                                                    SlotInitializationContext&,
-                                                    std::string&);
+std::unique_ptr<FieldEstimation>  makeNoopFieldEstimation(const ConfigNode&,
+                                                          SlotInitializationContext&,
+                                                          std::string&);
+std::unique_ptr<TargetResolution> makeNoopTargetResolution(const ConfigNode&,
+                                                           SlotInitializationContext&,
+                                                           std::string&);
+std::unique_ptr<Publishing>       makeNoopPublishing(const ConfigNode&,
+                                                     SlotInitializationContext&,
+                                                     std::string&);
 
 } // namespace navigatr

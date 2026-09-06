@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+NON-RUNNABLE UNTIL THE ROBOT DESCRIPTION EXISTS.
+
+This profile references shared/robots/gatr2_as5047_bno08x.xml, which is
+produced by measuring every value in gatr2_as5047_bno08x.xml.in. Until
+that file exists with provisional or verified calibration, resolution
+fails on purpose. The field map is provisional, so runs additionally
+need --allow-provisional until it is physically verified.
+-->
+<Configuration id="override_two_wheel_bno08x_diagnostic">
+    <ConfigurationName>Override two-wheel BNO08x diagnostic</ConfigurationName>
+    <Loop rate_hz="100"/>
+    <Robot file="../../shared/robots/gatr2_as5047_bno08x.xml"/>
+    <Pipeline file="../../shared/pipelines/two_wheel_bno08x_no_correction.xml"/>
+</Configuration>

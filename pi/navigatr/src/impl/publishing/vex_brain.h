@@ -14,7 +14,7 @@
 //           <Gyro sensor_id="robot_imu"/>
 //           <BiasCal artifact_id="imu_orientation"/>
 //       </Health>
-//       <WorldObject object_id="center_goal" wire_id="1"/>
+//       <FieldObject object_id="center_goal" wire_id="1"/>
 //       <Landmarks association_id="landmarks"/>   optional wire entries
 //   </Publishing>
 
@@ -53,7 +53,7 @@ private:
     long                  fresh_ms_ = 150;
 
     struct WireObject {
-        WorldObjectId object;
+        FieldObjectId object;
         uint8_t       wire_id = 0;
     };
     std::vector<WireObject> wire_objects_;

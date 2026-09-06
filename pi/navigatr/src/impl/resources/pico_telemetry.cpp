@@ -132,8 +132,10 @@ ResourceInstance make_pico_telemetry(const ConfigNode& node,
     if (link == nullptr) {
         return ResourceInstance{};
     }
-    return ResourceInstance::asContract<PicoTelemetry>(
-        std::make_shared<PicoTelemetry>(std::move(link), link_id.value));
+    auto telemetry = std::make_shared<PicoTelemetry>(std::move(link), link_id.value);
+    auto instance  = ResourceInstance::asContract<PicoTelemetry>(telemetry);
+    instance.setResetHook([telemetry] { telemetry->reset(); });
+    return instance;
 }
 
 } // namespace navigatr

@@ -83,6 +83,9 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "config error: %s\n", err.c_str());
         return 1;
     }
+    std::fprintf(stderr, "profile %s digest %016llx\n",
+                 system->configurationId().c_str(),
+                 static_cast<unsigned long long>(system->configurationDigest()));
     for (const std::string& warning : system->warnings()) {
         std::fprintf(stderr, "warning: %s\n", warning.c_str());
     }

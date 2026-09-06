@@ -4,12 +4,12 @@
 // detector-native optical and tag axes are converted; the conversion is one
 // fixed rotation pair, never per-configuration angle fudging.
 //
-// Detection is target gated: with detect="on_demand" (the default) the
-// expensive detector runs only while a target is pending acquisition;
-// detect="always" is the explicit diagnostic mode. Camera capture itself is
-// unaffected either way.
+// Extraction is continuous: every new camera frame is processed exactly
+// once, whether or not any navigation target exists. Scheduling policy, if
+// one is ever needed, is a source-side implementation concern and never
+// navigation state.
 //
-//   <Perception type="apriltag_tag_observation" detect="on_demand">
+//   <Perception type="apriltag_tag_observation">
 //       <Camera sensor_id="front_camera"/>
 //       <Detector resource_id="tag_detector"/>
 //       <Output observation_id="tag_observations"/>
@@ -47,7 +47,6 @@ private:
     TypedSensorBinding<CameraFramePayload> camera_;
     std::shared_ptr<TagDetector>           detector_;
     ObservationId                          output_;
-    bool                                   always_detect_ = false;
 
     // has_processed_ distinguishes "never ran" from a first frame whose
     // sequence happens to be zero.

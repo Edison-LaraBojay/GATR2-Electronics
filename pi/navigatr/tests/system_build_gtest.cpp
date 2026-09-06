@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "impl/noop/noops.h"
+#include "payloads/sensor_samples.h"
 #include "runtime/register_all.h"
 #include "runtime/system.h"
 
@@ -23,11 +24,9 @@ const char* kAllNoop = R"(
     <Pipeline>
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
-        <LocalizationPrediction type="noop"/>
-        <Perception type="noop"/>
-        <Association type="noop"/>
-        <PoseCorrection type="noop"/>
-        <WorldPrediction type="noop"/>
+        <Localization type="noop"/>
+        <FieldEstimation type="noop"/>
+        <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
 </System>
@@ -60,20 +59,20 @@ TEST(SystemBuild, AllNoopBuildsStepsAndPersistsCommandState) {
     }
     EXPECT_EQ(system->cycle(), 5u);
     EXPECT_FALSE(system->robot().valid);
-    EXPECT_TRUE(system->world().objects.empty());
+    EXPECT_TRUE(system->field().objects.empty());
     // no update carries the previous command state forward unchanged
     EXPECT_TRUE(system->command().stream_on);
     EXPECT_EQ(system->command().init_sequence, 0u);
-    EXPECT_EQ(system->diagnostics().functions.at("LocalizationPrediction/noop").runs, 5u);
+    EXPECT_EQ(system->diagnostics().functions.at("Localization/noop").runs, 5u);
 }
 
 TEST(SystemBuild, MissingSlotIsAnError) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<WorldPrediction type=\"noop\"/>", "")
+    EXPECT_EQ(tryBuild(withSlot("<FieldEstimation type=\"noop\"/>", "")
                            .c_str(),
                        err),
               nullptr);
-    EXPECT_NE(err.find("WorldPrediction"), std::string::npos);
+    EXPECT_NE(err.find("FieldEstimation"), std::string::npos);
     EXPECT_NE(err.find("noop"), std::string::npos);   // the message names the fix
 }
 
@@ -89,8 +88,8 @@ TEST(SystemBuild, MissingTypeIsAnError) {
 
 TEST(SystemBuild, UnknownTypeIsAnError) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<LocalizationPrediction type=\"noop\"/>",
-                                "<LocalizationPrediction type=\"quantum\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<Localization type=\"noop\"/>",
+                                "<Localization type=\"quantum\"/>")
                            .c_str(),
                        err),
               nullptr);
@@ -101,8 +100,8 @@ TEST(SystemBuild, WrongCategoryKeyCannotBeConstructed) {
     // a publisher-only name in the localization slot fails on signature,
     // while the shared name noop resolves per category
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<LocalizationPrediction type=\"noop\"/>",
-                                "<LocalizationPrediction type=\"vex_brain\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<Localization type=\"noop\"/>",
+                                "<Localization type=\"vex_brain\"/>")
                            .c_str(),
                        err),
               nullptr);
@@ -111,16 +110,16 @@ TEST(SystemBuild, WrongCategoryKeyCannotBeConstructed) {
 
 TEST(SystemBuild, DuplicateSlotAndUnknownChildrenRejected) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<Perception type=\"noop\"/>",
-                                "<Perception type=\"noop\"/>"
-                                "<Perception type=\"noop\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<FieldEstimation type=\"noop\"/>",
+                                "<FieldEstimation type=\"noop\"/>"
+                                "<FieldEstimation type=\"noop\"/>")
                            .c_str(),
                        err),
               nullptr);
-    EXPECT_NE(err.find("more than one Perception"), std::string::npos);
+    EXPECT_NE(err.find("more than one FieldEstimation"), std::string::npos);
 
-    EXPECT_EQ(tryBuild(withSlot("<Perception type=\"noop\"/>",
-                                "<Perception type=\"noop\"/>"
+    EXPECT_EQ(tryBuild(withSlot("<FieldEstimation type=\"noop\"/>",
+                                "<FieldEstimation type=\"noop\"/>"
                                 "<Perceptron type=\"noop\"/>")
                            .c_str(),
                        err),
@@ -166,11 +165,9 @@ TEST(SystemBuild, ErrorsCarryPathIdAndType) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
-        <LocalizationPrediction type="noop"/>
-        <Perception type="noop"/>
-        <Association type="noop"/>
-        <PoseCorrection type="noop"/>
-        <WorldPrediction type="noop"/>
+        <Localization type="noop"/>
+        <FieldEstimation type="noop"/>
+        <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
 </System>
@@ -214,11 +211,9 @@ TEST(SystemBuild, DeclarationReorderingChangesNothing) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Preprocessing type="noop"/>
-        <LocalizationPrediction type="noop"/>
-        <Perception type="noop"/>
-        <Association type="noop"/>
-        <PoseCorrection type="noop"/>
-        <WorldPrediction type="noop"/>
+        <Localization type="noop"/>
+        <FieldEstimation type="noop"/>
+        <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
 </System>
@@ -228,6 +223,103 @@ TEST(SystemBuild, DeclarationReorderingChangesNothing) {
     ASSERT_NE(system, nullptr) << err;
     EXPECT_NE(system->sensorCatalog().payloadOf(SensorId{"enc"}), nullptr);
     EXPECT_NE(system->sensorCatalog().payloadOf(SensorId{"robot_imu"}), nullptr);
+}
+
+
+TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
+    FunctionRegistry functions;
+    registerAll(functions);
+
+    // A sensor that declares one payload and publishes another.
+    functions.add<SensorMakeFunction>(
+        FunctionKey{"liar_sensor"},
+        [](const ConfigNode&, SensorInitializationContext&, std::string&) {
+            SensorExecutable executable;
+            executable.outputPayload =
+                PayloadDescriptor::of<EncoderSample>(payload_names::kEncoderSample);
+            executable.execute = [](const SensorExecutionInput&) {
+                SensorPollResult result;
+                result.state = SensorState::kValid;
+                SensorPublication publication;
+                publication.measuredAt = deviceTime(1);
+                publication.payload =
+                    TypedPayload::store(ImuSample{1.0}, payload_names::kImuSample);
+                result.publication = std::move(publication);
+                return result;
+            };
+            return std::optional<SensorExecutable>(std::move(executable));
+        });
+
+    // A world estimation that emits an observation it never declared.
+    struct LiarWorld : FieldEstimation {
+        FieldEstimationOutput run(const FieldEstimationInput& in) override {
+            FieldEstimationOutput out;
+            out.field = in.previousField;
+            ObservationRecord record;
+            record.payload = TypedPayload::store(ImuSample{1.0},
+                                                 payload_names::kImuSample);
+            out.observations.emplace(ObservationId{"ghost"}, std::move(record));
+            return out;
+        }
+    };
+    functions.add<FieldEstimationMakeFunction>(
+        FunctionKey{"liar_field"},
+        [](const ConfigNode&, SlotInitializationContext&, std::string&) {
+            return std::make_unique<LiarWorld>();
+        });
+
+    // A capture point downstream: what does target resolution actually see?
+    auto seen = std::make_shared<std::size_t>(99);
+    struct CaptureTargets : TargetResolution {
+        std::shared_ptr<std::size_t> seen;
+        explicit CaptureTargets(std::shared_ptr<std::size_t> s) : seen(std::move(s)) {}
+        TargetResolutionOutput run(const TargetResolutionInput& in) override {
+            *seen = in.observations.size();
+            return TargetResolutionOutput{in.previous, FunctionStatus::kOk};
+        }
+    };
+    functions.add<TargetResolutionMakeFunction>(
+        FunctionKey{"capture"},
+        [seen](const ConfigNode&, SlotInitializationContext&, std::string&) {
+            return std::make_unique<CaptureTargets>(seen);
+        });
+
+    const char* xml = R"(
+<System>
+    <Resources>
+        <Resource id="pico_uart" type="memory_link"/>
+        <Resource id="pico_telemetry" type="pico_telemetry">
+            <Serial resource_id="pico_uart"/>
+        </Resource>
+    </Resources>
+    <Sensors>
+        <Sensor id="liar" type="liar_sensor"/>
+    </Sensors>
+    <Pipeline>
+        <CommandCollection type="noop"/>
+        <Preprocessing type="noop"/>
+        <Localization type="noop"/>
+        <FieldEstimation type="liar_field"/>
+        <TargetResolution type="capture"/>
+        <Publishing type="noop"/>
+    </Pipeline>
+</System>)";
+    std::string err;
+    auto        system = System::buildFromString(xml, functions, err);
+    ASSERT_NE(system, nullptr) << err;
+    system->step(hostTime(1));
+
+    // the lying publication never entered the record and reads as a fault
+    const auto& record = system->sensorResults().at(SensorId{"liar"});
+    EXPECT_EQ(record.state, SensorState::kFault);
+    EXPECT_FALSE(record.latest.has_value());
+    EXPECT_NE(record.diagnostic.find("declared"), std::string::npos);
+
+    // the undeclared observation was dropped before anyone downstream saw it
+    EXPECT_EQ(*seen, 0u);
+    EXPECT_EQ(system->diagnostics()
+                  .functions.count("FieldEstimation/liar_field/undeclared_output:ghost"),
+              1u);
 }
 
 TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
@@ -265,41 +357,24 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
             return LocalizationOutput{in.previous, FunctionStatus::kOk};
         }
     };
-    struct ProbePerception : Perception {
+    struct ProbeField : FieldEstimation {
         std::shared_ptr<std::vector<std::string>> log;
-        explicit ProbePerception(std::shared_ptr<std::vector<std::string>> l)
+        explicit ProbeField(std::shared_ptr<std::vector<std::string>> l)
             : log(std::move(l)) {}
-        PerceptionOutput run(const PerceptionInput&) override {
-            log->push_back("perception");
-            return PerceptionOutput{};
+        FieldEstimationOutput run(const FieldEstimationInput& in) override {
+            log->push_back("field_estimation");
+            FieldEstimationOutput out;
+            out.field = in.previousField;
+            return out;
         }
     };
-    struct ProbeAssociation : Association {
+    struct ProbeTargets : TargetResolution {
         std::shared_ptr<std::vector<std::string>> log;
-        explicit ProbeAssociation(std::shared_ptr<std::vector<std::string>> l)
+        explicit ProbeTargets(std::shared_ptr<std::vector<std::string>> l)
             : log(std::move(l)) {}
-        AssociationOutput run(const AssociationInput&) override {
-            log->push_back("association");
-            return AssociationOutput{};
-        }
-    };
-    struct ProbeCorrection : PoseCorrection {
-        std::shared_ptr<std::vector<std::string>> log;
-        explicit ProbeCorrection(std::shared_ptr<std::vector<std::string>> l)
-            : log(std::move(l)) {}
-        PoseCorrectionOutput run(const PoseCorrectionInput& in) override {
-            log->push_back("pose_correction");
-            return PoseCorrectionOutput{in.predicted, FunctionStatus::kOk};
-        }
-    };
-    struct ProbeWorld : WorldPrediction {
-        std::shared_ptr<std::vector<std::string>> log;
-        explicit ProbeWorld(std::shared_ptr<std::vector<std::string>> l)
-            : log(std::move(l)) {}
-        WorldPredictionOutput run(const WorldPredictionInput& in) override {
-            log->push_back("world_prediction");
-            return WorldPredictionOutput{in.previousWorld, in.previousTarget,
-                                         FunctionStatus::kOk};
+        TargetResolutionOutput run(const TargetResolutionInput& in) override {
+            log->push_back("target_resolution");
+            return TargetResolutionOutput{in.previous, FunctionStatus::kOk};
         }
     };
     struct ProbePublishing : Publishing {
@@ -327,25 +402,15 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<ProbeLocalization>(log);
         });
-    functions.add<PerceptionMakeFunction>(
+    functions.add<FieldEstimationMakeFunction>(
         FunctionKey{"probe"},
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
-            return std::make_unique<ProbePerception>(log);
+            return std::make_unique<ProbeField>(log);
         });
-    functions.add<AssociationMakeFunction>(
+    functions.add<TargetResolutionMakeFunction>(
         FunctionKey{"probe"},
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
-            return std::make_unique<ProbeAssociation>(log);
-        });
-    functions.add<PoseCorrectionMakeFunction>(
-        FunctionKey{"probe"},
-        [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
-            return std::make_unique<ProbeCorrection>(log);
-        });
-    functions.add<WorldPredictionMakeFunction>(
-        FunctionKey{"probe"},
-        [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
-            return std::make_unique<ProbeWorld>(log);
+            return std::make_unique<ProbeTargets>(log);
         });
     functions.add<PublishingMakeFunction>(
         FunctionKey{"probe"},
@@ -359,13 +424,11 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
 <System>
     <Pipeline>
         <Publishing type="probe"/>
-        <Perception type="probe"/>
+        <TargetResolution type="probe"/>
         <CommandCollection type="probe"/>
-        <WorldPrediction type="probe"/>
-        <LocalizationPrediction type="probe"/>
-        <PoseCorrection type="probe"/>
+        <FieldEstimation type="probe"/>
+        <Localization type="probe"/>
         <Preprocessing type="probe"/>
-        <Association type="probe"/>
     </Pipeline>
 </System>
 )";
@@ -375,7 +438,6 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
 
     system->step(hostTime(1));
     EXPECT_EQ(*log, (std::vector<std::string>{"commands", "preprocessing", "localization",
-                                              "perception", "association",
-                                              "pose_correction", "world_prediction",
+                                              "field_estimation", "target_resolution",
                                               "publishing"}));
 }

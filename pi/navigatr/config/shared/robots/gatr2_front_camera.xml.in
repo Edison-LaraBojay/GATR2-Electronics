@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+THIS IS AN INTENTIONALLY NON-RUNNABLE TEMPLATE.
+
+Camera add-on for the GATR2 robot description: mounting frame, capture
+device, calibration, and the tag detector. It is a separate Robot fragment
+so wheel/IMU-only profiles never reference the camera stack and stay
+runnable the moment their own measurements exist. Camera profiles list both
+robot fragments.
+
+Every @...@ token must be measured/configured and every
+calibration_status="UNCONFIGURED" must become provisional or verified.
+Save the completed file as gatr2_front_camera.xml. Beyond measurements,
+running this stack also requires the real libcamera capture backend and the
+AprilTag detector adapter, which are not built into the binary yet.
+-->
+<Robot>
+
+    <Resources>
+        <!--
+        Camera engineering frame: origin at the optical center, +x the
+        looking direction, +y camera-left, +z camera-up; positive yaw looks
+        robot-left, positive pitch tilts downward.
+        -->
+        <Resource id="robot_geometry" type="robot_frame_map">
+            <Frame id="front_camera_engineering" parent_frame_id="robot_body"
+                   calibration_status="UNCONFIGURED">
+                <PoseOfChildInParent
+                    x_m="@MEASURE_CAMERA_FORWARD_POSITION_M@"
+                    y_m="@MEASURE_CAMERA_LEFT_POSITION_M@"
+                    z_m="@MEASURE_CAMERA_HEIGHT_M@"
+                    roll_deg="@MEASURE_CAMERA_ROLL_DEG@"
+                    pitch_deg="@MEASURE_CAMERA_DOWNWARD_PITCH_DEG@"
+                    yaw_deg="@MEASURE_CAMERA_LEFTWARD_YAW_DEG@"/>
+            </Frame>
+        </Resource>
+
+        <Resource id="front_camera_device" type="libcamera_camera">
+            <Device index="@SELECT_CAMERA_INDEX@"/>
+            <Capture width_px="@SELECT_CAPTURE_WIDTH_PX@"
+                     height_px="@SELECT_CAPTURE_HEIGHT_PX@"
+                     pixel_format="Y8"
+                     frame_rate_hz="@SELECT_CAPTURE_RATE_HZ@"/>
+            <Calibration calibration_status="UNCONFIGURED"
+                         calibration_id="@CALIBRATION_RUN_ID@">
+                <Intrinsics model="brown_conrady"
+                    calibrated_width_px="@CALIBRATED_WIDTH_PX@"
+                    calibrated_height_px="@CALIBRATED_HEIGHT_PX@"
+                    fx_px="@CALIBRATED_FX_PX@" fy_px="@CALIBRATED_FY_PX@"
+                    cx_px="@CALIBRATED_CX_PX@" cy_px="@CALIBRATED_CY_PX@"
+                    k1="@CALIBRATED_K1@" k2="@CALIBRATED_K2@"
+                    p1="@CALIBRATED_P1@" p2="@CALIBRATED_P2@"
+                    k3="@CALIBRATED_K3@"
+                    rms_reprojection_px="@CALIBRATION_RMS_PX@"/>
+                <Extrinsic frame_id="front_camera_engineering"/>
+            </Calibration>
+        </Resource>
+
+        <!-- Override tags are tagCircle21h7; the detection size is the
+             detector-corner edge, not the carrier plate. -->
+        <Resource id="tag_detector" type="apriltag_detector">
+            <Family name="tagCircle21h7"
+                    detection_size_m="@MEASURE_DETECTOR_CORNER_EDGE_SIZE_M@"/>
+        </Resource>
+    </Resources>
+
+    <Sensors>
+        <Sensor id="front_camera" type="camera_frame">
+            <Source resource_id="front_camera_device"/>
+        </Sensor>
+    </Sensors>
+
+</Robot>

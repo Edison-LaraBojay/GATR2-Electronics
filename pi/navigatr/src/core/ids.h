@@ -41,7 +41,7 @@ using PreprocessorId = TypedId<struct PreprocessorIdTag>;
 using ArtifactId     = TypedId<struct ArtifactIdTag>;
 using ObservationId  = TypedId<struct ObservationIdTag>;
 using AssociationId  = TypedId<struct AssociationIdTag>;
-using WorldObjectId  = TypedId<struct WorldObjectIdTag>;
+using FieldObjectId  = TypedId<struct FieldObjectIdTag>;
 
 // Registered factory key, a plain opaque name like pico_encoder_channel.
 using FunctionKey = TypedId<struct FunctionKeyTag>;

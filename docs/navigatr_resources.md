@@ -178,6 +178,29 @@ executable configuration and there is no monolithic robot config header.
   robot frame map. See `config/*_apriltag_landmark_correction.xml.in` and
   `docs/navigatr.md` for the runtime semantics in `target_tracker`.
 
+## wheel_geometry
+
+- Contract: `const WheelGeometryMap`.
+- Schema:
+
+```xml
+<Resource id="wheel_geometry" type="wheel_geometry">
+    <Wheel id="left_wheel" sensor_id="tracking_encoder_a" label="left"
+           calibration_status="verified"
+           radius_m="0.0254" position_x_m="0.000" position_y_m="0.130"
+           measurement_angle_deg="0" direction="positive"/>
+</Resource>
+```
+
+- Measured tracking-wheel geometry owned by the robot description. Every
+  attribute is required and calibration gated; radius is the loaded
+  effective rolling radius. `tracking_wheel_odometry` consumes it through
+  `<Wheels resource_id=...><Use wheel_id=.../></Wheels>`, so two- and
+  three-wheel pipelines differ only through wheel references. The inline
+  `<TrackingWheel>` form remains for self-contained bring-up documents;
+  the two forms are mutually exclusive within one preprocessor.
+- Thread safety: immutable after construction.
+
 ## SpiBus contract
 
 `SpiBus`/`SpiDevice` are typed contracts ready for direct-wired SPI sensors:

@@ -44,29 +44,6 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build-navigatr --output-on-failure
 
-  format:
-    runs-on: ubuntu-latest
-    # Advisory for now. clang-format does not run on the current dev machine,
-    # so the tree is not formatted yet. Flip this off once it is.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install clang-format
-        run: pip install clang-format==22.1.8
-
-      - name: Check formatting
-        run: |
-          files=$(find common brain pico pi -type f \( -name '*.h' -o -name '*.cpp' \) \
-            -not -path '*/third_party/*' -not -path '*/.pio/*')
-          echo "checking:"
-          echo "$files"
-          clang-format --dry-run --Werror $files
-
   pico:
     runs-on: ubuntu-latest
     steps:

@@ -13,10 +13,8 @@
 #include "contracts/slot_init.h"
 #include "core/function_status.h"
 #include "core/records.h"
-#include "state/command_state.h"
 #include "state/robot_state.h"
-#include "state/target_state.h"
-#include "state/world_state.h"
+#include "state/field_state.h"
 
 namespace navigatr
 {
@@ -24,9 +22,7 @@ namespace navigatr
 struct AssociationInput {
     const ObservationMap& observations;
     const RobotState&     robot;   // this cycle's predicted pose, with history
-    const WorldState&     world;
-    const CommandState&   command;
-    const TargetState&    target;   // previous cycle's target state
+    const FieldState&     field;   // prior estimates, association priors
     MonotonicTime         now;   // host clock
 };
 

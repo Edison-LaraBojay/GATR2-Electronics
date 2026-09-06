@@ -44,20 +44,21 @@ public:
     AssociationOutput run(const AssociationInput&) override { return AssociationOutput{}; }
 };
 
-class NoopPoseCorrection : public PoseCorrection
+class NoopFieldEstimation : public FieldEstimation
 {
 public:
-    PoseCorrectionOutput run(const PoseCorrectionInput& in) override {
-        return PoseCorrectionOutput{in.predicted, FunctionStatus::kOk};
+    FieldEstimationOutput run(const FieldEstimationInput& in) override {
+        FieldEstimationOutput out;
+        out.field = in.previousField;
+        return out;
     }
 };
 
-class NoopWorldPrediction : public WorldPrediction
+class NoopTargetResolution : public TargetResolution
 {
 public:
-    WorldPredictionOutput run(const WorldPredictionInput& in) override {
-        return WorldPredictionOutput{in.previousWorld, in.previousTarget,
-                                     FunctionStatus::kOk};
+    TargetResolutionOutput run(const TargetResolutionInput& in) override {
+        return TargetResolutionOutput{in.previous, FunctionStatus::kOk};
     }
 };
 
@@ -96,16 +97,16 @@ std::unique_ptr<Association> makeNoopAssociation(const ConfigNode&,
     return std::make_unique<NoopAssociation>();
 }
 
-std::unique_ptr<PoseCorrection> makeNoopPoseCorrection(const ConfigNode&,
-                                                       SlotInitializationContext&,
-                                                       std::string&) {
-    return std::make_unique<NoopPoseCorrection>();
-}
-
-std::unique_ptr<WorldPrediction> makeNoopWorldPrediction(const ConfigNode&,
+std::unique_ptr<FieldEstimation> makeNoopFieldEstimation(const ConfigNode&,
                                                          SlotInitializationContext&,
                                                          std::string&) {
-    return std::make_unique<NoopWorldPrediction>();
+    return std::make_unique<NoopFieldEstimation>();
+}
+
+std::unique_ptr<TargetResolution> makeNoopTargetResolution(const ConfigNode&,
+                                                           SlotInitializationContext&,
+                                                           std::string&) {
+    return std::make_unique<NoopTargetResolution>();
 }
 
 std::unique_ptr<Publishing> makeNoopPublishing(const ConfigNode&,

@@ -81,15 +81,18 @@ const char* kFullConfig = R"(
                 <Output artifact_id="imu_orientation"/>
             </Preprocessor>
         </Preprocessing>
-        <LocalizationPrediction type="wheel_imu_prediction">
+        <Localization type="wheel_imu_prediction">
             <Motion artifact_id="tracking_motion_delta"/>
-        </LocalizationPrediction>
-        <Perception type="noop"/>
-        <Association type="noop"/>
-        <PoseCorrection type="noop"/>
-        <WorldPrediction type="landmark_map">
+        </Localization>
+        <FieldEstimation type="landmark_field">
             <FieldMap resource_id="override_field"/>
-        </WorldPrediction>
+            <Pipeline>
+                <ObservationExtraction type="noop"/>
+                <Association type="noop"/>
+                <Estimator type="landmark_estimator" commit="never"/>
+            </Pipeline>
+        </FieldEstimation>
+        <TargetResolution type="noop"/>
         <Publishing type="vex_brain">
             <Serial resource_id="brain_uart"/>
             <Health fresh_ms="150">
@@ -99,7 +102,7 @@ const char* kFullConfig = R"(
                 <Gyro sensor_id="robot_imu"/>
                 <BiasCal artifact_id="imu_orientation"/>
             </Health>
-            <WorldObject object_id="center_goal" wire_id="1"/>
+            <FieldObject object_id="center_goal" wire_id="1"/>
         </Publishing>
     </Pipeline>
 </System>
@@ -292,5 +295,160 @@ TEST(EndToEnd, NothingAttachedStillRunsAndPublishesHealth) {
     EXPECT_FALSE(last.status & gatr2::kStatusEncHealthy);
 
     // the map-seeded world exists with no data at all
-    EXPECT_EQ(rig.system->world().objects.count(WorldObjectId{"center_goal"}), 1u);
+    EXPECT_EQ(rig.system->field().objects.count(FieldObjectId{"center_goal"}), 1u);
 }
+
+namespace
+{
+
+// Fused odometry rigs: wheels plus the IMU heading constraint, gyro in the
+// solve. Only the wheel declarations differ between the two- and
+// three-wheel variants.
+std::string fusedConfig(bool three_wheel) {
+    std::string wheels;
+    if (three_wheel) {
+        wheels = R"(
+                <TrackingWheel sensor_id="enc_a" label="left" radius_m="0.0254"
+                               position_x_m="0" position_y_m="0.13"
+                               measurement_angle_deg="0" direction="positive"/>
+                <TrackingWheel sensor_id="enc_b" label="right" radius_m="0.0254"
+                               position_x_m="0" position_y_m="-0.13"
+                               measurement_angle_deg="0" direction="positive"/>
+                <TrackingWheel sensor_id="enc_c" label="rear" radius_m="0.0254"
+                               position_x_m="-0.12" position_y_m="0"
+                               measurement_angle_deg="90" direction="positive"/>)";
+    } else {
+        wheels = R"(
+                <TrackingWheel sensor_id="enc_a" label="forward" radius_m="0.0254"
+                               position_x_m="0" position_y_m="0.13"
+                               measurement_angle_deg="0" direction="positive"/>
+                <TrackingWheel sensor_id="enc_b" label="lateral" radius_m="0.0254"
+                               position_x_m="-0.12" position_y_m="0"
+                               measurement_angle_deg="90" direction="positive"/>)";
+    }
+    std::string sensors = R"(
+        <Sensor id="enc_a" type="pico_encoder_channel">
+            <Source resource_id="pico_telemetry" channel="0"/>
+            <Calibration counts_per_revolution="4000"/>
+        </Sensor>
+        <Sensor id="enc_b" type="pico_encoder_channel">
+            <Source resource_id="pico_telemetry" channel="1"/>
+            <Calibration counts_per_revolution="4000"/>
+        </Sensor>)";
+    if (three_wheel) {
+        sensors += R"(
+        <Sensor id="enc_c" type="pico_encoder_channel">
+            <Source resource_id="pico_telemetry" channel="2"/>
+            <Calibration counts_per_revolution="4000"/>
+        </Sensor>)";
+    }
+    return std::string(R"(
+<System>
+    <Loop rate_hz="200"/>
+    <Resources>
+        <Resource id="pico_uart" type="memory_link"/>
+        <Resource id="pico_telemetry" type="pico_telemetry">
+            <Serial resource_id="pico_uart"/>
+        </Resource>
+    </Resources>
+    <Sensors>)") +
+           sensors + R"(
+        <Sensor id="robot_imu" type="pico_imu_channel">
+            <Source resource_id="pico_telemetry" channel="imu"/>
+        </Sensor>
+    </Sensors>
+    <Pipeline>
+        <CommandCollection type="noop"/>
+        <Preprocessing type="configured_collection">
+            <Preprocessor id="tracking_motion" type="tracking_wheel_odometry">)" +
+           wheels + R"(
+                <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
+                                   max_calibration_travel_m="0.005"/>
+                <Output artifact_id="tracking_motion_delta"/>
+            </Preprocessor>
+        </Preprocessing>
+        <Localization type="wheel_imu_prediction">
+            <Motion artifact_id="tracking_motion_delta"/>
+        </Localization>
+        <FieldEstimation type="noop"/>
+        <TargetResolution type="noop"/>
+        <Publishing type="noop"/>
+    </Pipeline>
+</System>)";
+}
+
+// Drives calibration, a 1 m square with in-place 90 degree turns, and a
+// lateral out-and-back through real Pico packets, and expects the fused
+// odometry to close on the start.
+void driveFusedClosure(bool three_wheel) {
+    Rig rig(fusedConfig(three_wheel).c_str());
+    ASSERT_NE(rig.system, nullptr);
+    ASSERT_NE(rig.pico, nullptr);
+
+    const double kA = -0.13;               // forward wheel lever arm
+    const double kB = three_wheel ? 0.13 : -0.12;
+    const double kC = -0.12;               // three-wheel lateral lever arm
+    const double kCountsPerMeter = 4000.0 / (2.0 * kPi * 0.0254);
+    const int    kBiasMdps       = 2000;
+
+    double   travel_a = 0.0, travel_b = 0.0, travel_c = 0.0;
+    uint32_t stamp = 1000;
+    uint8_t  seq   = 0;
+    int      cycle = 0;
+
+    const auto step = [&](double dx, double dy, double dtheta_deg) {
+        ++cycle;
+        stamp += 5;
+        const double dtheta = degToRad(dtheta_deg);
+        if (three_wheel) {
+            travel_a += dx + kA * dtheta;
+            travel_b += dx + kB * dtheta;
+            travel_c += dy + kC * dtheta;
+        } else {
+            travel_a += dx + kA * dtheta;   // forward wheel
+            travel_b += dy + kB * dtheta;   // lateral wheel
+        }
+        const auto rate_mdps =
+            kBiasMdps + static_cast<int>(std::llround(dtheta_deg / 0.005 * 1000.0));
+        rig.pico->input().feed(sensorPacket(
+            seq++, stamp,
+            static_cast<int32_t>(std::llround(travel_a * kCountsPerMeter)),
+            static_cast<int32_t>(std::llround(travel_b * kCountsPerMeter)),
+            static_cast<int32_t>(std::llround(travel_c * kCountsPerMeter)), rate_mdps));
+        rig.system->step(hostTime(cycle));
+    };
+
+    for (int i = 0; i < 205; ++i) {
+        step(0.0, 0.0, 0.0);   // stationary gyro bias calibration
+    }
+    for (int leg = 0; leg < 4; ++leg) {
+        for (int i = 0; i < 200; ++i) {
+            step(0.005, 0.0, 0.0);   // forward 1 m
+        }
+        for (int i = 0; i < 100; ++i) {
+            step(0.0, 0.0, 0.9);   // in-place +90 degrees at 180 dps
+        }
+    }
+    for (int i = 0; i < 100; ++i) {
+        step(0.0, 0.005, 0.0);   // strafe left 0.5 m
+    }
+    for (int i = 0; i < 100; ++i) {
+        step(0.0, -0.005, 0.0);   // and back
+    }
+    for (int i = 0; i < 10; ++i) {
+        step(0.0, 0.0, 0.0);
+    }
+
+    const RobotState& robot = rig.system->robot();
+    EXPECT_TRUE(robot.valid);
+    EXPECT_NEAR(robot.odom_pose.x_m, 0.0, 0.004);
+    EXPECT_NEAR(robot.odom_pose.y_m, 0.0, 0.004);
+    EXPECT_NEAR(radToDeg(wrapAngle(robot.odom_pose.heading_rad)), 0.0, 0.1);
+    EXPECT_EQ(rig.system->diagnostics().links.at("pico_uart").decode_errors, 0u);
+}
+
+} // namespace
+
+TEST(EndToEnd, ThreeWheelImuFusedMotionCloses) { driveFusedClosure(true); }
+
+TEST(EndToEnd, TwoWheelImuFusedMotionCloses) { driveFusedClosure(false); }

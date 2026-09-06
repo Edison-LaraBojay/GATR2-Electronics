@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Two-wheel + IMU odometry, no landmark correction. Two wheels cannot
+     observe rotation alone, so the heading constraint is mandatory. The
+     selected pair is one forward-measuring wheel plus the lateral rear
+     wheel; confirm against the physical build before trusting it. -->
+<Pipeline>
+
+    <CommandCollection type="noop"/>
+
+    <Preprocessing type="configured_collection">
+        <Preprocessor id="tracking_motion" type="tracking_wheel_odometry">
+            <Wheels resource_id="wheel_geometry">
+                <Use wheel_id="left_wheel"/>
+                <Use wheel_id="rear_wheel"/>
+            </Wheels>
+            <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
+                               max_calibration_travel_m="0.005"/>
+            <Output artifact_id="tracking_motion_delta"/>
+        </Preprocessor>
+    </Preprocessing>
+
+    <Localization type="wheel_imu_prediction">
+        <Motion artifact_id="tracking_motion_delta"/>
+    </Localization>
+
+    <FieldEstimation type="noop"/>
+
+    <TargetResolution type="noop"/>
+
+    <Publishing type="vex_brain">
+        <Serial resource_id="brain_uart"/>
+        <Health fresh_ms="150">
+            <Encoder sensor_id="tracking_encoder_a"/>
+            <Encoder sensor_id="tracking_encoder_c"/>
+            <Gyro sensor_id="robot_imu"/>
+        </Health>
+    </Publishing>
+
+</Pipeline>

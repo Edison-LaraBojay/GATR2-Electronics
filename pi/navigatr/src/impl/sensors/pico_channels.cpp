@@ -162,7 +162,6 @@ std::optional<SensorExecutable> make_pico_encoder_channel(
         state->poll      = ChannelPollState{};
         state->have_prev = false;
         state->angle_rad = 0.0;
-        state->setup.telemetry->reset();
     };
     return executable;
 }
@@ -219,7 +218,6 @@ std::optional<SensorExecutable> make_pico_imu_channel(const ConfigNode& node,
     };
     executable.reset = [state] {
         state->poll = ChannelPollState{};
-        state->setup.telemetry->reset();
     };
     return executable;
 }

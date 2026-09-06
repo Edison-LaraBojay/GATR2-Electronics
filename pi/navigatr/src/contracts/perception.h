@@ -13,7 +13,6 @@
 #include "contracts/slot_init.h"
 #include "core/function_status.h"
 #include "core/records.h"
-#include "state/target_state.h"
 
 namespace navigatr
 {
@@ -21,7 +20,6 @@ namespace navigatr
 struct PerceptionInput {
     const SensorResultsMap& sensorResults;
     const ArtifactMap&      artifacts;
-    const TargetState&      target;   // previous cycle; gates expensive work
     MonotonicTime           now;   // host clock
 };
 

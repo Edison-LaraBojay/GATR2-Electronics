@@ -66,7 +66,7 @@ struct TargetDecl {
     TargetKind  kind    = TargetKind::kRobotRelative;
 
     // landmark relative
-    WorldObjectId        landmark;
+    FieldObjectId        landmark;
     FrameId              approach_frame;
     FrameId              controlled_frame;
     Pose2D               desired_controlled_in_approach;

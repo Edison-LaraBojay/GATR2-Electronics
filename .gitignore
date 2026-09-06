@@ -68,3 +68,11 @@ production/
 *.stp
 *.STEP
 *.wrl
+
+# ---------------------------------------------------------------------------
+# Build output. The gate is: does it build and do the gtests pass.
+# ---------------------------------------------------------------------------
+build/
+build-*/
+cmake-build-*/
+out/

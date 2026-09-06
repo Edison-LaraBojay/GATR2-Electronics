@@ -1,8 +1,9 @@
 // vision_targets_gtest.cpp
 // The one-camera acquire-once flow end to end through the System: synthetic
 // detections generated from ground truth, full-chain pose recovery, target
-// latching in the odometry frame, correction gating, generation and epoch
-// invalidation, and repeated-printed-id disambiguation. The camera, the
+// latching in the odometry frame, continuous target-blind field
+// estimation, activation-time and epoch invalidation, and
+// repeated-printed-id disambiguation. The camera, the
 // detector, the command source, and the odometry are scripted test doubles
 // registered as ordinary factories.
 
@@ -15,10 +16,12 @@
 #include <string>
 #include <vector>
 
+#include "config/field_map.h"
 #include "math/angles.h"
 #include "math/se3.h"
 #include "resources/camera.h"
 #include "resources/tag_detector.h"
+#include "resources/target_set.h"
 #include "runtime/register_all.h"
 #include "runtime/system.h"
 
@@ -273,28 +276,32 @@ std::string configXml(double camera_yaw_deg, double ambiguity_margin_m) {
   <Pipeline>
     <CommandCollection type="scripted_commands"/>
     <Preprocessing type="noop"/>
-    <LocalizationPrediction type="scripted_localization"/>
-    <Perception type="apriltag_tag_observation">
-      <Camera sensor_id="front_camera"/>
-      <Detector resource_id="detector"/>
-      <Output observation_id="tag_observations"/>
-    </Perception>
-    <Association type="tag_mount_association">
-      <Observations observation_id="tag_observations"/>
+    <Localization type="scripted_localization"/>
+    <FieldEstimation type="landmark_field">
       <FieldMap resource_id="game_field"/>
-      <RobotFrames resource_id="robot_geometry"/>
-      <Targets resource_id="targets"/>
-      <Gates max_translation_error_m="0.5" max_heading_error_deg="30" @MARGIN@
-             max_range_m="3.0" min_decision_margin="20"
-             min_projected_size_px="4"/>
-      <Output association_id="landmark_pose_observations"/>
-    </Association>
-    <PoseCorrection type="noop"/>
-    <WorldPrediction type="target_tracker">
+      <Pipeline>
+        <ObservationExtraction type="apriltag_tag_observation">
+          <Camera sensor_id="front_camera"/>
+          <Detector resource_id="detector"/>
+          <Output observation_id="tag_observations"/>
+        </ObservationExtraction>
+        <Association type="tag_mount_association">
+          <Observations observation_id="tag_observations"/>
+          <FieldMap resource_id="game_field"/>
+          <RobotFrames resource_id="robot_geometry"/>
+          <Gates max_translation_error_m="0.5" max_heading_error_deg="30" @MARGIN@
+                 max_range_m="3.0" min_decision_margin="20"
+                 min_projected_size_px="4"/>
+          <Output association_id="landmark_pose_observations"/>
+        </Association>
+        <Estimator type="landmark_estimator" commit="always"/>
+      </Pipeline>
+    </FieldEstimation>
+    <TargetResolution type="configured_targets">
       <Targets resource_id="targets"/>
       <FieldMap resource_id="game_field"/>
-      <Associations association_id="landmark_pose_observations"/>
-    </WorldPrediction>
+      <Evidence association_id="landmark_pose_observations"/>
+    </TargetResolution>
     <Publishing type="noop"/>
   </Pipeline>
 </System>)";
@@ -404,6 +411,11 @@ struct Fixture {
         command->object_wire_id   = wire_id;
         command->object_sequence += 1;
     }
+
+    void deselect() {
+        command->object_requested = false;
+        command->object_sequence += 1;
+    }
 };
 
 const Transform3 kCenterMount = makeTransform3(-0.14, 0, 0.25, 0, 0, kPi);
@@ -465,11 +477,12 @@ TEST(VisionTargets, SevenDegreeCameraYawMatchesStraightCamera) {
         }
         ASSERT_EQ(f.system->target().status, TargetStatus::kLockedVision);
         latched[i] = f.system->target().T_odom_robot_target;
+        f.stepOnce();   // the estimator folds the locked window next cycle
 
         // synthetic projection and pose recovery agree: the observed
         // landmark equals the ground truth it was projected from
-        const WorldObject& goal =
-            f.system->world().objects.at(WorldObjectId{"center_goal"});
+        const FieldObjectState& goal =
+            f.system->field().objects.at(FieldObjectId{"center_goal"});
         EXPECT_EQ(goal.source, EstimateSource::kObserved);
         EXPECT_NEAR(goal.pose.pose.x_m, kCenterGoal.x_m, 1e-9);
         EXPECT_NEAR(goal.pose.pose.y_m, kCenterGoal.y_m, 1e-9);
@@ -480,20 +493,75 @@ TEST(VisionTargets, SevenDegreeCameraYawMatchesStraightCamera) {
     EXPECT_NEAR(wrapAngle(latched[0].heading_rad - latched[1].heading_rad), 0.0, 1e-9);
 }
 
-TEST(VisionTargets, NoActiveTargetCausesNoLandmarkMutation) {
+TEST(VisionTargets, NoTargetStillExtractsAssociatesAndUpdatesField) {
+    // Field estimation is continuous and target-blind: with nothing
+    // selected and no target ever requested, decisive evidence still
+    // updates the field estimate.
     Fixture f;
     f.robot->odom = Pose2D{0.9, 1.7832, 0.0};
 
-    // frames with a perfectly good tag, but nothing selected
     for (int i = 0; i < 3; ++i) {
         f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
         f.stepOnce();
     }
-    const WorldObject& goal =
-        f.system->world().objects.at(WorldObjectId{"center_goal"});
-    EXPECT_EQ(goal.source, EstimateSource::kFieldMap);   // never mutated
-    EXPECT_FALSE(goal.observed);
+    const FieldObjectState& goal =
+        f.system->field().objects.at(FieldObjectId{"center_goal"});
+    EXPECT_EQ(goal.source, EstimateSource::kObserved);
+    EXPECT_TRUE(goal.observed);
+    EXPECT_TRUE(goal.lastObservedAt.isSet());
+    EXPECT_NEAR(goal.pose.pose.x_m, kCenterGoal.x_m, 1e-9);
     EXPECT_FALSE(f.system->target().active);
+
+    // and the immutable map is untouched by any of it
+    std::string err;
+    const auto  map =
+        f.system->resources().require<const FieldMap>(ResourceId{"game_field"}, err);
+    ASSERT_NE(map, nullptr) << err;
+    EXPECT_NEAR(map->find(FieldObjectId{"center_goal"})->nominal.x_m, 1.7832, 1e-12);
+}
+
+TEST(VisionTargets, SelectingOrClearingATargetDoesNotResetFieldState) {
+    Fixture f;
+    f.robot->odom = Pose2D{0.9, 1.7832, 0.0};
+
+    // the field learns a slightly displaced goal before any target exists
+    const Pose2D displaced{kCenterGoal.x_m + 0.05, kCenterGoal.y_m, 0.0};
+    f.pushFrame({f.detectionFor(displaced, kCenterMount, 0)});
+    f.stepOnce();
+    ASSERT_NEAR(f.system->field().objects.at(FieldObjectId{"center_goal"}).pose.pose.x_m,
+                displaced.x_m, 1e-9);
+
+    // selecting a target neither resets nor re-seeds the estimate
+    f.select(3);   // policy none: latches from the current estimate
+    f.stepOnce();
+    EXPECT_NEAR(f.system->field().objects.at(FieldObjectId{"center_goal"}).pose.pose.x_m,
+                displaced.x_m, 1e-9);
+
+    // clearing the target request changes reporting, not estimation
+    f.deselect();
+    f.stepOnce();
+    EXPECT_FALSE(f.system->target().active);
+    EXPECT_NEAR(f.system->field().objects.at(FieldObjectId{"center_goal"}).pose.pose.x_m,
+                displaced.x_m, 1e-9);
+
+    // and evidence keeps flowing afterwards
+    f.pushFrame({f.detectionFor(displaced, kCenterMount, 0)});
+    f.stepOnce();
+    EXPECT_TRUE(
+        f.system->field().objects.at(FieldObjectId{"center_goal"}).observed);
+}
+
+TEST(VisionTargets, NavigationIntentStaysOutOfAssociationSchema) {
+    // a Targets reference inside the association child is rejected, not
+    // silently ignored: intent filtering lives in target resolution
+    Fixture     probe;   // registers the scripted factories
+    std::string xml = configXml(0.0, 0.15);
+    const auto  anchor = xml.find("<Observations observation_id=\"tag_observations\"/>");
+    ASSERT_NE(anchor, std::string::npos);
+    xml.insert(anchor, "<Targets resource_id=\"targets\"/>");
+    std::string err;
+    EXPECT_EQ(System::buildFromString(xml.c_str(), probe.functions, err), nullptr);
+    EXPECT_NE(err.find("Targets"), std::string::npos);
 }
 
 TEST(VisionTargets, RobotRelativeSnapshotOncePerNewSequence) {
@@ -540,8 +608,8 @@ TEST(VisionTargets, TargetSwitchRejectsLateOldGenerationDetection) {
     EXPECT_EQ(f.system->target().status, TargetStatus::kPendingAcquisition);
 
     // ...then the brain switches targets in the same cycle a frame lands.
-    // The association output this cycle still carries the old generation
-    // and must be discarded by the new target.
+    // The old buffer is discarded and evidence measured before the new
+    // activation never acquires the new target, so nothing latches early.
     f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
     f.select(4);   // switch to the cancel_on_timeout center target
     f.stepOnce();
@@ -638,10 +706,11 @@ TEST(VisionTargets, RepeatedPrintedIdsDisambiguateByFullPose) {
     f.pushFrame({f.detectionFor(Pose2D{3.0, 0.6, 0.0}, kCenterMount, 1)});
     f.stepOnce();
     ASSERT_EQ(f.system->target().status, TargetStatus::kLockedVision);
+    f.stepOnce();   // the estimator folds the locked window next cycle
 
-    const WorldObject& right = f.system->world().objects.at(WorldObjectId{"right_goal"});
+    const FieldObjectState& right = f.system->field().objects.at(FieldObjectId{"right_goal"});
     EXPECT_EQ(right.source, EstimateSource::kObserved);
-    const WorldObject& left = f.system->world().objects.at(WorldObjectId{"left_goal"});
+    const FieldObjectState& left = f.system->field().objects.at(FieldObjectId{"left_goal"});
     EXPECT_EQ(left.source, EstimateSource::kFieldMap);   // untouched
 }
 
@@ -651,26 +720,22 @@ TEST(VisionTargets, PartialEvidenceNeverMutatesWorldBeforeLock) {
     f.select(1);   // minimum_consistent_observations = 3
     f.stepOnce();
 
-    // two accepted frames: acquisition is in progress but nothing commits
+    // field estimation commits accepted evidence continuously, while the
+    // target latches only after its own consistency window completes
     for (int i = 0; i < 2; ++i) {
         f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
         f.stepOnce();
     }
     EXPECT_EQ(f.system->target().status, TargetStatus::kPendingAcquisition);
-    {
-        const WorldObject& goal =
-            f.system->world().objects.at(WorldObjectId{"center_goal"});
-        EXPECT_EQ(goal.source, EstimateSource::kFieldMap);
-        EXPECT_FALSE(goal.observed);
-    }
+    EXPECT_EQ(f.system->field().objects.at(FieldObjectId{"center_goal"}).source,
+              EstimateSource::kObserved);
 
-    // the third frame locks; landmark and target commit atomically
     f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
     f.stepOnce();
     ASSERT_EQ(f.system->target().status, TargetStatus::kLockedVision);
-    const WorldObject& goal = f.system->world().objects.at(WorldObjectId{"center_goal"});
+    const FieldObjectState& goal =
+        f.system->field().objects.at(FieldObjectId{"center_goal"});
     EXPECT_EQ(goal.source, EstimateSource::kObserved);
-    EXPECT_TRUE(goal.observed);
 }
 
 TEST(VisionTargets, SingleFrameWithManyTagsCountsAsOneObservation) {
@@ -708,12 +773,16 @@ TEST(VisionTargets, NominalFallbackIgnoresUnconfirmedEvidence) {
         f.stepOnce();
     }
     ASSERT_EQ(f.system->target().status, TargetStatus::kLockedNominal);
+    // use_nominal_target reads strictly the immutable map nominal, even
+    // though the continuous field estimate has legitimately moved to the
+    // displaced observation
     EXPECT_NEAR(f.system->target().T_odom_robot_target.x_m, kExpectedBodyTarget.x_m,
                 1e-9);
     EXPECT_NEAR(f.system->target().T_odom_robot_target.y_m, kExpectedBodyTarget.y_m,
                 1e-9);
-    const WorldObject& goal = f.system->world().objects.at(WorldObjectId{"center_goal"});
-    EXPECT_EQ(goal.source, EstimateSource::kFieldMap);   // never touched
+    const FieldObjectState& goal = f.system->field().objects.at(FieldObjectId{"center_goal"});
+    EXPECT_EQ(goal.source, EstimateSource::kObserved);
+    EXPECT_NEAR(goal.pose.pose.x_m, displaced.x_m, 1e-9);
 }
 
 TEST(VisionTargets, SelectDuringInvalidLocalizationDefersActivation) {
@@ -751,7 +820,7 @@ TEST(VisionTargets, AmbiguousCandidatesAbstain) {
         f.stepOnce();
     }
     EXPECT_EQ(f.system->target().status, TargetStatus::kPendingAcquisition);
-    const WorldObject& left = f.system->world().objects.at(WorldObjectId{"left_goal"});
+    const FieldObjectState& left = f.system->field().objects.at(FieldObjectId{"left_goal"});
     EXPECT_EQ(left.source, EstimateSource::kFieldMap);   // no mutation either
 
     // the identical scene with a sane margin is decisive
@@ -762,4 +831,37 @@ TEST(VisionTargets, AmbiguousCandidatesAbstain) {
     g.pushFrame({g.detectionFor(Pose2D{0.6, 3.0, 0.0}, kCenterMount, 1)});
     g.stepOnce();
     EXPECT_EQ(g.system->target().status, TargetStatus::kLockedVision);
+}
+
+TEST(VisionTargets, RelativeResolutionInvariantUnderGlobalFrameShift) {
+    // Shared global frame error cancels in relative targeting: applying one
+    // rigid transform to both the robot and the object estimate leaves the
+    // robot-relative resolved target unchanged, which is exactly why field
+    // estimates are never rejected for lying outside the nominal boundary.
+    TargetDecl decl;
+    decl.kind                           = TargetKind::kLandmarkRelative;
+    decl.T_landmark_approach            = makeTransform3(-0.14, 0, 0, 0, 0, kPi);
+    decl.T_robot_controlled             = makeTransform3(-0.40, 0, 0.05, 0, 0, kPi);
+    decl.desired_controlled_in_approach = Pose2D{0.05, 0.0, kPi};
+
+    const Pose2D robot{0.9, 1.7832, 0.3};
+    const Pose2D object{1.7832, 1.7832, 0.1};
+    const Pose2D shifts[] = {Pose2D{0, 0, 0}, Pose2D{5.0, -3.0, 1.2},
+                             Pose2D{-40.0, 17.0, -2.6}};
+
+    Pose2D reference;
+    for (std::size_t i = 0; i < 3; ++i) {
+        const Pose2D shifted_robot  = compose(shifts[i], robot);
+        const Pose2D shifted_object = compose(shifts[i], object);
+        const Pose2D target         = decl.resolveFromLandmark(shifted_object);
+        const Pose2D relative       = compose(inverse(shifted_robot), target);
+        if (i == 0) {
+            reference = relative;
+        } else {
+            EXPECT_NEAR(relative.x_m, reference.x_m, 1e-9);
+            EXPECT_NEAR(relative.y_m, reference.y_m, 1e-9);
+            EXPECT_NEAR(wrapAngle(relative.heading_rad - reference.heading_rad), 0.0,
+                        1e-9);
+        }
+    }
 }

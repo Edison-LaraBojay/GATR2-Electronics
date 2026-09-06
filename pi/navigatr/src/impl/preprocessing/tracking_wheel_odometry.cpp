@@ -5,6 +5,8 @@
 #include <cmath>
 
 #include "math/angles.h"
+#include "resources/resource_map.h"
+#include "resources/wheel_geometry.h"
 
 namespace navigatr
 {
@@ -84,74 +86,135 @@ std::unique_ptr<PreprocessorExecutable> TrackingWheelOdometry::create(
 
     const std::string who = node.path();
 
+    // One wheel entry from resolved geometry values, shared by both
+    // configuration forms.
+    const auto addWheel = [&](const SensorId& sensor_id, const std::string& label,
+                              double radius_m, double x, double y, double angle_deg,
+                              bool positive, const std::string& where) {
+        for (const Wheel& seen : odom->wheels_) {
+            if (seen.binding.id == sensor_id) {
+                err = where + ": sensor " + sensor_id.value +
+                      " is referenced by more than one wheel";
+                return false;
+            }
+        }
+        Wheel wheel;
+        if (!context.sensors->bind<EncoderSample>(sensor_id, where, wheel.binding, err)) {
+            return false;
+        }
+        wheel.label = label;
+        if (radius_m <= 0.0) {
+            err = where + ": radius_m must be positive";
+            return false;
+        }
+        wheel.radius_m     = radius_m;
+        wheel.sign         = positive ? 1.0 : -1.0;
+        const double angle = degToRad(angle_deg);
+        wheel.ux           = std::cos(angle);
+        wheel.uy           = std::sin(angle);
+        wheel.k_m          = x * wheel.uy - y * wheel.ux;
+        odom->wheels_.push_back(wheel);
+        return true;
+    };
+
+    // Inline form: this preprocessor owns the measured geometry.
     bool ok = true;
     node.forEach("TrackingWheel", [&](const ConfigNode& w) {
         if (!ok) {
             return;
         }
-        Wheel          wheel;
         const SensorId sensor_id{w.attr("sensor_id")};
         if (sensor_id.empty()) {
             err = w.path() + ": TrackingWheel needs sensor_id";
             ok  = false;
             return;
         }
-        for (const Wheel& seen : odom->wheels_) {
-            if (seen.binding.id == sensor_id) {
-                err = w.path() + ": sensor " + sensor_id.value +
-                      " is referenced by more than one TrackingWheel";
-                ok = false;
-                return;
-            }
-        }
-        if (!context.sensors->bind<EncoderSample>(sensor_id, w.path(), wheel.binding,
-                                                  err)) {
-            ok = false;
-            return;
-        }
-        wheel.label = w.attr("label");
-
         // Calibration-critical geometry: every value measured, none
         // defaulted. An unmeasured wheel must fail the build, not run as
         // zero.
-        double x = 0.0, y = 0.0, angle_deg = 0.0;
-        if (!w.requireDouble("radius_m", wheel.radius_m, err) ||
+        double radius_m = 0.0, x = 0.0, y = 0.0, angle_deg = 0.0;
+        std::string direction;
+        if (!w.requireDouble("radius_m", radius_m, err) ||
             !w.requireDouble("position_x_m", x, err) ||
             !w.requireDouble("position_y_m", y, err) ||
-            !w.requireDouble("measurement_angle_deg", angle_deg, err)) {
+            !w.requireDouble("measurement_angle_deg", angle_deg, err) ||
+            !w.requireAttr("direction", direction, err)) {
             ok = false;
             return;
         }
-        if (wheel.radius_m <= 0.0) {
-            err = w.path() + ": radius_m must be positive";
-            ok  = false;
-            return;
-        }
-        std::string direction;
-        if (!w.requireAttr("direction", direction, err)) {
-            ok = false;
-            return;
-        }
-        if (direction == "positive") {
-            wheel.sign = 1.0;
-        } else if (direction == "negative") {
-            wheel.sign = -1.0;
-        } else {
+        if (direction != "positive" && direction != "negative") {
             err = w.path() + ": direction must be positive or negative";
             ok  = false;
             return;
         }
-        const double angle = degToRad(angle_deg);
-        wheel.ux           = std::cos(angle);
-        wheel.uy           = std::sin(angle);
-        wheel.k_m          = x * wheel.uy - y * wheel.ux;
-        odom->wheels_.push_back(wheel);
+        ok = addWheel(sensor_id, w.attr("label"), radius_m, x, y, angle_deg,
+                      direction == "positive", w.path());
     });
     if (!ok) {
         return nullptr;
     }
+
+    // Reference form: geometry lives in a shared wheel_geometry resource
+    // owned by the robot description; the pipeline only selects wheels.
+    const ConfigNode wheels_ref = node.child("Wheels");
+    if (wheels_ref.valid()) {
+        if (!odom->wheels_.empty()) {
+            err = wheels_ref.path() + ": use either inline TrackingWheel elements or "
+                  "a Wheels reference, not both";
+            return nullptr;
+        }
+        if (context.resources == nullptr) {
+            err = wheels_ref.path() + ": no resources available";
+            return nullptr;
+        }
+        const ResourceId geometry_id{wheels_ref.attr("resource_id")};
+        if (geometry_id.empty()) {
+            err = wheels_ref.path() + ": Wheels needs resource_id";
+            return nullptr;
+        }
+        std::string inner;
+        const auto  geometry =
+            context.resources->require<const WheelGeometryMap>(geometry_id, inner);
+        if (geometry == nullptr) {
+            err = wheels_ref.path() + ": " + inner;
+            return nullptr;
+        }
+        bool any = false;
+        ok       = true;
+        wheels_ref.forEach("Use", [&](const ConfigNode& u) {
+            if (!ok) {
+                return;
+            }
+            std::string wheel_id;
+            if (!u.requireAttr("wheel_id", wheel_id, err)) {
+                ok = false;
+                return;
+            }
+            const WheelDecl* decl = geometry->find(wheel_id);
+            if (decl == nullptr) {
+                err = u.path() + ": wheel " + wheel_id + " does not exist in resource " +
+                      geometry_id.value;
+                ok = false;
+                return;
+            }
+            any = true;
+            ok  = addWheel(decl->sensor, decl->label.empty() ? decl->id : decl->label,
+                           decl->radius_m, decl->position_x_m, decl->position_y_m,
+                           decl->measurement_angle_deg, decl->direction_positive,
+                           u.path());
+        });
+        if (!ok) {
+            return nullptr;
+        }
+        if (!any) {
+            err = wheels_ref.path() + ": Wheels needs at least one <Use wheel_id=.../>";
+            return nullptr;
+        }
+    }
+
     if (odom->wheels_.empty()) {
-        err = who + ": tracking_wheel_odometry needs at least one TrackingWheel";
+        err = who + ": tracking_wheel_odometry needs TrackingWheel elements or a "
+              "Wheels reference";
         return nullptr;
     }
 
@@ -350,9 +413,20 @@ FunctionStatus TrackingWheelOdometry::run(const PreprocessingInput& in, Artifact
                     const double dt = secondsBetween(stored->measuredAt,
                                                      heading_.prev_stamp);
                     if (dt * 1000.0 > static_cast<double>(heading_.max_gap_ms)) {
-                        // rate integration across an outage is garbage;
-                        // reseed and drop the interval
+                        // Rate integration across an outage is garbage;
+                        // reseed and drop the interval. The wheels' travel
+                        // over the same window goes with it: every solve
+                        // input must describe the same [start, end]
+                        // interval, so the whole fusion window rebases.
                         heading_.have_prev = false;
+                        for (Wheel& w : wheels_) {
+                            w.pending          = false;
+                            w.pending_travel_m = 0.0;
+                            w.pending_dt_s     = 0.0;
+                        }
+                        heading_.pending        = false;
+                        heading_.pending_dtheta = 0.0;
+                        heading_.pending_dt_s   = 0.0;
                     } else {
                         // the accumulated angle keeps rotation that packet
                         // batching would drop from a latest-rate sample; a

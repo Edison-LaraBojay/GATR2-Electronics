@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Two-wheel + IMU odometry plus the camera/AprilTag diagnostic stack.
+     Identical vision stack to the three-wheel variant; only the wheel
+     references differ. The selected pair is one forward-measuring wheel
+     plus the lateral rear wheel; confirm against the physical build. Gate
+     values are starting points for tuning sweeps, not calibrated facts. -->
+<Pipeline>
+
+    <CommandCollection type="noop"/>
+
+    <Preprocessing type="configured_collection">
+        <Preprocessor id="tracking_motion" type="tracking_wheel_odometry">
+            <Wheels resource_id="wheel_geometry">
+                <Use wheel_id="left_wheel"/>
+                <Use wheel_id="rear_wheel"/>
+            </Wheels>
+            <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
+                               max_calibration_travel_m="0.005"/>
+            <Output artifact_id="tracking_motion_delta"/>
+        </Preprocessor>
+    </Preprocessing>
+
+    <Localization type="wheel_imu_prediction">
+        <Motion artifact_id="tracking_motion_delta"/>
+    </Localization>
+
+    <FieldEstimation type="landmark_field">
+        <FieldMap resource_id="override_field"/>
+        <Pipeline>
+            <ObservationExtraction type="apriltag_tag_observation">
+                <Camera sensor_id="front_camera"/>
+                <Detector resource_id="tag_detector"/>
+                <Output observation_id="tag_observations"/>
+            </ObservationExtraction>
+            <Association type="tag_mount_association">
+                <Observations observation_id="tag_observations"/>
+                <FieldMap resource_id="override_field"/>
+                <RobotFrames resource_id="robot_geometry"/>
+                <Gates max_translation_error_m="0.75" max_heading_error_deg="30"
+                       ambiguity_margin_m="0.15" max_range_m="3.0"
+                       min_decision_margin="10" max_hamming="0"
+                       min_facing_cos="0.1" min_projected_size_px="8"
+                       max_reprojection_error_px="0"
+                       max_alternate_pose_ambiguity="0"/>
+                <Output association_id="landmark_pose_observations"/>
+            </Association>
+            <Estimator type="landmark_estimator" commit="always" blend="1.0"/>
+        </Pipeline>
+    </FieldEstimation>
+
+    <TargetResolution type="noop"/>
+
+    <Publishing type="vex_brain">
+        <Serial resource_id="brain_uart"/>
+        <Health fresh_ms="150">
+            <Encoder sensor_id="tracking_encoder_a"/>
+            <Encoder sensor_id="tracking_encoder_c"/>
+            <Gyro sensor_id="robot_imu"/>
+        </Health>
+    </Publishing>
+
+</Pipeline>
