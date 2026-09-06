@@ -1,8 +1,112 @@
-Restructure context, captured 2026-09-06 from repository commit `74d2432`.
+# Restructure context and implementation reading guide
+
+Revised 2026-09-06. Repository investigation started at commit `74d2432`.
 
 This is a descriptive working brief for the upcoming redesign. It records what
 the repository expresses and what the user has actually said. It does not make
 the existing architecture, documentation, tests, or inferred preferences binding.
+
+Read this document for the problem, priorities, decision history, and repository
+evidence. Read [reporting-proposal.md](reporting-proposal.md) next for the candidate
+implementation semantics, worked examples, outstanding choices, and validation
+scenarios. Neither document is evidence that the proposed system already works.
+
+## Current direction
+
+The product is an external VEX sensing subsystem presented to the Brain through
+one port. Combining three tracking wheels and an IMU into a useful robot pose is
+already valuable: the Brain avoids consuming a separate port and implementing an
+integration path for each physical sensor. The Pi supplies the coherent estimate.
+Vision adds information about a selected physical reference for final alignment.
+The motivating problem is broader than an AprilTag navigation application.
+
+The seasonal design should let the team change sensors, goal geometry, marker
+arrangements, and scoring behavior without rebuilding the meaning of every
+interface. That does not demand a general robotics platform or an arbitrary
+execution graph. The user is comfortable choosing a fixed pipeline once its
+responsibilities are understood. Generality has to earn its complexity.
+
+Use this table as the current decision ledger. Historical alternatives below do
+not override it. A recommendation can be used to develop a concrete proposal,
+but should not be attributed to the user as a settled requirement.
+
+| Topic | Current standing | Consequence for implementation |
+|---|---|---|
+| Existing code and design | User explicitly permits substantial replacement, including concepts. | Preserve useful understanding and measured behavior; do not port classes or tests merely because they exist. |
+| Product scope | User wants one Brain sensing connection, useful across VEX seasons and different sensors. | Localization must be useful independently of vision. Avoid exposing the current sensor inventory as the permanent product API. |
+| Primary vision purpose | User emphasizes precise final alignment in autonomous and driver control. | Report the robot-landmark relationship; visual field localization and autonomous route planning are outside this redesign's current purpose. |
+| Behavior ownership | User's proposed boundary puts destination construction and use of estimates in the Brain. | Standoff, scoring end, mechanism contact offsets, motor control, and completion belong with behavior. |
+| Retained vision information | User supports Pi-side propagation after revisiting observation-only output. | Carry the selected estimate through a blind turn using robot motion; report its observation age honestly. |
+| Live scope | User confirms one selected entity reported and propagated at a time, with no live propagated whole field. | Do not add background tracks for every catalog entry. Multiple tags may still support that one estimate. |
+| Static geometry | User still expects nominal seasonal geometry to help recognition/association. | Keep definitions and prior placement separate from measured live state. A catalog is compatible with one live estimate. |
+| Object versus face | Still open. Assistant recommends one rigid goal with named face frames and tag mounts when rigidity is adequate. | Define the chosen reference explicitly; do not silently equate goal center, tag center, and scoring face. |
+| Output shape | User proposed robot `(x, y, heading)` plus landmark-relative `(delta_x, delta_y, delta_heading)`. | Refine identity, coordinates, timing, absence, and retention semantics before encoding bytes. Exact API remains open. |
+| Heading convention | Still open. Assistant proposes robot forward/left/up and an inward-facing scoring frame. | Existing outward approach frames cannot be reused with changed meaning without conversion. |
+| Multiple selected entities | No current behavior justifies implementing them. | Use identified estimates for correctness now; defer multi-selection management. |
+| Camera optimization | User is exploring fixed crops, predicted regions, narrower FOV, and fewer pose solves. | Treat these as measurable alternatives beneath perception, not required architecture or established speedups. |
+| Binary format | User explicitly deprioritized it during this discussion. | Set semantic meaning first. This does not establish compatibility with any existing message layout. |
+
+## The interactions the design must explain
+
+**Sensor consolidation without vision.** The robot moves while wheel/IMU samples
+arrive. Navigatr integrates calibrated motion and publishes a robot pose through
+the shared Brain interface. Camera absence or lack of a selected landmark should
+not remove the basic value of the subsystem. Robot pose is an estimate in defined
+navigation coordinates, not a promise of perfect true field position.
+
+**Final alignment while the goal is visible.** The Brain requests information
+about a particular goal or scoring face. Navigatr identifies relevant observations
+and estimates that reference relative to the robot. The Brain can use the result
+to correct a final approach or assist a driver. Defining where a physical face is
+does not decide how far the robot should stop from it.
+
+**Observe, turn, then score backward.** A forward camera may see useful tags before
+the robot turns its rear toward the goal. Continuing the interaction then needs
+memory of the observation and an estimate of motion after it. This is the concrete
+reason the discussion moved from observation-only events toward a selected
+landmark estimate retained on the Pi. Propagation is not a new sighting, and it
+cannot discover movement of an unseen goal.
+
+**Several visible tags, one selected reference.** Tags on different sides of one
+rigid goal can contribute to the requested face estimate if their physical mounts
+are correctly identified. Selecting one face does not necessarily mean using only
+the tag on that face. Other goals can remain static association alternatives
+without becoming live tracked objects.
+
+**No convincing observation.** Nominal placement may help search, but it must not
+quietly appear as a freshly observed landmark. If identity is ambiguous or the
+relevant face has never been acquired, there is no measured estimate to propagate.
+What the Brain does without that information is a behavior decision.
+
+## Why these boundaries matter
+
+The word **target** previously combined an object being sensed with the destination
+the robot should reach. The proposed distinction is a **landmark/reference pose**
+supplied by sensing and a **desired robot/contact pose** constructed by behavior.
+Future implementers should use those meanings explicitly rather than preserve
+the old target field names and accidentally carry over destination ownership.
+
+A relative heading discrepancy can contain goal rotation, robot heading drift,
+camera/mount error, and observation error. It is useful for alignment even when
+those contributions cannot be separated. Reporting it as an independently
+measured field correction would promise information the system does not have.
+Likewise, transferring propagation from Brain to Pi improves ownership of timing
+and calibration; it does not improve the underlying motion measurement by itself.
+
+There are three different things sometimes called a field: a coordinate reference,
+a static catalog with nominal placements, and a running estimate of many objects.
+The first two can support this design without the third. An additional practical
+detail is essential: a nominal field map and an arbitrary odometry origin are
+not automatically in the same coordinates. Prior-based association or image
+projection needs a known mapping between them, an explicitly framed request hint,
+or an acquisition method that works without that prior. Once a relative landmark
+has been acquired, local motion can predict it without an independently accurate
+global field pose.
+
+## How the discussion reached this direction
+
+The following chronology preserves why alternatives were raised. Statements about
+what was open at an earlier point are historical, not new undecided requirements.
 
 The user's stated position is the starting point:
 
@@ -30,8 +134,9 @@ the boundary they are considering:
   desired standoff, contact offsets, and how to use an observation for control.
   The Pi would report estimated environmental geometry rather than calculate a
   behavior-specific target pose.
-- The user questions whether a persistent global field model is necessary.
-  This is an open design decision, not a request to remove it from code yet.
+- The user initially questioned whether a persistent global field model is
+  necessary. Later they selected one live entity with no propagated whole field;
+  no runtime removal has been implemented as part of these documentation changes.
 - A fixed pipeline is acceptable in principle; its exact stages are unsettled.
 - Heading meaning and identification of a particular goal/face need to become
   explicit. Small physical goal rotations are an expected operating condition,
@@ -50,8 +155,9 @@ the boundary they are considering:
   emitted only on observation. A landmark observation is an event, not a held
   landmark status with an `observed` flag. The Brain may use events immediately,
   retain a destination, or propagate landmark information using localization.
-  This supersedes the assistant's earlier landmark status table and pending
-  question about Pi-side retention. Exact API and timing delivery remain open.
+  At that point this replaced the assistant's earlier landmark status table.
+  The later blind-turn discussion in turn replaced event-only output as the main
+  direction. Exact API and timing delivery remain open.
 - The user then returned to the underlying product problem rather than treating
   the two proposed outputs as a settled architecture. The immediate value is
   combining three tracking wheels and one IMU, fused on the Pi, into one clean
@@ -73,8 +179,8 @@ the boundary they are considering:
   now. The assistant recommends one active selection initially, with an explicitly
   identified, self-contained estimate per landmark so single selection is not a
   permanent assumption throughout the architecture. Simultaneous selection is
-  deferred pending a concrete use case; this scope recommendation is not yet a
-  separate user decision. Several cameras/tags observing one landmark are distinct
+  deferred pending a concrete use case; the next user message confirmed one
+  selected entity initially. Several cameras/tags observing one landmark are distinct
   from tracking several landmarks. Blind-maneuver accuracy remains unmeasured.
 - The user next confirmed the initial scope: report and propagate only the selected
   entity, with no live propagated field. They questioned whether this saves much
@@ -88,6 +194,8 @@ the boundary they are considering:
   one of several tags associated with the selected goal. They asked whether these
   save enough computation to justify their complexity. These remain options to
   evaluate, not approved implementation requirements or measured speedups.
+
+## Geometry and processing rationale
 
 For rigid goals, the assistant recommends a physical object with named face frames
 and separately identified tag mounts. Select the object and face to report; accept
@@ -120,8 +228,9 @@ one common object-pose fit. Actual latency, association reliability, and alignme
 error should determine these choices; they need not change the reporting contract.
 
 For that clarified use case, the user supports Pi-side temporary tracking of the
-selected stationary landmark. Navigatr already owns measurement
-timing, calibration, and robot motion history. The Brain still owns the desired
+selected landmark. Treating it as stationary during the blind interval is the
+assistant's initial modeling recommendation. The existing Navigatr design places
+measurement timing, calibration, and robot motion history on the Pi. The Brain owns the desired
 contact relationship, approach, and whether a given estimate is suitable for its
 behavior. This revisits the event-only proposal; it does not require preserving
 the existing target tracker or adding a persistent estimate of every field object.
@@ -141,9 +250,9 @@ is pending; no acceptable error bound or blind interval has been established.
 The assistant's resulting recommendation is to model the product as one integrated
 VEX sensing subsystem with multiple capabilities. Navigatr owns acquisition,
 calibration, timing, sensor fusion, and interpretation into useful geometry. The
-Brain chooses goals and behavior. Continuous robot pose and occasional landmark
-observations remain a plausible first interface, rather than the definition of
-everything the subsystem may ever provide. A new sensor may improve an existing
+Brain chooses goals and behavior. Continuous robot pose and the available selected
+landmark estimate are the current interface direction, rather than the definition
+of everything the subsystem may ever provide. A new sensor may improve an existing
 estimate or support another measurement capability. A fixed processing structure
 is compatible with replaceable sensor and algorithm implementations.
 
@@ -152,10 +261,11 @@ the Brain reconstruct sensor timing is not inherently simpler. The Pi already ha
 the sensor context needed to time-align observations. Pairing an observation with
 the matching robot pose or compensating it to an explicitly stated instant belongs
 to measurement processing and is distinct from ongoing propagation after visibility
-loss. The latest discussion considers moving that limited propagation into
-Navigatr too. The timing-delivery mechanism has not been selected.
+loss. The user supports placing that limited propagation in Navigatr too. The
+timing-delivery mechanism has not been selected.
 
-Assistant proposal for discussion, not yet user-approved:
+The following implementation recommendations elaborate the supported direction;
+their exact conventions and mechanisms have not been approved as an API:
 
 1. Separate a robot coordinate reference, a catalog of recognizable landmarks
    and their local geometry, and a persistent estimate of landmark positions
@@ -166,10 +276,9 @@ Assistant proposal for discussion, not yet user-approved:
    relative to the robot. Brain-side behavior decides where its mechanism should
    go relative to that reported geometry. Defining a face does not choose a
    standoff or tell the robot which end to score with.
-3. The event-only proposal remains an option: ongoing robot pose samples and new
-   landmark observation events, with no event when no accepted observation occurs.
-   For the later rear-scoring use case, the assistant recommends a continuously
-   updated selected-landmark relative estimate when available, alongside its last
+3. Observation events can remain useful for diagnostics, but event-only delivery
+   is the earlier alternative. For the rear-scoring use case, report an updated
+   selected-landmark relative estimate when available, alongside its last
    accepted visual observation time. A new estimate timestamp must not masquerade
    as new visual evidence. A large landmark status enum is not required.
 4. A possible alignment-friendly face convention is origin at a defined point
@@ -197,13 +306,15 @@ Assistant proposal for discussion, not yet user-approved:
    filter, not evidence: indistinguishable goals/faces still require another cue
    or an ambiguous/unavailable result. A uniquely identified face may need only
    simple lookup; association need not imply a maintained global field.
-7. Continuing after visibility loss is now under discussion as a Pi-side sensing
-   responsibility. Retain only the selected landmark in local odometry and
+7. Continuing after visibility loss is part of the supported Pi-side sensing
+   direction. A recommended implementation retains the selected landmark in local odometry and
    re-express it in current robot coordinates, assuming stationarity or an explicit
    landmark motion model. The Brain may separately retain a desired destination.
    No measured track exists until an observation is accepted; nominal placement
    must not silently substitute for acquisition. Clearing/switching selection or
    a discontinuous odometry reference requires explicit invalidation or conversion.
+
+## Existing repository: evidence and limitations
 
 The current implementation described below predates that direction. Its target
 tracker and world model are context for reconsideration, not the proposed design.
@@ -225,13 +336,14 @@ of an approved or tested autonomous route. See the
 [two-wheel target template](../pi/navigatr/config/two_wheel_imu_apriltag_landmark_correction.xml.in)
 and [target geometry](../pi/navigatr/src/resources/target_set.h).
 
-The current design addresses that problem by integrating tracking wheels and
+The existing code addresses that problem by integrating tracking wheels and
 gyro for continuous local odometry, using camera evidence to resolve a selected
 landmark-derived target, and latching the resulting destination. The intended
 benefit is that the robot can turn or lose sight of the landmark while retaining
-a stable destination. Vision's role in correcting targets, its acquire-once
-policy, and whether it should also correct robot localization are open redesign
-decisions, even though the existing docs describe a definite policy.
+a stable destination. The old acquire-once destination policy is not the current
+selected-landmark proposal. Vision is currently being designed for relative
+alignment, not robot field-pose correction, despite differing claims across
+older documents.
 
 The current infrastructure is:
 
