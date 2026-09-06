@@ -32,6 +32,10 @@ secrets.local
 # grow without bound.
 *-backups/
 
+# KiCad 9 Local History. It is a nested git repo, so adding it records a
+# bogus submodule gitlink instead of files.
+.history/
+
 # Per user window and view state, not shared design data.
 *.kicad_prl
 
