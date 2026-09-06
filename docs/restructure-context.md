@@ -431,13 +431,95 @@ The implementation is less complete than the architectural prose can suggest:
   repository claims. This investigation did not establish measurement provenance,
   validate datasheets, inspect live devices, or prove assembled hardware behavior.
 
-Future discussion should resolve which of these concepts the user wants to
-discard, the robot tasks and accuracy/timing outcomes that matter, which physical
-hardware is already committed, and what the Brain should ask for and receive.
-Those decisions will determine how much infrastructure is justified. Until then,
-use this brief as context and a source map, not as a design to reproduce.
+## Which documents to use for implementation
+
+Start with the current direction in this document, then the proposed contract in
+[reporting-proposal.md](reporting-proposal.md). The proposal includes an ordered
+implementation sequence and behavioral checks. Consult the older documents by
+the concern being implemented, using the table below. Their use of words such as
+"contract" or "mandatory" describes the old implementation; it does not turn those
+choices into user requirements for this restructure.
+
+| Document | Good implementation reference for | Qualification when restructuring |
+|---|---|---|
+| [Reporting proposal](reporting-proposal.md) | Output meaning, frame examples, timing, one retained estimate, transition policies, camera options, validation, work order. | Best starting design brief for new behavior. It labels recommended mechanics and unresolved choices; it is not a frozen API. |
+| [Navigatr README](../pi/navigatr/README.md) | Current runtime overview, available profiles, build/replay commands, and missing deployment pieces. | Good orientation for changing existing code. Pi-owned destination resolution, acquire-once behavior, XML, and nine stages are not redesign requirements. |
+| [Navigatr framework](navigatr.md) | Transform chains, pose history, clock mapping, packet batching, and current association failure cases. | Recover the physical and timing concerns; reevaluate the registry, fixed slots, world state, and configured navigation intents. |
+| [Resource catalog](navigatr_resources.md) | Shared hardware ownership, one decoder for a shared input, measured calibration, physical mount identities, immutable geometry. | `target_set` includes old behavior ownership. Existing outward approach frames differ from the proposed inward face frame. Correctly transformed software crops need not inherit exact-dimension restrictions from current constructors. |
+| [Sensor catalog](navigatr_sensors.md) | Measurement payloads, timestamps, calibration ownership, and distinction between no new sample, stale data, and a fault. | Useful for sensor independence; exact polling structure, XML syntax, and current sensor families are replaceable. |
+| [Interfaces](interfaces.md) | Current hardware signal assignments and wire-format background when interoperating with existing devices. | Cross-check actual bytes in `common/`. Old absolute-object/landmark-array/bearing/status semantics are not the new relative-face contract. The all-fusion-on-Pico-clock claim needs reconciliation with camera host timestamps. |
+| [Hardware](hardware.md) | Component rationale and questions to check against the physical build. | Verify the actual board revision, acquisition settings, and measured values. Periodic vision correction of gyro drift, EKF claims, and numerical resource/performance estimates are not established redesign behavior. |
+| [Pi setup](pi_setup.md) | Host access, provisioning, and UART bring-up background. | Not proof that production deployment or camera support is complete. Check placeholders and the actual target environment before use. |
+| [RS-485 bench README](../bench/rs485_link/README.md) | An isolated Pi-to-Brain byte-transfer experiment. | Does not establish estimator correctness or a bidirectional production command path. Verify wiring against the actual transceiver revision. |
+| [Pico README](../pico/README.md) and [PlatformIO configuration](../pico/platformio.ini) | Firmware boundary and build environment. | README is incomplete; current source also acquires gyro data. Hardware calibration is not established by compilation. |
+| [Brain README](../brain/README.md) | Intended consumer-library responsibility. | The described Chomp implementation is absent here; do not plan around an already usable library. |
+| [CI workflow](../.github/workflows/ci.yaml) | Existing host test and firmware build entry points. | Formatting is advisory. Defined checks and synthetic tests do not prove live-camera performance or scoring accuracy. |
+
+The root [README](../README.md), [Pi README](../pi/README.md), and
+[bench README](../bench/README.md) provide directory orientation. They are not
+enough to specify the new behavior. The [documentation index](README.md) links
+the recommended reading order; the former `architecture.md` pointer referred to
+a file that is not present.
+
+## Source map for concrete implementation work
+
+These are candidates to inspect or reuse, not a preservation list. Retain a piece
+only if its behavior, dependencies, and verification fit the new responsibilities.
+
+| Work | Source starting points | What to extract or reconsider |
+|---|---|---|
+| Acquisition and shared decoding | [Pico main](../pico/src/main.cpp), [Pico settings](../pico/src/config.h), [shared telemetry](../pi/navigatr/src/impl/resources/pico_telemetry.cpp), [frame codec](../common/frame_codec.cpp) | Device sample timing, raw units, packet recovery, handling every motion contribution even when reads batch packets. Avoid separate consumers independently draining the same link. |
+| Calibrated local motion | [Wheel preprocessing](../pi/navigatr/src/impl/preprocessing/tracking_wheel_odometry.cpp), [prediction](../pi/navigatr/src/impl/localization/wheel_imu_prediction.cpp) | Wheel geometry, sign conventions, gyro integration, and bias behavior. Do not label this implementation an EKF or treat its confidence placeholder as uncertainty. |
+| Coordinate and time mechanics | [Planar transforms](../pi/navigatr/src/math/transforms.h), [3D transforms](../pi/navigatr/src/math/se3.h), [clock mapping](../pi/navigatr/src/core/clock_sync.h), [robot history](../pi/navigatr/src/state/robot_state.h) | Explicit composition/inverse, rotation of translations, clock-domain conversion, and exposure-time history. Internal frame names and history containers remain choices. |
+| Camera and detector boundaries | [Camera contract](../pi/navigatr/src/resources/camera.h), [detector contract](../pi/navigatr/src/resources/tag_detector.h), [perception adapter](../pi/navigatr/src/impl/perception/apriltag_tag_observation.cpp) | Calibration and exposure metadata, native-to-robot geometry, detection identity/corners. Existing detector output couples detection with pose; separating them may be useful for selective pose solving. |
+| Missing live vision | [Camera factory](../pi/navigatr/src/impl/resources/cameras.cpp), [detector factory](../pi/navigatr/src/impl/resources/tag_detectors.cpp) | These identify unfinished backends. A declaration or synthetic adapter test does not substitute for real capture, timestamping, and calibrated detection. |
+| Catalog and association | [Field definitions](../pi/navigatr/src/config/field_map.h), [mount association](../pi/navigatr/src/impl/association/tag_mount_association.cpp) | Object/face/mount relationships, repeated-ID alternatives, and explicit ambiguity. Separate static definitions from live state and old target dependencies. |
+| Selected estimate | [Old target tracker](../pi/navigatr/src/impl/world_prediction/target_tracker.cpp), [old target definitions](../pi/navigatr/src/resources/target_set.h) | Useful examples of late-result and reset concerns, but they resolve/latch destinations. The new retained quantity is measured landmark geometry, updated by accepted evidence. |
+| Brain integration | [Publisher](../pi/navigatr/src/impl/publishing/vex_brain.cpp), [command reader](../pi/navigatr/src/impl/commands/vex_brain_serial.cpp), [message declarations](../common/frames.h) | Trace what existing fields actually mean. Define the new semantic adapter and physical command route before claiming end-to-end selection works. |
+| Runtime composition | [System construction/execution](../pi/navigatr/src/runtime/system.cpp), [registration](../pi/navigatr/src/runtime/register_all.cpp) | Discover dependency and scheduling costs. A simpler fixed pipeline is acceptable if timing, sensor ownership, and output semantics remain clear. |
+
+For executable examples, inspect the
+[odometry profile](../pi/navigatr/config/three_wheel_imu_no_landmark_correction.xml)
+and [camera template](../pi/navigatr/config/three_wheel_imu_apriltag_landmark_correction.xml.in).
+The first is a bring-up configuration with publishing disabled; the second is
+an unfinished template. Their values and `verified` labels do not establish
+measurement provenance or authorization to use the old target semantics.
+
+Useful test references include
+[coordinate transforms](../pi/navigatr/tests/transforms_gtest.cpp),
+[3D transforms](../pi/navigatr/tests/se3_gtest.cpp),
+[localization](../pi/navigatr/tests/localization_gtest.cpp),
+[vision and targets](../pi/navigatr/tests/vision_targets_gtest.cpp),
+[Brain I/O](../pi/navigatr/tests/brain_io_gtest.cpp), and
+[frame recovery](../common/tests/frame_codec_gtest.cpp).
+Extract physical scenarios and failure cases. Tests that insist on Pi-owned
+destinations, exact XML shape, or old acquisition states should change with the
+design rather than force the design back to the old architecture.
+
+## Implementation readiness and remaining evidence
+
+The supported responsibilities are enough to develop a concrete implementation
+plan. The [proposal's implementation sequence](reporting-proposal.md#implementation-sequence)
+separates foundational work from later optimization and physical validation.
+Routine implementation choices do not all need another user decision; document
+assumptions and avoid silently changing the agreed product boundary.
+
+Before freezing the public contract, settle the physical reference, axes, units,
+angle wrapping, clock interpretation, and selection/reset behavior. Before relying
+on a blind scoring maneuver, establish the mechanism's lateral/angular tolerance
+and measure observe-turn-back-up error. Before optimizing vision, establish a
+working calibrated backend and stage timings. Before deployment, establish the
+actual hardware revision, calibration provenance, and Brain-to-Pi command route
+consistent with the one-port product goal.
+
+None of those unresolved details is a reason to recreate a live world model,
+generalize to many simultaneous tracks, or preserve the existing code by default.
+Conversely, simplifying state does not make association, calibration, or timing
+disappear. Those concerns follow from the physical interaction itself.
 
 Investigation scope: read the architecture and hardware/interface documents,
 configuration profiles, firmware/protocol and Pi runtime/algorithm code, test
 scenarios, build workflow, PCB metadata, and recent repository history. No code
-was changed and no builds, tests, deployment, or hardware sessions were run.
+was changed and no builds, runtime tests, deployment, or hardware sessions were
+run. Documentation edits and document consistency/link checks are separate from
+that implementation evidence.
