@@ -1,7 +1,17 @@
-# pi
+# Raspberry Pi sensing runtime
 
-Raspberry Pi 4 vision and localization. Encoder frames in from the Pico,
-AprilTag detection, pose out to the brain over RS-485.
+[`navigatr`](navigatr/README.md) combines timestamped measurements into a robot
+pose and an estimate of the physical landmark requested by the V5 Brain. The
+Brain chooses the reference and owns alignment, destinations, and motor control.
 
-`navigatr/` is the estimation pipeline. Implementations are selected in its
-XML config; see `docs/navigatr.md`.
+The runtime design uses independently scheduled localization and landmark
+pipelines in one program. Each pipeline has defined inputs and outputs; its
+implementation determines which sensors and algorithms it uses.
+
+Start with the [runtime overview](navigatr/README.md), then read:
+
+- [Architecture and scheduling](navigatr/docs/architecture.md)
+- [Coordinates, heading, and measurement time](navigatr/docs/coordinates.md)
+- [Landmark reporting and retention](navigatr/docs/landmarks.md)
+
+The overview includes implementation coverage and build commands.

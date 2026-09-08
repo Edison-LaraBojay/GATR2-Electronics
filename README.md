@@ -1,76 +1,51 @@
 # GATR2 Electronics
 
-Electronics, firmware, shared protocols, and Raspberry Pi software for the
-GATR2 robot platform. This repository covers the sensing path from the custom
-boards to the robot controller:
+Electronics, firmware, shared protocols, and Raspberry Pi sensing software for
+the GATR2 VEX robot.
 
 ```text
-encoders / IMU / cameras
-          |
-          v
-RP2040 acquisition firmware -> Raspberry Pi estimation -> V5 brain control
-          |                         |                         |
-       pico/                    pi/navigatr/               brain/
-                    common wire contracts in common/
+encoders / IMU -> RP2040 acquisition -> Raspberry Pi estimation -> V5 Brain
+camera / other Pi-connected sensors ----------^
 ```
 
-The Pico owns deterministic hardware acquisition. The Pi owns timestamped
-sensor processing, localization, vision, configured navigation targets, and
-health reporting. The V5 brain owns autonomous and driver-control behavior; it
-selects a configured target and consumes the robot and target poses returned by
-the Pi.
+The Pi combines timestamped sensor measurements into robot localization and
+information about a requested physical landmark. The Brain owns destinations,
+alignment behavior, mechanisms, and motor control.
 
-## Design contract
+## Pi runtime
 
-- Generic runtime code knows the stable concepts: resources, sensors, typed
-  results, pipeline contracts, timing, status, and diagnostics. It does not
-  know which particular camera, wheel layout, landmark detector, or navigation
-  algorithm a robot uses.
-- Concrete hardware and algorithms are compiled as registered implementations.
-  XML selects them by plain names such as `pico_encoder_channel` and supplies
-  the implementation-owned configuration below that node.
-- Every semantic pipeline position is explicit. Deliberately disabling an
-  operation uses a registered `noop`; an omitted algorithm never silently
-  becomes a default.
-- Instance ids are opaque cross-references. Meaning comes from the selected
-  implementation and its configuration, not from parsing an id or directory-
-  shaped type name.
-- A complete hardware/pipeline profile is selected once when the Pi program
-  starts. Runtime Brain commands select configured target ids; they do not
-  rebuild or hot-swap the pipeline.
-- Runnable configuration contains measured or independently verified physical
-  values. Unknown geometry remains a loud template placeholder. Provisional
-  calibration is an explicit bench-only choice, never an accidental fallback.
-- Camera evidence may acquire or correct the selected landmark-derived target
-  without discontinuously rewriting the smooth wheel-and-IMU odometry estimate.
+The [Navigatr overview](pi/navigatr/README.md) is the entry point for the Pi
+runtime design, implementation coverage, and build commands. Its design uses
+one program with independently scheduled localization and landmark-estimation
+pipelines, standard stage inputs and outputs, and timestamped pose history.
+Neither pipeline requires a particular sensor family or relative execution rate.
 
-The fixed Pi pipeline and its standard inputs and outputs are summarized in
-[pi/navigatr/README.md](pi/navigatr/README.md) and specified in
-[docs/navigatr.md](docs/navigatr.md).
+Robot position and landmark position use configured field coordinates. The
+landmark report identifies one requested reference and its rotation away from
+nominal field orientation, accounting for declared object symmetry. Static field
+definitions remain separate from the recommended cache of accepted measured
+object estimates. Observations update that cache; reporting selects the requested
+reference, and selection prioritizes processing work.
+
+- [Architecture and scheduling](pi/navigatr/docs/architecture.md)
+- [Coordinates and heading](pi/navigatr/docs/coordinates.md)
+- [Landmark reporting and retention](pi/navigatr/docs/landmarks.md)
 
 ## Repository map
 
 - [`pcb/`](pcb/) - KiCad boards, symbols, footprints, and hardware revisions.
-- [`pico/`](pico/) - RP2040 encoder/IMU acquisition firmware.
-- [`pi/navigatr/`](pi/navigatr/) - configurable Pi localization, vision, target
-  estimation, and publishing runtime.
-- [`brain/`](brain/) - V5-side integration surface for commands and returned
-  localization data.
-- [`common/`](common/) - dependency-light framing and wire contracts shared by
-  the Pico, Pi, and brain.
-- [`bench/`](bench/) - host-side and hardware bring-up utilities.
-- [`docs/`](docs/) - hardware facts, interfaces, Pi setup, and architecture.
+- [`pico/`](pico/) - RP2040 acquisition firmware.
+- [`pi/navigatr/`](pi/navigatr/) - Pi sensing and estimation runtime.
+- [`brain/`](brain/) - V5-side integration surface.
+- [`common/`](common/) - shared framing and wire codecs.
+- [`bench/`](bench/) - host and hardware bring-up utilities.
+- [`docs/`](docs/) - supporting hardware, interface, and setup material.
 
-## Documentation
+## Hardware and bring-up references
 
 - [Hardware architecture](docs/hardware.md)
 - [Shared interfaces and wire frames](docs/interfaces.md)
-- [navigatr architecture](docs/navigatr.md)
-- [Registered navigatr resources](docs/navigatr_resources.md)
-- [Registered navigatr sensors](docs/navigatr_sensors.md)
 - [Raspberry Pi setup](docs/pi_setup.md)
 
-The documentation is the behavioral contract the implementation is corrected
-toward. A checked-in `.xml.in` file is intentionally not a deployment profile:
-it records every measurement and decision still required before that profile
-may become runnable.
+Physical values require measurement or independent verification. A `.xml.in`
+configuration contains unresolved values and is not a deployment profile.

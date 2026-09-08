@@ -1,142 +1,88 @@
 # navigatr
 
-`navigatr` is the Raspberry Pi estimation runtime. It turns timestamped sensor
-data and Brain commands into a smooth robot pose, an optional resolved target
-pose, health information, and diagnostics. XML selects the hardware and the
-implementation used at each fixed semantic position; it does not define an
-arbitrary execution graph.
+`navigatr` is the Raspberry Pi sensing runtime for the GATR2 VEX robot. It
+combines measurements into a robot pose and an estimate of one requested
+physical landmark or scoring face. The Brain owns destinations, desired contact
+geometry, alignment control, and motor commands.
 
-This README is the operational contract. The deeper framework rules are in
-[`docs/navigatr.md`](../../docs/navigatr.md); registered configuration schemas
-are catalogued in [`docs/navigatr_resources.md`](../../docs/navigatr_resources.md)
-and [`docs/navigatr_sensors.md`](../../docs/navigatr_sensors.md).
+Robot position and reported landmark position use the configured field
+coordinates. Robot heading is its orientation in that field. The landmark's
+reported `heading_error` is its estimated rotation away from its nominal field
+orientation, modulo any declared object symmetry. Internal transforms use a
+consistent full orientation representative and associated face/mount geometry.
 
-## Fixed pipeline
+## Runtime design
 
-Resources are initialized before the runtime loop and passed to the factories
-that explicitly reference them. Every runtime cycle then executes the same
-semantic sequence:
+These documents define runtime requirements and data meaning. They are not
+evidence of completed hardware integration.
 
-```text
-Sensor Collection -> Command Collection -> Preprocessing
-  -> Localization -> Field Estimation -> Target Resolution -> Publishing
-```
+| Document | Responsibility |
+|---|---|
+| [Architecture](docs/architecture.md) | SensorMap, typed records, stage contracts, independent workers, state ownership, and pose-history lookup. |
+| [Coordinates](docs/coordinates.md) | Field and robot axes, heading error, square symmetry, side selection, camera mounting, and measurement-time transforms. |
+| [Landmarks](docs/landmarks.md) | One requested report, static field definitions, measured-object caching, association, and processing scope. |
 
-Each position holds one selected implementation behind one contract. An
-implementation may be a leaf, an explicit `noop`, or a composite that
-privately owns a nested pipeline (for example `landmark_field` internally
-runs observation extraction, association, and a landmark estimator). The
-coordinator never learns how many internal children exist, children are
-reachable only through their parent, and a child fault never partially
-commits the parent output.
+One executable hosts independently scheduled localization and landmark-estimation
+pipelines. Each pipeline runs its own stages in order and publishes complete
+snapshots. Neither assumes the other's sensor inventory or execution rate.
+Localization publishes recent motion history as well as its latest state, so
+landmark estimation can interpret a delayed observation at measurement time.
 
-| Position | Standard input | Standard output | Responsibility |
-|---|---|---|---|
-| Sensor Collection | cycle time and each initialized sensor executable | `SensorResultsMap` | Poll every configured sensor and retain its latest typed sample, state, timestamps, and diagnostic. |
-| Command Collection | previous `CommandState`, time, and the configured command transport | `CommandState` | Apply newly received command edges and otherwise carry the previous command forward. |
-| Preprocessing | sensor results and time | `ArtifactMap` | Convert raw samples into implementation-defined typed artifacts, such as a wheel/IMU motion increment. |
-| Localization | sensor results, artifacts, previous robot state, and command state | `RobotState` | Advance smooth odometry, maintain the exposure-time pose history, and (in a future composite) own any robot pose correction internally so vision never jumps wheel/IMU odometry from outside. |
-| Field Estimation | sensor results, artifacts, robot state, and the previous field state | `FieldState` plus published observation/association evidence | Estimate external field-object state, continuously and independently of any target. The `landmark_field` composite privately runs observation extraction, association, and a landmark estimator with an explicit commit policy (`always`, `never`). |
-| Target Resolution | commands, robot state, field state, and the published evidence | `TargetState` | Focused domain logic driven by the configured target set: activation edges, robot-relative snapshots, acquire-once latching with intent filtering (requested object, allowed mounts, preferred source, freshness, activation time), timeouts, epoch cancellation. Not an open plugin point. |
-| Publishing | all standard results and states | status/side effects | Publish the configured robot/target data and health without changing estimation state. Focused boundary logic driven by the configured transports. |
+`SensorMap` owns configured sensor producers. `SensorResultsMap` provides their
+standardized results. Consumers bind to declared payload types and source IDs.
+Shared devices and immutable calibration belong to resources. Each stage may
+contain a private pipeline behind its declared input/output contract.
 
-Every position has one explicitly selected `type`, including intentional
-absence such as `<FieldEstimation type="noop"/>`. Missing types, missing references,
-duplicate ids, incompatible payloads, and malformed calibration are startup
-errors rather than implicit behavior.
+The field definition supplies nominal geometry, reference identities, and the
+coordinate convention. Measured estimates remain separate from that definition.
+The recommended design caches accepted object estimates, including incidental
+observations within the processing budget, and reports only the requested
+reference. See the [retention policy](docs/landmarks.md#retention-policy).
 
-## Profiles are not targets
+## Implementation coverage
 
-A **profile** describes one complete deployed Pi topology: serial links,
-sensors, two- or three-wheel geometry, camera devices, algorithms, maps, and
-publishers. It is selected at process startup and remains fixed for that run.
-Different robots or genuinely different hardware stacks should have different
-profiles.
+The C++ implementation includes typed sensor records and bindings, shared
+resources, wheel/IMU motion estimation, transforms, pose history, association,
+configuration validation, replay, and host tests.
 
-A **target** is a configured navigation intent inside a profile. The Brain
-selects it by a stable wire id at runtime:
+[`System::step`](src/runtime/system.cpp) executes the stages synchronously.
+Independent workers and the time-window ring-buffer lookup described in the
+architecture are implementation work. The existing history is a bounded deque
+with a linear lookup. The current field estimator retains a map of objects, and
+the publisher uses configured target semantics; the landmark report defined here
+is not implemented by those interfaces. Grouping equivalent symmetric poses and
+the measured-cache lifecycle specified here also require implementation.
 
-- `robot_relative` snapshots a configured translation and heading in the
-  robot-at-activation axes exactly once.
-- `landmark_relative` combines a configured landmark, approach frame,
-  controlled robot frame, and desired offset. Its vision policy is explicit:
-  `none`, `acquire_once`, or a future separately implemented policy.
+Real camera capture and the AprilTag backend also need integration:
+[`cameras.cpp`](src/impl/resources/cameras.cpp) constructs a configured device
+without live capture, and [`tag_detectors.cpp`](src/impl/resources/tag_detectors.cpp)
+rejects construction of the missing backend. Synthetic tests establish software
+behavior, not camera latency or physical alignment accuracy.
 
-Selecting a target must not select a file, infer a wheel layout, or rebuild the
-pipeline. A profile is a `<Configuration>` document composing a Robot
-description, optional Field data, and a Pipeline fragment by file, resolved
-relative to the referencing file with strict fragment roots, no repeated or
-template includes, and no cross-file duplicate ids. The resolved profile
-carries its declared id and a content digest over every contributing file,
-printed at startup and visible to diagnostics. Passing a plain `<System>`
-pathname remains a bring-up mechanism, not the deployment-selection contract.
+## Configuration and calibration
 
-## Odometry and landmark evidence
+XML selects registered implementations and supplies their configuration. IDs are
+opaque references. Startup checks reject missing producers, incompatible payloads,
+duplicate outputs, and invalid calibration.
 
-Tracking-wheel measurements and the IMU produce the continuously evolving
-odometry pose. The field-to-odometry transform and retained host-clock pose
-history preserve the distinction between smooth local motion and field
-interpretation.
+- [`config/shared/robots/`](config/shared/robots/): robot geometry, sensor channels,
+  and a separate camera calibration fragment.
+- [`config/shared/pipelines/`](config/shared/pipelines/): two- and three-wheel
+  diagnostic processing configurations.
+- [`config/override/field.xml`](config/override/field.xml): nominal seasonal geometry
+  for nine goals and their physical tag mounts.
+- [`config/override/diagnostics/`](config/override/diagnostics/): composed diagnostic
+  profile templates.
 
-An AprilTag observation is transformed through the calibrated chain
+Files ending in `.xml.in` contain unmeasured or unresolved values. Complete their
+placeholders with measured configuration before using them as profiles.
+`calibration_status="UNCONFIGURED"` fails startup; `provisional` requires
+`--allow-provisional`. Camera intrinsics describe the actual optics and image
+mode. Camera mounting and robot contact geometry are separate measurements.
 
-```text
-detector-native tag -> camera engineering frame -> robot body
-  -> odometry at exposure time -> configured physical tag mount -> landmark
-```
+## Build and bring-up
 
-Only evidence associated with the active target may participate in its
-acquisition. `acquire_once` gathers a configured number of mutually consistent,
-fresh observations, latches one target pose in the odometry frame, and then
-closes the correction gate. Late evidence from an older target generation or
-odometry epoch is rejected. Loss of camera visibility after a successful latch
-does not move the target.
-
-## Configuration and calibration policy
-
-- `type` selects a registered implementation; `id` identifies one configured
-  instance; `*_id` attributes reference an existing producer or resource.
-- The generic builder requires only framework-owned structure. Each selected
-  implementation validates its own child attributes and nested XML.
-- Runnable `.xml` profiles contain confirmed physical and protocol values.
-- `.xml.in` files retain descriptive `@...@` tokens for every unknown value.
-  Do not replace an unknown measurement with zero merely to make parsing pass.
-- `calibration_status="UNCONFIGURED"` always fails. `provisional` is accepted
-  only with `--allow-provisional` for deliberate bench work; `verified` is the
-  deployment state.
-- Camera intrinsics belong to the exact camera, lens/focus state, sensor mode,
-  crop, resolution, and pixel format used at runtime. Camera extrinsics and
-  robot contact frames are separate measured geometry.
-
-## Configuration set
-
-```text
-config/
-  shared/
-    robots/gatr2_as5047_bno08x.xml.in     measured robot description template
-    pipelines/
-      two_wheel_bno08x_no_correction.xml
-      three_wheel_bno08x_no_correction.xml
-      two_wheel_bno08x_camera_diagnostic.xml
-      three_wheel_bno08x_camera_diagnostic.xml
-  override/
-    field.xml                             nine landmarks, 36 tag mounts
-    diagnostics/*.xml.in                  composed diagnostic profiles
-    blue/routes/  red/routes/             deliberately empty
-```
-
-The robot template owns every physical fact (transports, encoder channels,
-wheel geometry, robot frames, camera); the pipeline fragments restate no
-measurement and differ only through which declared wheels they reference.
-The diagnostic profiles are templates on purpose: they reference the
-measured `gatr2_as5047_bno08x.xml`, which exists only after every `@...@`
-token is replaced with a measured value. The former root-level XMLs with
-guessed geometry have been removed; nothing runnable carries an unmeasured
-number. Even a fully measured camera profile additionally requires the real
-libcamera capture backend, the AprilTag detector adapter, and a physical
-Brain-to-Pi command return path before the vision stack is live.
-
-## Build and host-side checks
+Run from `pi/navigatr`:
 
 ```text
 cmake -S . -B build
@@ -144,7 +90,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The runtime form during bring-up is:
+Runtime arguments:
 
 ```text
 ./build/navigatr <complete-config.xml> [--cycles <n>]
@@ -152,6 +98,6 @@ The runtime form during bring-up is:
 ./build/navigatr <complete-config.xml> --allow-provisional
 ```
 
-Replay must feed the same decoder and semantic pipeline as live hardware. It is
-for repeatable regression and timing tests, not a second implementation of the
-estimator.
+Replay uses the acquisition decoder and estimation implementations used by live
+input. Validate acquisition timestamps, publication latency, and alignment error
+on the robot before assigning operating limits.
