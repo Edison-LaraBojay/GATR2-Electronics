@@ -376,6 +376,146 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Device:R"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "R"
+				(at 2.032 0 90)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "R"
+				(at 0 0 90)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at -1.778 0 90)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Resistor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "R res resistor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "R_*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "R_0_1"
+				(rectangle
+					(start -1.016 -2.54)
+					(end 1.016 2.54)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Interface_UART:SN65HVD11HD"
 			(exclude_from_sim no)
 			(in_bom yes)
@@ -1051,7 +1191,19 @@
 		)
 	)
 	(rectangle
-		(start 81.28 68.58)
+		(start 69.088 85.09)
+		(end 85.09 113.03)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "6faa736d-712e-411c-9dd7-74209f7c1729")
+	)
+	(rectangle
+		(start 66.294 68.58)
 		(end 149.86 119.38)
 		(stroke
 			(width 0)
@@ -1095,6 +1247,16 @@
 			)
 		)
 		(uuid "452227aa-608c-4a21-a558-c5148e7de989")
+	)
+	(text "Default OFF \n(Active High)"
+		(exclude_from_sim no)
+		(at 77.216 88.646 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "8c1c5c44-c1de-4f18-93f4-20f14ff1f8ca")
 	)
 	(text "Decoupling"
 		(exclude_from_sim no)
@@ -1145,6 +1307,16 @@
 			(type default)
 		)
 		(uuid "24f12ae0-6ab2-41f2-abf5-670f603e6b5b")
+	)
+	(wire
+		(pts
+			(xy 74.93 93.98) (xy 77.47 93.98)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2a9d3cac-ef1a-4a19-901d-c24a0ecc4563")
 	)
 	(wire
 		(pts
@@ -1228,6 +1400,16 @@
 	)
 	(wire
 		(pts
+			(xy 77.47 93.98) (xy 77.47 96.52)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "bb0da330-131f-417b-8752-18e6ae647d1e")
+	)
+	(wire
+		(pts
 			(xy 107.95 96.52) (xy 111.76 96.52)
 		)
 		(stroke
@@ -1245,6 +1427,16 @@
 			(type default)
 		)
 		(uuid "e31b87ac-7a5b-41ca-879b-1e34bc6bac3e")
+	)
+	(label "EN"
+		(at 74.93 93.98 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "b06b9fd1-8f92-44b4-a8a5-d9a3379d5623")
 	)
 	(hierarchical_label "RSRX"
 		(shape input)
@@ -1483,6 +1675,88 @@
 			(project "RP4Hat"
 				(path "/48e8712f-9e83-40b5-843b-6f1e3e03f403/239f7877-3107-47af-b6b0-cc45091d5b60"
 					(reference "J1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 77.47 100.33 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "35d5a299-5ef0-49d2-bbad-99cefd3b3b12")
+		(property "Reference" "R1"
+			(at 80.01 99.0599 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "R"
+			(at 80.01 101.5999 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 75.692 100.33 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 77.47 100.33 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 77.47 100.33 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "2"
+			(uuid "658a63d3-779d-4a12-baa0-4b5183cee5bf")
+		)
+		(pin "1"
+			(uuid "82d925a5-f4fb-44fd-82e5-5a1234f2d834")
+		)
+		(instances
+			(project "RP4Hat"
+				(path "/48e8712f-9e83-40b5-843b-6f1e3e03f403/239f7877-3107-47af-b6b0-cc45091d5b60"
+					(reference "R1")
 					(unit 1)
 				)
 			)
@@ -1822,6 +2096,84 @@
 			(project "RP4Hat"
 				(path "/48e8712f-9e83-40b5-843b-6f1e3e03f403/239f7877-3107-47af-b6b0-cc45091d5b60"
 					(reference "C6")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 77.47 104.14 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "e3fb30ea-2824-47d3-9433-18a6ba87f509")
+		(property "Reference" "#PWR06"
+			(at 77.47 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 77.47 109.22 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 77.47 104.14 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 77.47 104.14 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 77.47 104.14 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "6ea3f749-9d76-48ac-adf0-c19075a7e58e")
+		)
+		(instances
+			(project "RP4Hat"
+				(path "/48e8712f-9e83-40b5-843b-6f1e3e03f403/239f7877-3107-47af-b6b0-cc45091d5b60"
+					(reference "#PWR06")
 					(unit 1)
 				)
 			)
