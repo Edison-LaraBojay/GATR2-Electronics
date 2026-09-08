@@ -9,6 +9,13 @@ The recommended design keeps the nominal field definition and a separate cache
 of accepted measured object estimates. Observations update that cache; reporting
 selects the one requested entry. Selection also prioritizes processing work.
 
+The [nested estimation pipeline](architecture.md#landmark-estimation-pipeline)
+defines preparation, extraction, candidate generation, geometry estimation,
+association resolution, and state estimation as separate contracts. Each may
+contain a series of interchangeable child implementations. Its final output is
+a LandmarkStateMap snapshot; reporting selects and formats a reference from that
+snapshot independently of sensor processing.
+
 ## Static field definition and measured state
 
 Keep these concepts separate:

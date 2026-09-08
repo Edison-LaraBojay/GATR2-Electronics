@@ -15,7 +15,7 @@ support.
 | SensorMap | Configured measurement producers indexed by opaque sensor ID. | Publications with declared payload types. |
 | SensorResultsMap | The standardized read view of sensor records. | Health, latest sample, measurement and receipt times, source sequence. |
 | Localization pipeline | Robot estimation state and recent motion history. | Complete state snapshots and timestamped pose lookup. |
-| Landmark-estimation pipeline | Accepted evidence and a cache of measured object estimates. | Selected landmark geometry and observation provenance. |
+| Landmark-estimation pipeline | Accepted evidence and a cache of measured object estimates. | An immutable LandmarkStateMap snapshot with geometry and observation provenance. |
 | Command handling | Initial pose, selection, request generation, stream controls. | Consistent command snapshots. |
 | Reporting | Consumer representation and transport. | Robot state, at most one requested landmark, timing, and availability. |
 
@@ -28,39 +28,146 @@ geometry; it does not embed those behavior decisions.
 ```mermaid
 flowchart TD
     S[SensorMap producers] --> R[SensorResultsMap]
-    R --> LP[Localization measurement preparation]
-    LP --> LE[Robot estimation]
-    LE --> L[Robot state and pose history]
-    R --> OP[Landmark observation extraction]
-    OP --> A[Association and geometric interpretation]
-    Q[Selected reference] -->|Processing priority| A
-    A --> E[Landmark estimation]
-    L -->|Measurement-time motion context| E
-    E --> K[Selected landmark report]
+    R --> LP[Localization pipeline]
+    LP --> L[RobotState and pose history]
+    R --> KP[Landmark-estimation pipeline]
+    L -->|Read-only timed context| KP
+    F[FieldDefinition and calibration] --> KP
+    Q[Commands and selection] -->|Initialization| LP
+    Q -->|Processing priority| KP
+    KP --> K[LandmarkStateMap]
     L --> P[Reporting]
     K --> P
+    Q -->|Requested reference| P
 ```
 
 Arrows represent data dependencies. There is no global requirement to complete
-every box once before another pipeline can advance. Association may also consult
-motion history or static geometry when its implementation needs those priors.
+every box once before another pipeline can advance. Both estimation pipelines
+run independently; their internal steps run in series. Reporting selects a
+reference from the published cache and derives its output representation.
 
 | Pipeline | Standard input | Standard output |
 |---|---|---|
-| Localization | Declared measurements, initialization/reset commands, prior estimator state. | Robot pose, effective time, reference identity, validity, and recent pose history. |
-| Landmark estimation | Declared measurements, selection, static reference geometry, available motion history, prior landmark state. | Identified landmark geometry, measurement provenance, effective time, and last accepted observation time. |
-| Reporting | Published estimates plus relevant health and command state. | Defined Brain report; no estimator mutation. |
+| Localization | Declared measurement view, initialization/reset commands, prior estimator state. | RobotState snapshot and associated pose history. |
+| Landmark estimation | Declared measurement view, selection priority, available robot history, prior LandmarkStateMap; configured field and calibration resources. | LandmarkStateMap snapshot containing accepted measured estimates and provenance. |
+| Reporting | Published RobotState and LandmarkStateMap snapshots, current selection and health; configured reference definitions. | Robot report plus at most one requested landmark report; no estimator mutation. |
 
-Each stage has a declared input/output contract. An implementation may be one
-algorithm or a composite containing a private sequence. A composite publishes
-only its declared outputs. Failed work cannot publish a partially updated
-estimate.
+The names below describe proposed contracts, not declarations already available
+in the C++ implementation. Resources such as calibration and FieldDefinition
+are bound during construction. Each invocation receives only the measurement,
+command, prior-state, and read-only timing context needed by that implementation.
 
-Inside a pipeline, a typed batch can pass through filtering, annotation,
-association, and estimation. Each boundary defines the fields available to the
-next stage. Observations retain source identity and measurement time as metadata
-is added. Persistent estimator state has one owner and is not an unrestricted
-mutable packet passed through unrelated stages.
+## Field definition and initial placement
+
+FieldDefinition is immutable configuration: field frame and units, dimensions or
+boundary geometry, nominal landmark poses, identities, reference frames, sensing
+features, and declared symmetries. Measured object state lives in LandmarkStateMap;
+observations do not overwrite the nominal definition.
+
+An approximate initial robot pose anchors local odometry in that field frame.
+The anchor is a rigid transform, including rotation as well as translation.
+Its error is inherited by robot pose and by landmarks transformed through robot
+pose. That common error can cancel when deriving their relative geometry, while
+association against the independent nominal map must tolerate the initial
+placement error, accumulated motion error, and actual landmark displacement.
+The allowed range depends on the association alternatives and measurement quality;
+it is not an arbitrary guarantee that the nearest nominal object is correct.
+
+See [initial pose and coordinate continuity](coordinates.md#initial-pose-and-coordinate-continuity)
+for the transforms and examples. Nominal bounds describe the configured field;
+do not clamp estimates to the field edge to conceal localization error.
+
+## Localization pipeline
+
+```text
+Measurement preparation -> Motion/pose observation extraction
+  -> Robot state estimation -> Publish RobotState and pose history
+```
+
+Preparation handles the selected measurement formats and calibration. Extraction
+produces explicitly typed motion or pose evidence. State estimation combines
+appropriate evidence with its previous state. Publication exposes a complete
+estimate and coherent history. These are standard boundaries; the framework does
+not prescribe a tracking-wheel model, IMU, camera, or fusion algorithm.
+
+For example, a wheel implementation can calibrate counts and apply wheel geometry
+before exposing a body-motion increment. A different implementation can supply
+pose observations. A composite can contain several contributors and fusion steps,
+but it must track evidence provenance so several products derived from one source
+are not silently counted as independent measurements.
+
+## Landmark-estimation pipeline
+
+```text
+Measurement preparation -> Observation extraction -> Candidate generation
+  -> Geometry estimation -> Association resolution -> Landmark state estimation
+  -> Publish LandmarkStateMap
+```
+
+| Stage | Input | Output | Responsibility |
+|---|---|---|---|
+| Measurement preparation | Relevant SensorResultsMap records and any required new-sample batches. | PreparedMeasurementMap. | Select new work, normalize/calibrate data, preserve measurement time and source coordinates. A camera implementation can crop or rectify while retaining the pixel-coordinate mapping. |
+| Observation extraction | PreparedMeasurementMap. | ObservationMap. | Extract evidence: for example IDs and corners, measured ranges, or already available relative poses. Include quality and source provenance. |
+| Candidate generation | ObservationMap, static definitions, available motion/cache priors, selection priority. | CandidateSet. | Enumerate plausible object and feature/mount assignments, including joint assignments for several observations. Prune only where the evidence supports it. An assignment here is a hypothesis. |
+| Geometry estimation | CandidateSet with its source observations, calibration, mount geometry, and measurement-time robot poses. | LandmarkHypothesisSet. | Solve or transform candidate geometry into the declared common estimation frame, with residuals, support, and pose alternatives. Several observations may constrain one hypothesis. |
+| Association resolution | LandmarkHypothesisSet and applicable nominal/cache priors. | LandmarkEvidenceMap. | Group symmetry-equivalent hypotheses, evaluate quality/consistency and competing identities, and accept supported object evidence or retain ambiguity. |
+| Landmark state estimation | LandmarkEvidenceMap and previous LandmarkStateMap. | Next LandmarkStateMap. | Initialize/update the measured cache, handle duplicate or delayed evidence, maintain observation age and validity, and preserve consistent orientation representatives. |
+
+Publication commits the completed cache snapshot after the state-estimation
+stage succeeds. Reporting is a separate consumer; it does not require another
+observation to select an existing usable entry. Deriving a named face and its
+heading-error representation belongs at that reporting boundary, using the
+configured reference/side-selection meaning.
+
+The geometry stage produces hypotheses because repeated IDs can require metric
+geometry to decide association. It must not assert identity merely to obtain a
+pose. Where a producer already supplies a pose, geometry estimation can transform
+that pose rather than solve it again. Where partial evidence is all that a sensor
+provides, the typed contract must preserve that limitation; an estimator that
+supports such evidence may accumulate it, while an incompatible implementation
+must be rejected at configuration time. No stage invents unmeasured coordinates.
+
+For an AprilTag example: preparation provides a calibrated image view; extraction
+produces tag IDs/corners; candidate generation finds compatible physical mounts;
+geometry estimation fits each supported assignment and applies camera mounting
+plus capture-time robot pose; association resolution decides which object
+hypotheses the evidence supports; state estimation updates those cache entries.
+Candidate assignments can share a per-tag pose solve when their tag size and
+camera calibration agree; applying a different mount transform does not require
+rerunning detection or that same pose solve.
+
+## Composing and exchanging implementations
+
+Each semantic stage has a declared input/output contract. Its implementation can
+be a leaf algorithm or a composite containing a private sequence of child stages.
+The same rule applies recursively. A composite presents its parent's contract
+to its caller and publishes only the outputs declared at that boundary.
+
+For example, an observation-extraction composite can run detection, decode-quality
+filtering, then corner-quality annotation on an ObservationMap. A geometry
+composite can normalize poses, fit several compatible observations jointly, then
+attach fit diagnostics. An association composite can apply range, visibility,
+and consistency filters before resolving competing hypotheses. A typed batch
+passes down the chain with each boundary defining the information now available.
+
+Implementations are interchangeable when their declared contracts are compatible.
+Examples include different detectors behind extraction, lookup or geometric
+candidate generation, single-observation or joint-fit geometry, and different
+state estimators behind cache update. Startup must verify referenced producers,
+payload types, coordinate/unit expectations, and required metadata. A matching
+function signature alone does not establish compatibility.
+
+Children execute in configured order within the composite. Several children can
+contribute records to a declared aggregate, or successively filter/annotate an
+existing typed collection. Output ownership and merge behavior must be explicit;
+one child cannot silently overwrite another's named product. All contributors
+retain source identity so the final estimator can recognize shared evidence.
+
+Persistent estimator state has one owner. Intermediates remain private until a
+successful publication; a child fault cannot partially commit the outer state.
+The selected composite may explicitly reject individual bad observations while
+continuing with valid ones. Adding children does not create threads automatically
+or let the outer coordinator invoke their private stages independently.
 
 Consumers bind to source IDs and payload contracts during startup. For example,
 a localization implementation can consume body-motion increments without knowing

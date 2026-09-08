@@ -196,6 +196,29 @@ T_F_O = initial_T_F_R * inverse(T_O_R_at_initialization)
 T_F_R = T_F_O * T_O_R
 ```
 
+The command is an approximate initial placement, not an independent proof of
+true robot position. The field definition provides the nominal coordinate system
+and geometry; localization estimates how the robot moves within it. Transform
+observations into that same system using the estimated robot pose at measurement
+time. Both translation and heading error in the initial anchor then contribute
+to the inferred field poses of observed landmarks.
+
+For example, suppose a robot is truly at x = 1.0 m but is initialized at x = 1.1 m,
+with heading correct. A reference measured one meter forward is estimated at
+x = 2.1 m although its true position is x = 2.0 m. Its relative distance remains
+`2.1 - 1.1 = 1.0 m`. Association against a nominal reference at x = 2.0 m needs
+enough tolerance for that 0.1 m discrepancy without confusing another object.
+Initial heading error similarly affects the field representation through the
+full rigid transform, rather than through a constant translation alone.
+
+Association priors must account for approximate initial placement, subsequent
+motion error, sensor/calibration uncertainty, and physical landmark displacement.
+Reject or preserve ambiguity when competing objects cannot be distinguished.
+After a reference is acquired, its measured cache entry can also supply a prior.
+Correct relative alignment depends on correct association and consistent frames;
+the shared-coordinate cancellation does not establish which nominal object was
+seen or remove additional error accumulated after its observation.
+
 An implementation may begin with coincident field and odometry coordinates, but
 their initialization and reset meaning must remain explicit. Without a known
 anchor, local motion can run while field reports remain unavailable. Nominal

@@ -18,7 +18,7 @@ evidence of completed hardware integration.
 
 | Document | Responsibility |
 |---|---|
-| [Architecture](docs/architecture.md) | SensorMap, typed records, stage contracts, independent workers, state ownership, and pose-history lookup. |
+| [Architecture](docs/architecture.md) | SensorMap, nested pipeline stages and their I/O, interchangeable implementations, independent workers, and pose history. |
 | [Coordinates](docs/coordinates.md) | Field and robot axes, heading error, square symmetry, side selection, camera mounting, and measurement-time transforms. |
 | [Landmarks](docs/landmarks.md) | One requested report, static field definitions, measured-object caching, association, and processing scope. |
 
@@ -52,6 +52,13 @@ with a linear lookup. The current field estimator retains a map of objects, and
 the publisher uses configured target semantics; the landmark report defined here
 is not implemented by those interfaces. Grouping equivalent symmetric poses and
 the measured-cache lifecycle specified here also require implementation.
+
+The proposed PreparedMeasurementMap, CandidateSet, LandmarkHypothesisSet,
+LandmarkEvidenceMap, and LandmarkStateMap contracts describe the implementation
+boundaries to build. The current FieldMap parser loads landmark poses and mount
+geometry; field dimensions and the axis convention appear in the field XML comment
+rather than structured parser fields. A structured FieldDefinition with dimensions,
+reference conventions, and declared symmetries also needs implementation.
 
 Real camera capture and the AprilTag backend also need integration:
 [`cameras.cpp`](src/impl/resources/cameras.cpp) constructs a configured device
