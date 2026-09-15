@@ -1,24 +1,25 @@
 // pico_channels.h
-// Logical channel sensors decoding from the shared Pico telemetry resource.
-// The Pico packs several physical sensors into one packet; each configured
-// channel here is its own measurement producer with its own id, calibration,
-// freshness policy, and payload contract. The generic sensor system does not
-// know they share a link.
+// Channel sensors over the pico_telemetry resource outputs. Each configured
+// sensor is its own measurement producer with its own id, calibration,
+// freshness policy, and payload contract; it reads one named output of the
+// ResourceMap and never touches the link or the decoder.
 //
 //   <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
-//       <Source resource_id="pico_telemetry" channel="0"/>
+//       <Source resource_id="pico_telemetry" output_id="encoder_a"/>
 //       <Calibration counts_per_revolution="4000" invert="false"/>
 //       <Freshness stale_after_ms="250"/>
 //   </Sensor>
 //
 //   <Sensor id="robot_imu" type="pico_imu_channel">
-//       <Source resource_id="pico_telemetry" channel="imu"/>
+//       <Source resource_id="pico_telemetry" output_id="imu"/>
+//       <Calibration invert="false"/>
 //   </Sensor>
 //
 // Ownership per the architecture: counts per revolution and electrical sign
 // are sensor calibration; wheel radius and geometry are preprocessing
 // concerns and do not appear here. The encoder publishes an accumulated
-// unwrapped shaft angle in radians.
+// unwrapped shaft angle in radians. The IMU sensor converts wire units and
+// forwards the resource's accumulated angle; bias removal stays downstream.
 //
 // Freshness: a link that stays open but goes silent turns the sensor
 // Unavailable after stale_after_ms (default 250, 0 disables) instead of

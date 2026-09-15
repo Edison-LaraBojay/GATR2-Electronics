@@ -2,9 +2,9 @@
 <!--
 THIS IS AN INTENTIONALLY NON-RUNNABLE TEMPLATE.
 
-Every @...@ token must be replaced with a measured/configured numeric value
-and every calibration_status="UNCONFIGURED" must become provisional or
-verified. Never replace a required value with zero merely to make parsing
+Every @...@ token must be replaced with a measured/configured value.
+calibration_status labels are optional reader notes, ignored by runtime.
+Never replace a required value with zero merely to make parsing
 pass. Save the completed file as gatr2_as5047_bno08x.xml; the diagnostic
 profiles reference that name and cannot resolve until it exists.
 
@@ -34,6 +34,10 @@ and the Pi-side contract is unchanged.
 
         <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="encoder_c" channel="2"/>
+            <Output id="imu" channel="imu"/>
         </Resource>
 
         <Resource id="brain_uart" type="linux_serial_link">
@@ -76,25 +80,25 @@ and the Pi-side contract is unchanged.
 
     <Sensors>
         <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="0"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_a"/>
             <Calibration counts_per_revolution="@VERIFY_ENCODER_A_CPR@"
                          invert="@CONFIRM_ENCODER_A_INVERT@"/>
         </Sensor>
 
         <Sensor id="tracking_encoder_b" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="1"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_b"/>
             <Calibration counts_per_revolution="@VERIFY_ENCODER_B_CPR@"
                          invert="@CONFIRM_ENCODER_B_INVERT@"/>
         </Sensor>
 
         <Sensor id="tracking_encoder_c" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="2"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_c"/>
             <Calibration counts_per_revolution="@VERIFY_ENCODER_C_CPR@"
                          invert="@CONFIRM_ENCODER_C_INVERT@"/>
         </Sensor>
 
         <Sensor id="robot_imu" type="pico_imu_channel">
-            <Source resource_id="pico_telemetry" channel="imu"/>
+            <Source resource_id="pico_telemetry" output_id="imu"/>
             <Calibration invert="@CONFIRM_IMU_CCW_POSITIVE_INVERT@"/>
         </Sensor>
     </Sensors>

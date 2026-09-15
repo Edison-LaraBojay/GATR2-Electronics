@@ -24,13 +24,36 @@ exist.
 ## Fixed semantic pipeline, hierarchical implementations
 
 ```text
-Sensor Collection -> Command Collection -> Preprocessing
+Resources -> Sensors -> Command Collection -> Preprocessing
   -> Localization -> Field Estimation -> Target Resolution -> Publishing
 ```
 
-Resources initialize before runtime; they are not a pipeline step. The order
-is the framework's, not the document's: slots may appear in any order in XML
-and execute in this sequence (there is a test that proves it).
+Resources initialize before runtime and are polled first every cycle. The
+order is the framework's, not the document's: slots may appear in any order
+in XML and execute in this sequence (there is a test that proves it).
+
+Resources and Sensors are aggregate stages, not slots. `make_resources` and
+`make_sensors` visit their declarations once, look each `type` up in the
+registry, let the selected factory interpret its own subtree, and return one
+captured executor each. `System::step` calls one function per stage:
+
+```text
+resource_map = execute_resources(context)
+sensor_map   = execute_sensors(resource_map, context)
+```
+
+Iteration, declared-output enforcement, sequence/epoch/receipt bookkeeping,
+retention and map assembly live inside the executors. `ResourceMap` holds
+resource results: resource id to a record with its own health and named
+outputs, each a `MeasurementRecord`, the same shape for a multi-channel
+source (`pico_telemetry` with `encoder_a`, `encoder_b`, `imu`) and a
+single-output one (a camera with `frame`). `SensorMap` holds processed
+sensor results by sensor id. A sensor binds at build to
+`(resource_id, output_id)` with the payload type it expects and reads the
+whole read-only `ResourceMap` at runtime through that binding.
+Configuration-only resources (field map, frames, wheel geometry, target
+set) have no executable, never appear in the `ResourceMap`, and are bound
+directly by their consumers.
 
 Each slot holds one selected implementation behind one contract, and that
 implementation may be a leaf, an explicit noop, or a composite that
@@ -123,16 +146,19 @@ keys and wrong-signature retrieval fail loudly, and holding the registry
 grants no execution authority: the coordinator decides which category it
 retrieves and when the result runs.
 
-The runtime collections are the settled names: `ResourceMap` owns initialized
-`ResourceInstance`s, `SensorMap` owns the id-keyed sensor executables in
-deterministic order, `SensorResultsMap` owns the latest records, and the
-configured preprocessing collection owns a `PreprocessingMap`.
+The runtime collections are the settled names: `ResourceStore` owns
+initialized `ResourceInstance`s (device handles, decoders, static data),
+`ResourceFunctions` and `SensorFunctions` are the captured executable
+collections private to their executors, `ResourceMap` and `SensorMap` are
+the retained result maps, and the configured preprocessing collection owns
+a `PreprocessingMap`.
 
 ## Lifecycle
 
 ```text
-parse XML -> register factories -> index and build resources
-  -> build sensors -> build pipeline slots, resolving every reference with
+parse XML -> register factories -> make_resources (index, resolve, build,
+     capture executables) -> make_sensors (bind to declared outputs, capture)
+  -> build pipeline slots, resolving every reference with
      payload compatibility -> freeze -> runtime cycles
 ```
 
@@ -169,11 +195,14 @@ carries a stable type name (`sensor.encoder_sample`) alongside the in-process
 at build while the algorithms themselves know payload contracts, never
 hardware.
 
-Sensor records separate health from data: `Valid` with a publication is a new
-sample, `Valid` without one is a healthy quiet cycle, and the stored record
-keeps `measuredAt` (device clock), `receivedAt` (host clock, assigned by
-Sensor Collection), and a sequence that increments only on new publications.
-Nothing erases history; a slow camera does not disappear between frames.
+Resource output and sensor records share one envelope and separate health
+from data: `Valid` with a publication is a new sample, `Valid` without one
+is a healthy quiet cycle, and the stored record keeps `measuredAt` (source
+clock), `receivedAt` (host clock, assigned by the owning stage), a sequence
+that increments only on new publications, and an epoch that moves on reset.
+A consumer that reads a retained record twice sees the same sequence and
+takes no second measurement. Nothing erases history; a slow camera does not
+disappear between frames.
 Freshness is policy, not accident: a channel sensor whose link stays open but
 goes silent turns `Unavailable` after its configured `stale_after_ms`, and
 preprocessing consumes only currently healthy sources, with IMU integration

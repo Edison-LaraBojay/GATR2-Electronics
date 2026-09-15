@@ -8,11 +8,13 @@ so wheel/IMU-only profiles never reference the camera stack and stay
 runnable the moment their own measurements exist. Camera profiles list both
 robot fragments.
 
-Every @...@ token must be measured/configured and every
-calibration_status="UNCONFIGURED" must become provisional or verified.
-Save the completed file as gatr2_front_camera.xml. Beyond measurements,
-running this stack also requires the real libcamera capture backend and the
-AprilTag detector adapter, which are not built into the binary yet.
+Every @...@ token must be measured/configured. calibration_status labels
+are optional reader notes, ignored by runtime.
+Save the completed file as gatr2_front_camera.xml. Running the completed
+file live needs a binary built on the Pi with -DNAVIGATR_WITH_LIBCAMERA=ON
+(docs/pi_camera_setup.md); the libcamera backend exists but has not yet
+been run on hardware, and the capture width/height must be exactly the
+mode the intrinsics were calibrated at.
 -->
 <Robot>
 
@@ -66,7 +68,7 @@ AprilTag detector adapter, which are not built into the binary yet.
 
     <Sensors>
         <Sensor id="front_camera" type="camera_frame">
-            <Source resource_id="front_camera_device"/>
+            <Source resource_id="front_camera_device" output_id="frame"/>
         </Sensor>
     </Sensors>
 

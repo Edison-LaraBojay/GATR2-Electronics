@@ -1,5 +1,5 @@
 // resources_gtest.cpp
-// ResourceMap construction, typed retrieval, sharing, dependency
+// ResourceStore construction, typed retrieval, sharing, dependency
 // resolution, lifetimes, and atomic SPI transactions through a fake bus.
 // Fake implementations register through the same explicit startup calls as
 // real ones, which is itself the extension path under test.
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 #include "resources/spi_bus.h"
 #include "runtime/register_all.h"
 #include "tinyxml2/tinyxml2.h"
@@ -142,13 +142,13 @@ struct Fixture {
                                             depend_on("resource_id"));
     }
 
-    bool build(const char* xml, ResourceMap& out, std::string& err) {
+    bool build(const char* xml, ResourceStore& out, std::string& err) {
         doc.Clear();
         if (doc.Parse(xml) != tinyxml2::XML_SUCCESS) {
             err = "parse";
             return false;
         }
-        ResourceMapBuilder builder(functions, &warnings);
+        ResourceStoreBuilder builder(functions, &warnings);
         bool                 ok = true;
         ConfigNode{doc.RootElement()}.forEach("Resource", [&](const ConfigNode& r) {
             if (ok) {
@@ -167,7 +167,7 @@ struct Fixture {
 
 TEST(Resources, SharedBusInitializedOnceAndShared) {
     Fixture       f;
-    ResourceMap store;
+    ResourceStore store;
     std::string   err;
     ASSERT_TRUE(f.build(R"(
 <Resources>
@@ -187,7 +187,7 @@ TEST(Resources, SharedBusInitializedOnceAndShared) {
 
 TEST(Resources, UnknownIdAndWrongContractFail) {
     Fixture       f;
-    ResourceMap store;
+    ResourceStore store;
     std::string   err;
     ASSERT_TRUE(f.build(R"(
 <Resources>
@@ -206,7 +206,7 @@ TEST(Resources, UnknownIdAndWrongContractFail) {
 
 TEST(Resources, DuplicateIdAndUnknownTypeFail) {
     Fixture       f;
-    ResourceMap store;
+    ResourceStore store;
     std::string   err;
 
     EXPECT_FALSE(f.build(R"(
@@ -227,7 +227,7 @@ TEST(Resources, DuplicateIdAndUnknownTypeFail) {
 
 TEST(Resources, DependenciesResolveRegardlessOfDeclarationOrder) {
     Fixture       f;
-    ResourceMap store;
+    ResourceStore store;
     std::string   err;
     // the dependent is declared before the bus it needs
     ASSERT_TRUE(f.build(R"(
@@ -244,7 +244,7 @@ TEST(Resources, DependenciesResolveRegardlessOfDeclarationOrder) {
 
 TEST(Resources, DependencyCycleReportsTheCycle) {
     Fixture       f;
-    ResourceMap store;
+    ResourceStore store;
     std::string   err;
     EXPECT_FALSE(f.build(R"(
 <Resources>
@@ -260,7 +260,7 @@ TEST(Resources, ResourcesOutliveCapturersAndCleanUpLast) {
     Fixture     f;
     std::string err;
     {
-        ResourceMap store;
+        ResourceStore store;
         ASSERT_TRUE(f.build(R"(
 <Resources>
     <Resource id="probe" type="probe"/>
@@ -288,7 +288,7 @@ TEST(Resources, ResourcesOutliveCapturersAndCleanUpLast) {
 
 TEST(Resources, SpiTransactionsApplyDeviceSettingsAtomically) {
     Fixture       f;
-    ResourceMap store;
+    ResourceStore store;
     std::string   err;
     ASSERT_TRUE(f.build(R"(
 <Resources>

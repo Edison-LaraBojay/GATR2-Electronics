@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Minimal runnable scaffold. Replace the no-op stages as you configure hardware.
+     For a populated field and camera demo, use config/demo/synthetic_field_demo.xml. -->
+<System>
+    <Loop rate_hz="100"/>
+    <Resources file="./resources/resource_config1.xml"/>
+    <Sensors file="./sensors/sensor_config1.xml"/>
+    <Pipeline file="./pipelines/pipeline1.xml"/>
+</System>

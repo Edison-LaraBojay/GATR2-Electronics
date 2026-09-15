@@ -1,12 +1,18 @@
 # navigatr resources
 
 Registered resource types. A resource is an initialized live object owned by
-the ResourceMap: buses, links, shared decoders, shared data. Consumers hold
+the ResourceStore: buses, links, shared decoders, shared data. Consumers hold
 shared handles captured at initialization; the store's id mapping is frozen
 after startup and resources are destroyed after everything that captured
-them. A shared_ptr does not make hardware thread safe; each contract states
-its own guarantee. The registry and code are the source of truth; this file
-catalogs them.
+them. A resource that produces measurements also attaches a
+`ResourceExecutable`: declared named outputs plus `execute` and `reset`.
+The resource stage polls every executable once per cycle and publishes the
+outputs into the `ResourceMap` (`ResourceMap[id].outputs[output_id]`), each
+output with its own timing, sequence, and health. Configuration-only
+resources attach nothing, never appear in the `ResourceMap`, and are bound
+directly by their consumers. A shared_ptr does not make hardware thread
+safe; each contract states its own guarantee. The registry and code are the
+source of truth; this file catalogs them.
 
 Stable PCB wiring is documented in `hardware.md`; the XML remains the
 executable configuration and there is no monolithic robot config header.
@@ -70,17 +76,32 @@ executable configuration and there is no monolithic robot config header.
 ```xml
 <Resource id="pico_telemetry" type="pico_telemetry">
     <Serial resource_id="pico_uart"/>
+    <Output id="encoder_a" channel="0"/>
+    <Output id="encoder_b" channel="1"/>
+    <Output id="encoder_c" channel="2"/>
+    <Output id="imu" channel="imu"/>
 </Resource>
 ```
 
 - Dependencies: a `SerialLink` resource.
-- Decodes Pico packets at most once per runtime cycle and keeps a coherent
-  latest snapshot per channel (encoder channels 0..2, gyro, accel), so every
-  logical channel sensor reads the same decoded packet and nobody re-drains
-  the UART. All Pico wire knowledge lives here and in `common/`.
+- Outputs: one per `<Output>`, named by `id`. `channel` is `0..2` for an
+  encoder counter, published as `pico.encoder_counts` (`PicoEncoderCounts`,
+  raw absolute counts), or `imu` for the yaw gyro, published as
+  `pico.gyro_rate` (`PicoGyroRate`: latest rate in millidegrees per second
+  plus the angle integrated over every decoded packet in millidegrees and
+  its discontinuity epoch). Output ids are configuration; a duplicate id or
+  a channel out of range fails the build.
+- Drains and decodes the link once per resource-stage invocation and
+  publishes each configured channel that advanced, stamped with the Pico
+  clock of its packet; a channel with nothing new keeps its retained
+  record. Several packets drained in one cycle publish once per output with
+  the latest value, and the gyro accumulator keeps the rotation of every
+  packet. Nobody else touches the UART; channel sensors read the
+  `ResourceMap`. All Pico wire knowledge lives here and in `common/`.
 - Thread safety: cycle-snapshot based, single threaded.
-- Failure behavior: link death is reported per channel consumer; decoded
-  history is retained.
+- Failure behavior: a closed link is Fault on the resource and on every
+  output with nothing new; decoded history is retained. Reset clears the
+  decoder once and every output restarts its sequence in the next epoch.
 
 ## field_map
 
@@ -148,11 +169,16 @@ executable configuration and there is no monolithic robot config header.
   the exact camera/lens/resolution, `Extrinsic frame_id` naming the
   engineering frame in the robot frame map). See
   `config/*_apriltag_landmark_correction.xml.in`.
+- Output: one `sensor.camera_frame` (`CameraFramePayload`) under the id of
+  the optional `<Output id="frame"/>` child (default `frame`), published
+  per new device frame and stamped at exposure (host clock). Any
+  `CameraDevice`, including test doubles, becomes an executable resource
+  through `cameraResource(device, output_id)`.
 - Startup fails when calibration resolution and capture resolution
   disagree. On builds without a capture backend the device is fully
-  validated but dead, with a build warning; the camera_frame sensor
-  reports it unavailable and the robot keeps running. The libcamera
-  capture backend lands with camera bring-up on the Pi.
+  validated but dead, with a build warning; the output is Unavailable, the
+  camera_frame sensor forwards that, and the robot keeps running. The
+  libcamera capture backend lands with camera bring-up on the Pi.
 
 ## apriltag_detector
 

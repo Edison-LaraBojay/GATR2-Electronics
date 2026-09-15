@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Demo pipeline over the synthetic rig: three-wheel + gyro odometry with
+     a measured (or absent) attitude reference, the real AprilTag detector
+     over rendered frames, tag mount association with the full trace, and a
+     landmark estimator that commits what association accepts. Nothing
+     leaves the Pi: publishing is the noop, the inspection service is the
+     consumer. Gate values are demo starting points, not calibrated facts. -->
+<Pipeline>
+
+    <CommandCollection type="noop"/>
+
+    <Localization>
+        <Observation id="tracking_motion" type="tracking_wheel_motion">
+            <Wheels resource_id="wheel_geometry">
+                <Use wheel_id="left_wheel"/>
+                <Use wheel_id="right_wheel"/>
+                <Use wheel_id="rear_wheel"/>
+            </Wheels>
+            <HeadingConstraint sensor_id="robot_imu" bias_samples="60"
+                               max_calibration_travel_m="0.005"/>
+            <Output observation_id="tracking_motion"/>
+        </Observation>
+        <Observation id="attitude" type="attitude_reference">
+            <Input sensor_id="robot_attitude"/>
+            <Freshness max_age_ms="150"/>
+            <Output observation_id="attitude"/>
+        </Observation>
+        <Estimator type="planar_motion_integrator">
+            <Motion observation_id="tracking_motion"/>
+            <Attitude observation_id="attitude" max_age_ms="250"/>
+        </Estimator>
+        <History retention_s="5" capacity="1024" max_interpolation_gap_ms="100"/>
+        <!-- the rig starts on the circle west of the center goal, facing it -->
+        <InitialPlacement x_m="1.0332" y_m="1.7832" heading_deg="0"/>
+    </Localization>
+
+    <FieldEstimation type="landmark_field">
+        <FieldMap resource_id="override_field"/>
+        <Pipeline>
+            <ObservationExtraction type="apriltag_tag_observation">
+                <Camera sensor_id="front_camera"/>
+                <Detector resource_id="tag_detector"/>
+                <Output observation_id="tag_observations"/>
+            </ObservationExtraction>
+            <Association type="tag_mount_association">
+                <Observations observation_id="tag_observations"/>
+                <FieldMap resource_id="override_field"/>
+                <RobotFrames resource_id="robot_geometry"/>
+                <Attitude policy="assume_level"/>
+                <Gates max_translation_error_m="0.5" max_heading_error_deg="30"
+                       ambiguity_margin_m="0.15" max_range_m="3.0"
+                       min_decision_margin="10" max_hamming="0"
+                       min_facing_cos="0.1" min_projected_size_px="8"
+                       max_reprojection_error_px="0"
+                       max_alternate_pose_ambiguity="0"/>
+                <Output association_id="landmark_pose_observations"/>
+                <Trace association_id="tag_association_trace"/>
+            </Association>
+            <Estimator type="landmark_estimator" commit="always" blend="0.5"/>
+        </Pipeline>
+    </FieldEstimation>
+
+    <TargetResolution type="noop"/>
+
+    <Publishing type="noop"/>
+
+</Pipeline>

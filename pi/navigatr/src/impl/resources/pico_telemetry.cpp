@@ -2,7 +2,10 @@
 
 #include "impl/resources/pico_telemetry.h"
 
+#include <vector>
+
 #include "core/diagnostics.h"
+#include "payloads/pico_telemetry_samples.h"
 
 namespace navigatr
 {
@@ -13,7 +16,9 @@ PicoTelemetry::PicoTelemetry(std::shared_ptr<SerialLink> link, std::string diagn
 void PicoTelemetry::reset() {
     reader_.reset();
     have_seq_    = false;
+    have_stamp_  = false;
     polled_once_ = false;
+    packets_decoded_ = 0;
     for (Channel& c : encoders_) {
         c = Channel{};
     }
@@ -26,7 +31,7 @@ void PicoTelemetry::reset() {
 
 void PicoTelemetry::refresh(uint64_t cycle, Diagnostics* diagnostics) {
     if (polled_once_ && cycle == last_poll_cycle_) {
-        return;   // another channel sensor already drained this cycle
+        return;   // already drained this cycle
     }
     polled_once_     = true;
     last_poll_cycle_ = cycle;
@@ -78,8 +83,18 @@ void PicoTelemetry::applyPacket(const gatr2::SensorSample& s, Diagnostics* diagn
     }
     have_seq_ = true;
     last_seq_ = s.seq;
+    ++packets_decoded_;
 
     const MonotonicTime stamp = deviceTime(static_cast<int64_t>(s.stamp_ms));
+    if (have_stamp_ && stamp < last_stamp_) {
+        // the device clock restarted: nothing before this packet shares a
+        // baseline with anything after it
+        ++device_epoch_;
+        gyro_have_prev_ = false;
+        ++gyro_accum_epoch_;
+    }
+    have_stamp_ = true;
+    last_stamp_ = stamp;
 
     const auto update = [&](Channel& c, int32_t v0, int32_t v1) {
         c.present    = true;
@@ -119,9 +134,22 @@ void PicoTelemetry::applyPacket(const gatr2::SensorSample& s, Diagnostics* diagn
     }
 }
 
+namespace
+{
+
+// One configured <Output>: which decoded channel it publishes under which
+// id, plus what has already been published.
+struct ConfiguredOutput {
+    OutputId id;
+    int      encoder = -1;   // 0..2, or -1 for the gyro
+    uint64_t last_updates = 0;
+};
+
+} // namespace
+
 ResourceInstance make_pico_telemetry(const ConfigNode& node,
-                                  ResourceInitializationContext& context,
-                                  std::string& err) {
+                                     ResourceInitializationContext& context,
+                                     std::string& err) {
     const ConfigNode serial = node.child("Serial");
     const ResourceId link_id{serial.attr("resource_id")};
     if (link_id.empty()) {
@@ -132,9 +160,121 @@ ResourceInstance make_pico_telemetry(const ConfigNode& node,
     if (link == nullptr) {
         return ResourceInstance{};
     }
+
+    auto outputs = std::make_shared<std::vector<ConfiguredOutput>>();
+    ResourceExecutable executable;
+    bool               ok = true;
+    node.forEach("Output", [&](const ConfigNode& o) {
+        if (!ok) {
+            return;
+        }
+        ConfiguredOutput out;
+        std::string      channel;
+        out.id = OutputId{o.attr("id")};
+        if (out.id.empty() || !o.requireAttr("channel", channel, err)) {
+            if (err.empty()) {
+                err = o.path() + ": Output needs id and channel";
+            }
+            ok = false;
+            return;
+        }
+        for (const ConfiguredOutput& seen : *outputs) {
+            if (seen.id == out.id) {
+                err = o.path() + ": duplicate Output id " + out.id.value;
+                ok  = false;
+                return;
+            }
+        }
+        if (channel == "imu") {
+            executable.outputs.push_back(ResourceOutputDecl{
+                out.id, PayloadDescriptor::of<PicoGyroRate>(payload_names::kPicoGyroRate)});
+        } else {
+            long index = -1;
+            if (!o.getInt("channel", -1, index, err)) {
+                ok = false;
+                return;
+            }
+            if (index < 0 || index >= PicoTelemetry::kEncoderChannels) {
+                err = o.path() + ": channel must be 0.." +
+                      std::to_string(PicoTelemetry::kEncoderChannels - 1) + " or imu";
+                ok = false;
+                return;
+            }
+            out.encoder = static_cast<int>(index);
+            executable.outputs.push_back(
+                ResourceOutputDecl{out.id, PayloadDescriptor::of<PicoEncoderCounts>(
+                                               payload_names::kPicoEncoderCounts)});
+        }
+        outputs->push_back(out);
+    });
+    if (!ok) {
+        return ResourceInstance{};
+    }
+
     auto telemetry = std::make_shared<PicoTelemetry>(std::move(link), link_id.value);
-    auto instance  = ResourceInstance::asContract<PicoTelemetry>(telemetry);
-    instance.setResetHook([telemetry] { telemetry->reset(); });
+
+    executable.execute = [telemetry, outputs](const ExecutionContext& context) {
+        telemetry->refresh(context.cycle, context.diagnostics);
+
+        ResourcePollResult result;
+        if (telemetry->linkDead()) {
+            result.state      = SourceState::kFault;
+            result.diagnostic = "telemetry link dead";
+        } else {
+            result.state = telemetry->anyPacket() ? SourceState::kValid
+                                                  : SourceState::kNoDataYet;
+        }
+
+        for (ConfiguredOutput& out : *outputs) {
+            const PicoTelemetry::Channel& channel =
+                out.encoder >= 0 ? telemetry->encoder(out.encoder) : telemetry->gyro();
+            OutputPoll poll;
+            poll.id = out.id;
+            if (channel.updates != out.last_updates) {
+                out.last_updates  = channel.updates;
+                poll.result.state = SourceState::kValid;
+                Publication publication;
+                publication.measuredAt        = channel.measuredAt;
+                publication.upstream.source   = "pico:" + telemetry->clockId();
+                publication.upstream.clock    = telemetry->clockId();
+                publication.upstream.sequence = telemetry->packetsDecoded();
+                publication.upstream.epoch    = telemetry->deviceEpoch();
+                if (out.encoder >= 0) {
+                    publication.payload = TypedPayload::store(
+                        PicoEncoderCounts{channel.value[0]},
+                        payload_names::kPicoEncoderCounts);
+                } else {
+                    PicoGyroRate rate;
+                    rate.rate_mdps         = channel.value[0];
+                    rate.accumulated_mdeg  = telemetry->gyroAccumulatedRaw();
+                    rate.accumulated_epoch = telemetry->gyroAccumulatedEpoch();
+                    publication.payload =
+                        TypedPayload::store(rate, payload_names::kPicoGyroRate);
+                }
+                poll.result.publication = std::move(publication);
+            } else if (telemetry->linkDead()) {
+                // data decoded before a link death still counted; the fault
+                // shows on the first poll with nothing new
+                poll.result.state      = SourceState::kFault;
+                poll.result.diagnostic = "telemetry link dead";
+            } else if (!channel.present) {
+                poll.result.state = SourceState::kNoDataYet;
+            } else {
+                poll.result.state = SourceState::kValid;   // healthy, nothing new
+            }
+            result.outputs.push_back(std::move(poll));
+        }
+        return result;
+    };
+    executable.reset = [telemetry, outputs] {
+        telemetry->reset();
+        for (ConfiguredOutput& out : *outputs) {
+            out.last_updates = 0;
+        }
+    };
+
+    auto instance = ResourceInstance::asContract<PicoTelemetry>(telemetry);
+    instance.setExecutable(std::move(executable));
     return instance;
 }
 

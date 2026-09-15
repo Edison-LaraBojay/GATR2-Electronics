@@ -8,7 +8,7 @@
 // bounded by the window naturally: old minima age out.
 //
 // Observations must pair a device stamp with the actual host RECEIPT time
-// of that data (StoredSensorSample.receivedAt), never a later pipeline
+// of that data (StoredSample.receivedAt), never a later pipeline
 // time; downstream delay would otherwise masquerade as clock offset.
 //
 // The mapping declares itself valid only after a warm-up of several

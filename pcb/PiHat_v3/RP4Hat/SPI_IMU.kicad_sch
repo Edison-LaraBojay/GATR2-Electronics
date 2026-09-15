@@ -1186,7 +1186,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "R"
+		(property "Value" "10k"
 			(at 166.37 100.3299 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1197,7 +1197,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 			(at 162.052 99.06 90)
 			(hide yes)
 			(show_name no)
@@ -1278,7 +1278,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_JST:JST_PH_S6B-PH-K_1x06_P2.00mm_Horizontal"
 			(at 127 95.25 0)
 			(hide yes)
 			(show_name no)

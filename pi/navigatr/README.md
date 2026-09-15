@@ -18,53 +18,94 @@ evidence of completed hardware integration.
 
 | Document | Responsibility |
 |---|---|
-| [Architecture](docs/architecture.md) | SensorMap, nested pipeline stages and their I/O, interchangeable implementations, independent workers, and pose history. |
+| [Configuration](docs/configuration.md) | Run commands, the compiled default file, inline XML, and nested file references. |
+| [Architecture](docs/architecture.md) | Captured resource/sensor functions, ResourceMap and SensorMap result contracts, all runtime paths, nested stage I/O, workers, and pose history. |
 | [Coordinates](docs/coordinates.md) | Field and robot axes, heading error, square symmetry, side selection, camera mounting, and measurement-time transforms. |
 | [Landmarks](docs/landmarks.md) | One requested report, static field definitions, measured-object caching, association, and processing scope. |
+| [Inspection](docs/inspection.md) | The versioned inspection contract, the service, and the browser viewer. |
+| [Field assets](docs/field_assets.md) | Official Override CAD source, revision, units, axis conversion, and what the field file was checked against. |
+| [Calibration inventory](docs/calibration_inventory.md) | Every remaining measurement, where it goes, and what it gates. |
+| [Pi camera setup](docs/pi_camera_setup.md) | libcamera stack, build flag, capture mode, exposure timing convention, hardware checks still to run. |
+| [Attitude follow-up](docs/attitude_firmware_followup.md) | What the Pico firmware would have to send for live tilt. |
 
-One executable hosts independently scheduled localization and landmark-estimation
-pipelines. Each pipeline runs its own stages in order and publishes complete
-snapshots. Neither assumes the other's sensor inventory or execution rate.
-Localization publishes recent motion history as well as its latest state, so
-landmark estimation can interpret a delayed observation at measurement time.
+## What runs
 
-`SensorMap` owns configured sensor producers. `SensorResultsMap` provides their
-standardized results. Consumers bind to declared payload types and source IDs.
-Shared devices and immutable calibration belong to resources. Each stage may
-contain a private pipeline behind its declared input/output contract.
+One executable, built once from a configuration, with two workers and an
+optional inspection service:
 
-The field definition supplies nominal geometry, reference identities, and the
-coordinate convention. Measured estimates remain separate from that definition.
-The recommended design caches accepted object estimates, including incidental
-observations within the processing budget, and reports only the requested
-reference. See the [retention policy](docs/landmarks.md#retention-policy).
+```text
+construction   parse -> make_resources -> make_sensors -> make_localization
+               -> field estimation, target resolution, publishing slots
+               -> freeze (any failure destroys the candidate)
+
+estimation     resources -> sensors -> commands -> localization
+worker         -> target resolution + publishing against the newest field snapshot
+(loop rate)    -> hands the sensor snapshot to the field worker (latest wins)
+
+field worker   perception (AprilTag) -> association -> landmark estimate
+(event driven) -> publishes an immutable FieldSnapshot and the detection frame
+               bound to its exact image identity
+
+inspection     reads snapshots only; JSON + JPEG over loopback HTTP/WebSocket
+service        at its own rate; a slow browser is skipped, never waited for
+```
+
+Localization is a self-contained component: configured robot-observation
+functions grouped by measurement model (`tracking_wheel_motion`,
+`imu_heading_increment`, `attitude_reference`), one state estimator
+(`planar_motion_integrator`), and a history ring of recent poses that only
+localization writes. Readers get copied snapshots or synchronized timestamped
+lookups (`RobotStateFeed`). Every mutable state has one writer; `reset()` stops
+both workers, resets every stage once, and restarts them.
 
 ## Implementation coverage
 
-The C++ implementation includes typed sensor records and bindings, shared
-resources, wheel/IMU motion estimation, transforms, pose history, association,
-configuration validation, replay, and host tests.
+Implemented and covered by host tests:
 
-[`System::step`](src/runtime/system.cpp) executes the stages synchronously.
-Independent workers and the time-window ring-buffer lookup described in the
-architecture are implementation work. The existing history is a bounded deque
-with a linear lookup. The current field estimator retains a map of objects, and
-the publisher uses configured target semantics; the landmark report defined here
-is not implemented by those interfaces. Grouping equivalent symmetric poses and
-the measured-cache lifecycle specified here also require implementation.
+- Aggregate stages `make_resources`, `make_sensors`, `make_localization` with
+  captured executors; typed result maps with receipt, provenance, sequence and
+  epoch preserved through derived records.
+- Tracking-wheel odometry with gyro heading, per-source interval alignment,
+  encoder rebase on a source restart, rejection of nonpositive intervals, no
+  endpoint bridging of invalid spans; optional attitude (quaternion) reconciled
+  with the planar heading, aged separately, level fallback labeled assumed.
+- Pose history ring (binary search, shortest-arc yaw interpolation, attitude
+  slerp, gap and epoch gates, explicit lookup statuses).
+- Real AprilTag detection (vendored AprilRobotics detector, `tagCircle21h7` and
+  the other supported families) with 2D decoding without calibration, metric
+  poses only with intrinsics and a configured corner size, distortion undone
+  before the solve, every decoded tag visible with its association decision.
+- Capture-time transform chain with the camera offset, mounting rotation and
+  measured tilt; association by full pose against every mount sharing an id.
+- Two-worker scheduling with a bounded latest-frame handoff, per-worker rate
+  and drop counters, orderly shutdown.
+- Inspection contract `navigatr.inspect/1`, the service, and the bundled
+  three.js viewer (field, robot, trail, nominal vs estimated landmarks, camera
+  image with identity-bound overlays, status badges, diagnostics).
+- A synthetic rig resource that drives the real pipeline without hardware:
+  encoder counts, gyro with bias, attitude (measured or unavailable), rendered
+  camera frames of the configured field, a displaced landmark.
 
-The proposed PreparedMeasurementMap, CandidateSet, LandmarkHypothesisSet,
-LandmarkEvidenceMap, and LandmarkStateMap contracts describe the implementation
-boundaries to build. The current FieldMap parser loads landmark poses and mount
-geometry; field dimensions and the axis convention appear in the field XML comment
-rather than structured parser fields. A structured FieldDefinition with dimensions,
-reference conventions, and declared symmetries also needs implementation.
+Implemented but not run on hardware (see the Pi camera setup document for the
+exact checks): the libcamera capture backend (`libcamera_camera`, built only
+with `-DNAVIGATR_WITH_LIBCAMERA=ON` on the Pi) including exposure timestamp
+mapping and buffer ownership.
 
-Real camera capture and the AprilTag backend also need integration:
-[`cameras.cpp`](src/impl/resources/cameras.cpp) constructs a configured device
-without live capture, and [`tag_detectors.cpp`](src/impl/resources/tag_detectors.cpp)
-rejects construction of the missing backend. Synthetic tests establish software
-behavior, not camera latency or physical alignment accuracy.
+Deferred, deliberately:
+
+- Live tilt: the Pico telemetry carries `gyro_z` and `accel_xy` only; no
+  attitude report exists, so live runs show attitude unavailable and the
+  association uses the assumed-level policy. The attitude path is exercised by
+  the synthetic rig.
+- Manual exposure and gain control for the camera (auto exposure is used).
+- The Brain landmark report described in the landmark document remains the
+  existing publisher and target semantics; the report contract there is not
+  what `vex_brain` emits.
+- Measured calibration values for the GATR2 robot: the robot templates stay
+  `.xml.in` until measured (see the calibration inventory).
+
+Synthetic tests and desktop browser checks do not establish Pi camera
+performance or physical alignment accuracy.
 
 ## Configuration and calibration
 
@@ -72,39 +113,88 @@ XML selects registered implementations and supplies their configuration. IDs are
 opaque references. Startup checks reject missing producers, incompatible payloads,
 duplicate outputs, and invalid calibration.
 
-- [`config/shared/robots/`](config/shared/robots/): robot geometry, sensor channels,
-  and a separate camera calibration fragment.
+- [`config/shared/robots/`](config/shared/robots/): the GATR2 robot templates
+  (`.xml.in`, measured values required), the uncalibrated camera fragment for
+  live inspection, and the synthetic rig fragments.
 - [`config/shared/pipelines/`](config/shared/pipelines/): two- and three-wheel
-  diagnostic processing configurations.
-- [`config/override/field.xml`](config/override/field.xml): nominal seasonal geometry
-  for nine goals and their physical tag mounts.
-- [`config/override/diagnostics/`](config/override/diagnostics/): composed diagnostic
-  profile templates.
+  diagnostic pipelines, the synthetic demo pipeline, and the camera-only
+  inspection pipeline.
+- [`config/override/field.xml`](config/override/field.xml): nominal Override
+  geometry for nine goals and their tag mounts, plus display dimensions and
+  static features.
+- [`config/override/diagnostics/`](config/override/diagnostics/): composed
+  profile templates and the runnable live camera inspection profile.
+- [`config/demo/`](config/demo/): hardware-free demo profiles.
+- [`config/examples/modular/main.xml`](config/examples/modular/main.xml): a minimal
+  runnable scaffold with separate Resources, Sensors, Pipeline, and Localization files.
 
-Files ending in `.xml.in` contain unmeasured or unresolved values. Complete their
-placeholders with measured configuration before using them as profiles.
-`calibration_status="UNCONFIGURED"` fails startup; `provisional` requires
-`--allow-provisional`. Camera intrinsics describe the actual optics and image
-mode. Camera mounting and robot contact geometry are separate measurements.
+Files ending in `.xml.in` contain unmeasured or unresolved values and cannot be
+loaded. `calibration_status` is an optional reader annotation that runtime
+does not interpret; actual parameter values and geometry are validated.
+Display metadata (`Dimensions`, `Feature`,
+`Visual`) never feeds an estimate.
 
-## Build and bring-up
+## Build
 
-Run from `pi/navigatr`:
+Host (Windows, Git Bash, from `pi/navigatr`):
 
 ```text
-cmake -S . -B build
-cmake --build build
+export PATH=/c/msys64/ucrt64/bin:$PATH
+cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j8
 ctest --test-dir build --output-on-failure
 ```
 
-Runtime arguments:
+Pi (Raspberry Pi OS, from `pi/navigatr`; packages in the Pi camera setup
+document):
 
 ```text
-./build/navigatr <complete-config.xml> [--cycles <n>]
-./build/navigatr <complete-config.xml> --replay <resource_id>=<capture.bin>
-./build/navigatr <complete-config.xml> --allow-provisional
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNAVIGATR_WITH_LIBCAMERA=ON
+cmake --build build -j4
+ctest --test-dir build --output-on-failure
 ```
 
-Replay uses the acquisition decoder and estimation implementations used by live
-input. Validate acquisition timestamps, publication latency, and alignment error
-on the robot before assigning operating limits.
+Without `NAVIGATR_WITH_LIBCAMERA`, selecting `libcamera_camera` is a
+configuration error naming the missing backend; nothing pretends to capture.
+
+## Run
+
+```text
+./build/navigatr [--config_file="profile.xml"] [--inspect-port <n>]
+                 [--cycles <n>] [--inline] [--replay <resource_id>=<capture.bin>]
+```
+
+- With no filename, the initial compiled default is
+  `config/demo/synthetic_field_demo.xml`. Select another at build time with
+  `cmake -S . -B build "-DNAVIGATR_DEFAULT_CONFIG=config/my_robot.xml"`, then rebuild.
+  The chosen path is baked in; XML contents are read on each startup.
+- `--config_file` overrides that choice for one run; `--config-file` and the
+  positional filename also work. `--help` prints the compiled default path.
+- Default execution: workers plus the inspection service when the profile enables it.
+  Ctrl-C stops the service, then the workers, then the system.
+- `--inline` runs every stage on one thread at the loop rate (replay, bench).
+- `--inspect-port` enables the inspection service on loopback without editing
+  the profile.
+
+Hardware-free demo with the viewer:
+
+```text
+./build/navigatr
+./build/navigatr --config_file="config/demo/synthetic_field_demo_no_attitude.xml"
+```
+
+Live camera inspection before metric calibration (Pi, libcamera build):
+
+```text
+./build/navigatr --config_file="config/override/diagnostics/live_camera_inspection.xml"
+```
+
+From the viewing computer, forward the port and open the page:
+
+```text
+ssh -N -L 8765:127.0.0.1:8765 <user>@<pi-host>
+http://127.0.0.1:8765/
+```
+
+The browser smoke test (`tools/viewer_smoke.sh`) starts the demo, loads the
+page headless, and checks that snapshots and a detection frame arrived.

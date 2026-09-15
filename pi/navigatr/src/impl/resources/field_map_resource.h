@@ -23,7 +23,7 @@
 
 #pragma once
 #include "config/field_map.h"
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 
 namespace navigatr
 {

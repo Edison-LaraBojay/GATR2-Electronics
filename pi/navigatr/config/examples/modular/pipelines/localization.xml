@@ -1,0 +1,5 @@
+<Localization>
+    <!-- Replace with configured Observation functions and a compatible Estimator. -->
+    <Estimator type="noop"/>
+    <History retention_s="5" capacity="1024" max_interpolation_gap_ms="100"/>
+</Localization>

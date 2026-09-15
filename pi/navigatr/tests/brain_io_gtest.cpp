@@ -14,7 +14,6 @@
 #include "impl/resources/serial_links.h"
 #include "math/angles.h"
 #include "payloads/landmark_associations.h"
-#include "payloads/preprocessing_products.h"
 #include "payloads/sensor_samples.h"
 #include "runtime/register_all.h"
 #include "runtime/sensor_catalog.h"
@@ -35,14 +34,14 @@ struct Fixture {
     tinyxml2::XMLDocument     doc;
     FunctionRegistry          functions;
     std::vector<std::string>  warnings;
-    ResourceMap             store;
+    ResourceStore             store;
     SensorCatalog             catalog;
     SlotInitializationContext context;
     MemoryLink*               brain = nullptr;
 
-    SensorResultsMap results;
-    ArtifactMap      artifacts;
-    ObservationMap   observations;
+    SensorMap          results;
+    LocalizationStatus localization;
+    ObservationMap     observations;
     AssociationMap   associations;
     RobotState       robot;
     FieldState       field;
@@ -56,7 +55,7 @@ struct Fixture {
         EXPECT_EQ(resources_doc.Parse(R"(
 <Resources><Resource id="brain_uart" type="memory_link"/></Resources>)"),
                   tinyxml2::XML_SUCCESS);
-        ResourceMapBuilder builder(functions, &warnings);
+        ResourceStoreBuilder builder(functions, &warnings);
         std::string          err;
         bool                 ok = true;
         ConfigNode{resources_doc.RootElement()}.forEach("Resource",
@@ -80,9 +79,7 @@ struct Fixture {
         context.resources = &store;
         context.sensors   = &catalog;
         context.functions = &functions;
-        context.artifacts = {
-            ArtifactOutputDecl{ArtifactId{"imu_orientation"},
-                               PayloadDescriptor::of<ImuDelta>(payload_names::kImuDelta)}};
+        context.observation_functions = {"tracking_motion"};
         context.associations = {AssociationOutputDecl{
             AssociationId{"landmarks"},
             PayloadDescriptor::of<LandmarkAssociationSet>(
@@ -96,9 +93,9 @@ struct Fixture {
     }
 
     void putFreshSensor(const char* id, int64_t received_ms) {
-        SensorRecord record;
-        record.state = SensorState::kValid;
-        StoredSensorSample stored;
+        MeasurementRecord record;
+        record.state = SourceState::kValid;
+        StoredSample stored;
         stored.receivedAt = hostTime(received_ms);
         stored.sequence   = 1;
         record.latest     = std::move(stored);
@@ -106,9 +103,8 @@ struct Fixture {
     }
 
     PublishingInput publishingInput(int64_t now_ms = 100) {
-        return PublishingInput{results, artifacts, observations, associations,
-                               robot,   field,     command,      target,
-                               hostTime(now_ms)};
+        return PublishingInput{results, observations, associations, robot, localization,
+                               field,   command,      target,       hostTime(now_ms)};
     }
 
     gatr2::PoseFrame decode() {
@@ -185,7 +181,7 @@ TEST(BrainPublisher, WireMappingHealthAndUnits) {
                     <Health fresh_ms="150">
                         <Encoder sensor_id="enc_a"/>
                         <Gyro sensor_id="imu"/>
-                        <BiasCal artifact_id="imu_orientation"/>
+                        <BiasCal function_id="tracking_motion"/>
                     </Health>
                     <FieldObject object_id="center_goal" wire_id="1"/>
                    </Publishing>)"),
@@ -200,7 +196,8 @@ TEST(BrainPublisher, WireMappingHealthAndUnits) {
     f.robot.measuredAt       = deviceTime(5000);
     f.putFreshSensor("enc_a", 90);
     f.putFreshSensor("imu", 95);
-    f.artifacts[ArtifactId{"imu_orientation"}] = ArtifactRecord{};   // bias latch
+    f.localization.functions = {
+        ObservationFunctionStatus{"tracking_motion", "tracking_wheel_motion", true, ""}};
 
     f.command.object_requested = true;
     f.command.object_wire_id   = 1;
@@ -312,6 +309,16 @@ TEST(BrainPublisher, StreamOffSendsNothingAndConfigErrors) {
                   f.context, err),
               nullptr);
     EXPECT_NE(err.find("duplicate"), std::string::npos);
+
+    // unknown localization function behind the bias flag
+    EXPECT_EQ(VexBrainPublisher::create(
+                  f.parse(R"(<Publishing type="vex_brain">
+                    <Serial resource_id="brain_uart"/>
+                    <Health><BiasCal function_id="ghost_model"/></Health>
+                   </Publishing>)"),
+                  f.context, err),
+              nullptr);
+    EXPECT_NE(err.find("ghost_model"), std::string::npos);
 
     // unknown health sensor reference
     EXPECT_EQ(VexBrainPublisher::create(

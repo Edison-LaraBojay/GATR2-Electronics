@@ -1,0 +1,4 @@
+<Resources>
+    <!-- An in-memory transport for configuration experiments; no hardware opened. -->
+    <Resource id="scratch_link" type="memory_link"/>
+</Resources>

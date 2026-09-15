@@ -14,7 +14,8 @@
 #include "impl/field_estimation/landmark_field.h"
 #include "math/angles.h"
 #include "payloads/field_object_evidence.h"
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
+#include "state/pose_history.h"
 #include "runtime/register_all.h"
 #include "runtime/system.h"
 #include "tinyxml2/tinyxml2.h"
@@ -69,14 +70,14 @@ struct Fixture {
     tinyxml2::XMLDocument     doc;
     FunctionRegistry          functions;
     std::vector<std::string>  warnings;
-    ResourceMap               store;
+    ResourceStore               store;
     SlotInitializationContext context;
 
     std::shared_ptr<EvidenceScript> script = std::make_shared<EvidenceScript>();
 
-    SensorResultsMap sensorResults;
-    ArtifactMap      artifacts;
-    RobotState       robot;
+    SensorMap   sensors;
+    PoseHistory history;
+    RobotState  robot;
     FieldState       field;
     CommandState     command;
     TargetState      target;
@@ -113,7 +114,7 @@ struct Fixture {
     </Resource>
 </Resources>)"),
                   tinyxml2::XML_SUCCESS);
-        ResourceMapBuilder builder(functions, &warnings);
+        ResourceStoreBuilder builder(functions, &warnings);
         std::string        err;
         bool               ok = true;
         ConfigNode{resources_doc.RootElement()}.forEach("Resource",
@@ -137,8 +138,7 @@ struct Fixture {
     }
 
     FieldEstimationOutput run(FieldEstimation& we, int64_t now = 1) {
-        const auto out =
-            we.run({sensorResults, artifacts, robot, field, hostTime(now)});
+        const auto out = we.run({sensors, robot, history, field, hostTime(now)});
         field = out.field;
         return out;
     }
@@ -447,8 +447,7 @@ TEST(LandmarkWorld, LeafNoopAndCompositeSatisfyTheSameSlot) {
     </Resources>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="noop"/>
-        <Localization type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
         <FieldEstimation type="landmark_field">
             <FieldMap resource_id="override_field"/>
             <Pipeline>
@@ -472,8 +471,7 @@ TEST(LandmarkWorld, LeafNoopAndCompositeSatisfyTheSameSlot) {
 <System>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="noop"/>
-        <Localization type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
         <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>

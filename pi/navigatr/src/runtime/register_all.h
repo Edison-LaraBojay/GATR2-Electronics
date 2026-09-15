@@ -21,7 +21,6 @@ namespace navigatr
 void register_resources(FunctionRegistry& functions);
 void register_sensors(FunctionRegistry& functions);
 void register_commands(FunctionRegistry& functions);
-void register_preprocessing(FunctionRegistry& functions);
 void register_localization(FunctionRegistry& functions);
 void register_perception(FunctionRegistry& functions);
 void register_association(FunctionRegistry& functions);

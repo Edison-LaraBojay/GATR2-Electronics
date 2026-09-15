@@ -8,7 +8,7 @@
 
 #include "math/angles.h"
 #include "payloads/field_object_evidence.h"
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 
 namespace navigatr
 {
@@ -198,22 +198,24 @@ FieldEstimationOutput LandmarkFieldEstimation::run(const FieldEstimationInput& i
 
     // Children in fixed order. A child fault leaves the previous field
     // state untouched and publishes nothing: no partial commit.
-    auto per_out =
-        observation_extraction_->run({in.sensorResults, in.artifacts, in.now});
+    auto per_out = observation_extraction_->run({in.sensors, in.now});
     if (per_out.status == FunctionStatus::kFault) {
-        out.status = FunctionStatus::kFault;
+        out.status     = FunctionStatus::kFault;
+        out.diagnostic = per_out.diagnostic;
         return out;
     }
 
     auto assoc_out = association_->run(
-        {per_out.observations, in.robot, in.previousField, in.now});
+        {per_out.observations, in.robot, in.history, in.previousField, in.now});
     if (assoc_out.status == FunctionStatus::kFault) {
-        out.status = FunctionStatus::kFault;
+        out.status     = FunctionStatus::kFault;
+        out.diagnostic = assoc_out.diagnostic;
         return out;
     }
 
-    // Estimator: seed every mapped landmark, then fold accepted evidence
-    // per the explicit commit policy.
+    // Estimator: seed every mapped landmark, keep observed entries
+    // coherent with the current coordinate context, then fold accepted
+    // evidence per the explicit commit policy.
     for (const auto& decl : field_->landmarks) {
         if (out.field.objects.find(decl.id) != out.field.objects.end()) {
             continue;
@@ -228,7 +230,29 @@ FieldEstimationOutput LandmarkFieldEstimation::run(const FieldEstimationInput& i
         out.field.objects.emplace(decl.id, obj);
     }
     for (auto& kv : out.field.objects) {
-        kv.second.observed = false;
+        FieldObjectState& obj = kv.second;
+        obj.observed          = false;
+        if (obj.source != EstimateSource::kObserved) {
+            continue;
+        }
+        if (obj.odometry_epoch != in.robot.odometry_epoch) {
+            // the frame the estimate was measured in no longer exists: back
+            // to the nominal definition, never a silently stale pose
+            const LandmarkDecl* decl = field_->find(kv.first);
+            obj.source               = EstimateSource::kFieldMap;
+            obj.confidence           = 0.5;
+            obj.valid                = decl != nullptr;
+            if (decl != nullptr) {
+                obj.pose.pose = decl->nominal;
+            }
+            obj.pose.measuredAt = in.now;
+            continue;
+        }
+        if (obj.anchor_revision != in.robot.anchor_revision) {
+            // a re-anchor re-expresses the same measurement consistently
+            obj.pose.pose       = compose(in.robot.field_from_odom, obj.T_odom_object);
+            obj.anchor_revision = in.robot.anchor_revision;
+        }
     }
 
     const FieldObjectPoseEvidenceSet* evidence = nullptr;
@@ -245,20 +269,26 @@ FieldEstimationOutput LandmarkFieldEstimation::run(const FieldEstimationInput& i
     }
 
     if (commit_ == CommitPolicy::kAlways && evidence != nullptr) {
-        // Deterministic fusion: several accepted measurements of one object
-        // in one cycle combine by confidence-weighted planar mean and
-        // circular heading mean, so unordered container or detector
-        // iteration order can never pick the result. Non-finite evidence is
-        // rejected before it reaches state.
+        // Deterministic fusion in the odometry frame: several accepted
+        // measurements of one object in one invocation combine by
+        // confidence-weighted planar mean and circular heading mean, so
+        // container or detector iteration order can never pick the result.
+        // Non-finite evidence and evidence from another odometry epoch never
+        // reach state.
         struct Accumulated {
             double        wx = 0.0, wy = 0.0, wsin = 0.0, wcos = 0.0;
             double        weight = 0.0, wconf = 0.0;
             MonotonicTime newest;
+            std::string   source, feature;
+            uint32_t      sequence = 0;
         };
         std::map<FieldObjectId, Accumulated> merged;
         for (const auto& entry : evidence->entries) {
             if (entry.frame != FrameId{"odometry"}) {
                 continue;   // this estimator folds odometry-frame evidence
+            }
+            if (entry.odometry_epoch != in.robot.odometry_epoch) {
+                continue;
             }
             const auto& p = entry.T_frame_object;
             if (!std::isfinite(p.x_m) || !std::isfinite(p.y_m) ||
@@ -266,17 +296,19 @@ FieldEstimationOutput LandmarkFieldEstimation::run(const FieldEstimationInput& i
                 entry.confidence < 0.0) {
                 continue;
             }
-            const auto T_field_object = compose(in.robot.field_from_odom, p);
-            const auto w              = std::max(entry.confidence, 1e-6);
-            auto&      a              = merged[entry.object];
-            a.wx += w * T_field_object.x_m;
-            a.wy += w * T_field_object.y_m;
-            a.wsin += w * std::sin(T_field_object.heading_rad);
-            a.wcos += w * std::cos(T_field_object.heading_rad);
+            const auto w = std::max(entry.confidence, 1e-6);
+            auto&      a = merged[entry.object];
+            a.wx += w * p.x_m;
+            a.wy += w * p.y_m;
+            a.wsin += w * std::sin(p.heading_rad);
+            a.wcos += w * std::cos(p.heading_rad);
             a.weight += w;
             a.wconf += w * entry.confidence;
             if (!a.newest.isSet() || entry.measuredAt > a.newest) {
-                a.newest = entry.measuredAt;
+                a.newest   = entry.measuredAt;
+                a.source   = entry.source.value;
+                a.feature  = entry.feature_instance;
+                a.sequence = entry.source_sequence;
             }
         }
         for (const auto& kv : merged) {
@@ -285,21 +317,32 @@ FieldEstimationOutput LandmarkFieldEstimation::run(const FieldEstimationInput& i
                                std::atan2(a.wsin, a.wcos)};
             auto& obj = out.field.objects[kv.first];
             if (!obj.valid) {
-                obj.pose.frame = FrameId{"field"};
-                obj.pose.pose  = fused;
+                obj.T_odom_object = fused;
             } else {
-                obj.pose.pose.x_m += (fused.x_m - obj.pose.pose.x_m) * blend_;
-                obj.pose.pose.y_m += (fused.y_m - obj.pose.pose.y_m) * blend_;
-                obj.pose.pose.heading_rad = wrapAngle(
-                    obj.pose.pose.heading_rad +
-                    wrapAngle(fused.heading_rad - obj.pose.pose.heading_rad) * blend_);
+                if (obj.source != EstimateSource::kObserved) {
+                    // first evidence blends away from the seeded nominal,
+                    // expressed in the same frame as the measurement
+                    obj.T_odom_object = compose(inverse(in.robot.field_from_odom), obj.pose.pose);
+                }
+                obj.T_odom_object.x_m += (fused.x_m - obj.T_odom_object.x_m) * blend_;
+                obj.T_odom_object.y_m += (fused.y_m - obj.T_odom_object.y_m) * blend_;
+                obj.T_odom_object.heading_rad = wrapAngle(
+                    obj.T_odom_object.heading_rad +
+                    wrapAngle(fused.heading_rad - obj.T_odom_object.heading_rad) * blend_);
             }
-            obj.pose.measuredAt = a.newest;
-            obj.lastObservedAt  = a.newest;
-            obj.valid           = true;
-            obj.observed        = true;
-            obj.source          = EstimateSource::kObserved;
-            obj.confidence      = a.wconf / a.weight;
+            obj.pose.frame           = FrameId{"field"};
+            obj.pose.pose            = compose(in.robot.field_from_odom, obj.T_odom_object);
+            obj.pose.measuredAt      = a.newest;
+            obj.lastObservedAt       = a.newest;
+            obj.valid                = true;
+            obj.observed             = true;
+            obj.source               = EstimateSource::kObserved;
+            obj.confidence           = a.wconf / a.weight;
+            obj.odometry_epoch       = in.robot.odometry_epoch;
+            obj.anchor_revision      = in.robot.anchor_revision;
+            obj.last_source          = a.source;
+            obj.last_feature         = a.feature;
+            obj.last_source_sequence = a.sequence;
         }
     }
 

@@ -10,6 +10,10 @@
 //   native tag frame Sd: +x image-right on the tag, +y image-down, +z
 //     optical-forward; a head-on tag has translation (0, 0, distance) and
 //     identity rotation
+//
+// A metric pose needs calibrated intrinsics and a configured physical size
+// for the family; without them the detection is a 2D decode with has_pose
+// false, and its pose fields mean nothing.
 
 #pragma once
 #include <string>
@@ -24,7 +28,11 @@ namespace navigatr
 struct NativeTagDetection {
     std::string family;
     int         observed_id = -1;
-    Transform3  T_optical_tag_native;   // T_Cd_Sd
+
+    // Metric pose availability: false when no calibrated intrinsics or
+    // physical size existed for the solve; the 2D decode still stands.
+    bool       has_pose = false;
+    Transform3 T_optical_tag_native;   // T_Cd_Sd
 
     // Pixel corners in the captured (distorted) image, corner 0 at the
     // printed tag's bottom-left proceeding counter-clockwise as seen in the
@@ -55,9 +63,9 @@ class TagDetector
 public:
     virtual ~TagDetector() = default;
 
-    // Detections for one frame. False and err on detector failure (not on
-    // an empty result).
-    virtual bool detect(const CameraFrameData& frame, const CameraIntrinsics& intrinsics,
+    // Detections for one frame. intrinsics may be null (2D decoding only).
+    // False and err on detector failure (not on an empty result).
+    virtual bool detect(const CameraFrameData& frame, const CameraIntrinsics* intrinsics,
                         std::vector<NativeTagDetection>& out, std::string& err) = 0;
 };
 

@@ -8,20 +8,20 @@
 
     <CommandCollection type="noop"/>
 
-    <Preprocessing type="configured_collection">
-        <Preprocessor id="tracking_motion" type="tracking_wheel_odometry">
+    <Localization>
+        <Observation id="tracking_motion" type="tracking_wheel_motion">
             <Wheels resource_id="wheel_geometry">
                 <Use wheel_id="left_wheel"/>
                 <Use wheel_id="rear_wheel"/>
             </Wheels>
             <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
                                max_calibration_travel_m="0.005"/>
-            <Output artifact_id="tracking_motion_delta"/>
-        </Preprocessor>
-    </Preprocessing>
-
-    <Localization type="wheel_imu_prediction">
-        <Motion artifact_id="tracking_motion_delta"/>
+            <Output observation_id="tracking_motion"/>
+        </Observation>
+        <Estimator type="planar_motion_integrator">
+            <Motion observation_id="tracking_motion"/>
+        </Estimator>
+        <History retention_s="5" capacity="1024" max_interpolation_gap_ms="100"/>
     </Localization>
 
     <FieldEstimation type="landmark_field">

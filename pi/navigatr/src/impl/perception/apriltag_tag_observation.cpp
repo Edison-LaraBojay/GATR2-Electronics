@@ -5,7 +5,7 @@
 #include <chrono>
 
 #include "payloads/tag_observations.h"
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 
 namespace navigatr
 {
@@ -59,27 +59,34 @@ std::vector<ObservationOutputDecl> AprilTagObservationPerception::produces() con
 PerceptionOutput AprilTagObservationPerception::run(const PerceptionInput& in) {
     PerceptionOutput out;
 
-    const StoredSensorSample* stored = camera_.freshStored(in.sensorResults);
+    const StoredSample* stored = camera_.freshStored(in.sensors);
     if (stored == nullptr) {
         out.status = FunctionStatus::kNoData;   // camera dead or nothing yet
         return out;
     }
     const CameraFramePayload* frame = stored->payload.get<CameraFramePayload>();
-    if (frame == nullptr || frame->intrinsics == nullptr) {
-        out.status = FunctionStatus::kFault;
+    if (frame == nullptr) {
+        out.status     = FunctionStatus::kFault;
+        out.diagnostic = "camera sensor payload is not a frame";
         return out;
     }
-    if (has_processed_ && frame->frame.sequence == last_processed_sequence_) {
+    if (has_processed_ && frame->frame.epoch == last_processed_epoch_ &&
+        frame->frame.sequence == last_processed_sequence_) {
         return out;   // no new frame this cycle; evidence is per frame
     }
     has_processed_           = true;
+    last_processed_epoch_    = frame->frame.epoch;
     last_processed_sequence_ = frame->frame.sequence;
 
     std::vector<NativeTagDetection> native;
     std::string                     detect_err;
     const auto                      detect_start = std::chrono::steady_clock::now();
-    if (!detector_->detect(frame->frame, *frame->intrinsics, native, detect_err)) {
-        out.status = FunctionStatus::kFault;
+    if (!detector_->detect(frame->frame, frame->intrinsics.get(), native, detect_err)) {
+        // a detector failure is a fault carried in diagnostics, never an
+        // empty result pretending nothing was in view
+        out.status     = FunctionStatus::kFault;
+        out.diagnostic = "detector failed on frame " + std::to_string(frame->frame.sequence) +
+                         ": " + detect_err;
         return out;
     }
     const double detect_ms =
@@ -96,12 +103,17 @@ PerceptionOutput AprilTagObservationPerception::run(const PerceptionInput& in) {
     T_sd_s.R = rotationCanonicalTagFromNative();
 
     TagObservationSet set;
-    set.camera                = camera_.id;
-    set.camera_frame          = frame->engineering_frame;
-    set.frame_sequence        = frame->frame.sequence;
-    set.exposureAt            = frame->frame.exposureAt;
-    set.intrinsics            = frame->intrinsics;
-    set.detector_processing_ms = detect_ms;
+    set.camera                  = camera_.id;
+    set.camera_frame            = frame->engineering_frame;
+    set.frame_sequence          = frame->frame.sequence;
+    set.frame_epoch             = frame->frame.epoch;
+    set.exposureAt              = frame->frame.exposureAt;
+    set.exposure_uncertainty_ms = frame->frame.exposure_uncertainty_ms;
+    set.exposure_time_reliable  = frame->frame.exposure_time_reliable;
+    set.width_px                = frame->frame.width_px;
+    set.height_px               = frame->frame.height_px;
+    set.intrinsics              = frame->intrinsics;
+    set.detector_processing_ms  = detect_ms;
     for (const NativeTagDetection& d : native) {
         TagObservation obs;
         obs.family          = d.family;
@@ -118,7 +130,12 @@ PerceptionOutput AprilTagObservationPerception::run(const PerceptionInput& in) {
         }
         obs.center_px[0] = d.center_px[0];
         obs.center_px[1] = d.center_px[1];
-        obs.T_camera_tag = compose(compose(T_ce_cd, d.T_optical_tag_native), T_sd_s);
+        // a metric pose needs calibrated intrinsics; a 2D decode stays a 2D
+        // decode
+        obs.has_pose = d.has_pose && frame->intrinsics != nullptr;
+        if (obs.has_pose) {
+            obs.T_camera_tag = compose(compose(T_ce_cd, d.T_optical_tag_native), T_sd_s);
+        }
         set.tags.push_back(std::move(obs));
     }
 

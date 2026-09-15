@@ -4,13 +4,14 @@ NON-RUNNABLE UNTIL THE ROBOT DESCRIPTION EXISTS.
 
 This profile references shared/robots/gatr2_as5047_bno08x.xml, which is
 produced by measuring every value in gatr2_as5047_bno08x.xml.in. Until
-that file exists with provisional or verified calibration, resolution
-fails on purpose. The field map is provisional, so runs additionally
-need --allow-provisional until it is physically verified.
+that file exists with usable configured values, resolution fails.
+Calibration labels are optional reader notes and do not affect runtime.
 -->
 <Configuration id="override_two_wheel_bno08x_camera_diagnostic">
     <ConfigurationName>Override two-wheel camera BNO08x diagnostic</ConfigurationName>
     <Loop rate_hz="100"/>
+    <Inspection enabled="true" bind="127.0.0.1" port="8765"
+                snapshot_hz="20" preview_hz="5" preview_quality="70" preview_max_width="640"/>
     <Robot file="../../shared/robots/gatr2_as5047_bno08x.xml"/>
     <Robot file="../../shared/robots/gatr2_front_camera.xml"/>
     <Field file="../field.xml"/>

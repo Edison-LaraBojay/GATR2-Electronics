@@ -42,14 +42,14 @@ public:
     void reset() override;
 
 private:
-    bool sensorFresh(const SensorResultsMap& results, const SensorId& id,
+    bool sensorFresh(const SensorMap& results, const SensorId& id,
                      MonotonicTime now) const;
 
     std::shared_ptr<SerialLink> link_;
 
     std::vector<SensorId> encoder_health_;   // enc bit needs every one fresh
     SensorId              gyro_health_;      // empty = bit stays clear
-    ArtifactId            bias_cal_ref_;     // presence latches the bias bit
+    std::string           bias_cal_function_;   // ready state latches the bias bit
     long                  fresh_ms_ = 150;
 
     struct WireObject {

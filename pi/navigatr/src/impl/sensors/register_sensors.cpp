@@ -1,5 +1,6 @@
 // register_sensors.cpp
 
+#include "impl/sensors/attitude_channel.h"
 #include "impl/sensors/camera_channel.h"
 #include "impl/sensors/pico_channels.h"
 #include "runtime/register_all.h"
@@ -13,6 +14,7 @@ void register_sensors(FunctionRegistry& functions) {
     registerOrDie<SensorMakeFunction>(functions, "pico_imu_channel",
                                       &make_pico_imu_channel);
     registerOrDie<SensorMakeFunction>(functions, "camera_frame", &make_camera_frame);
+    registerOrDie<SensorMakeFunction>(functions, "attitude_channel", &make_attitude_channel);
 }
 
 } // namespace navigatr

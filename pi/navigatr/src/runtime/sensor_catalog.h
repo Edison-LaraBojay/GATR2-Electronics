@@ -21,13 +21,13 @@ template <typename T>
 struct TypedSensorBinding {
     SensorId id;
 
-    const SensorRecord* record(const SensorResultsMap& results) const {
+    const MeasurementRecord* record(const SensorMap& results) const {
         const auto it = results.find(id);
         return it == results.end() ? nullptr : &it->second;
     }
 
-    const StoredSensorSample* stored(const SensorResultsMap& results) const {
-        const SensorRecord* rec = record(results);
+    const StoredSample* stored(const SensorMap& results) const {
+        const MeasurementRecord* rec = record(results);
         if (rec == nullptr || !rec->latest.has_value()) {
             return nullptr;
         }
@@ -36,17 +36,17 @@ struct TypedSensorBinding {
 
     // The latest sample only while the sensor currently reports healthy;
     // consumers that must not act on faulted or stale sources read this.
-    const StoredSensorSample* freshStored(const SensorResultsMap& results) const {
-        const SensorRecord* rec = record(results);
-        if (rec == nullptr || rec->state != SensorState::kValid ||
+    const StoredSample* freshStored(const SensorMap& results) const {
+        const MeasurementRecord* rec = record(results);
+        if (rec == nullptr || rec->state != SourceState::kValid ||
             !rec->latest.has_value()) {
             return nullptr;
         }
         return &*rec->latest;
     }
 
-    const T* sample(const SensorResultsMap& results) const {
-        const StoredSensorSample* s = stored(results);
+    const T* sample(const SensorMap& results) const {
+        const StoredSample* s = stored(results);
         return s == nullptr ? nullptr : s->payload.get<T>();
     }
 };
@@ -87,11 +87,14 @@ public:
 
     std::size_t size() const { return entries_.size(); }
 
-private:
     struct Entry {
         SensorId          id;
         PayloadDescriptor payload;
     };
+    // Declaration order, for tooling that lists every configured sensor.
+    const std::vector<Entry>& entries() const { return entries_; }
+
+private:
     std::vector<Entry> entries_;
 };
 

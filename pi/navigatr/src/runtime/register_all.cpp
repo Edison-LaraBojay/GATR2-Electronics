@@ -10,7 +10,6 @@ void registerAll(FunctionRegistry& functions) {
     register_resources(functions);
     register_sensors(functions);
     register_commands(functions);
-    register_preprocessing(functions);
     register_localization(functions);
     register_perception(functions);
     register_association(functions);

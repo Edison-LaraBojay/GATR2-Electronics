@@ -25,25 +25,28 @@ const char* kConfig = R"(
         <Resource id="pico_uart" type="memory_link"/>
         <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="encoder_c" channel="2"/>
+            <Output id="imu" channel="imu"/>
         </Resource>
     </Resources>
     <Sensors>
         <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="0"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_a"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
         <Sensor id="tracking_encoder_b" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="1"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_b"/>
             <Calibration counts_per_revolution="4000" invert="true"/>
         </Sensor>
         <Sensor id="robot_imu" type="pico_imu_channel">
-            <Source resource_id="pico_telemetry" channel="imu"/>
+            <Source resource_id="pico_telemetry" output_id="imu"/>
         </Sensor>
     </Sensors>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="noop"/>
-        <Localization type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
         <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
@@ -94,8 +97,8 @@ TEST(Sensors, OneDrainFeedsEveryChannel) {
     f.feed(packet(1, 1000, 4000, -2000, 90000));
     f.system->step(hostTime(1));
 
-    const SensorRecord& a = f.system->sensorResults().at(SensorId{"tracking_encoder_a"});
-    ASSERT_EQ(a.state, SensorState::kValid);
+    const MeasurementRecord& a = f.system->sensorMap().at(SensorId{"tracking_encoder_a"});
+    ASSERT_EQ(a.state, SourceState::kValid);
     ASSERT_TRUE(a.latest.has_value());
     EXPECT_EQ(a.latest->sequence, 1u);
     EXPECT_EQ(a.latest->measuredAt.ms, 1000);
@@ -103,7 +106,7 @@ TEST(Sensors, OneDrainFeedsEveryChannel) {
     // first publication seeds the accumulator at zero angle
     EXPECT_NEAR(a.latest->payload.get<EncoderSample>()->angle_rad, 0.0, 1e-12);
 
-    const SensorRecord& imu = f.system->sensorResults().at(SensorId{"robot_imu"});
+    const MeasurementRecord& imu = f.system->sensorMap().at(SensorId{"robot_imu"});
     ASSERT_TRUE(imu.latest.has_value());
     EXPECT_NEAR(imu.latest->payload.get<ImuSample>()->yaw_rate_rad_s, degToRad(90.0),
                 1e-12);
@@ -118,8 +121,8 @@ TEST(Sensors, CalibrationOwnsScaleAndSign) {
     f.feed(packet(2, 1005, 4000, 4000, 0));   // one full revolution on both
     f.system->step(hostTime(2));
 
-    const auto& a = f.system->sensorResults().at(SensorId{"tracking_encoder_a"});
-    const auto& b = f.system->sensorResults().at(SensorId{"tracking_encoder_b"});
+    const auto& a = f.system->sensorMap().at(SensorId{"tracking_encoder_a"});
+    const auto& b = f.system->sensorMap().at(SensorId{"tracking_encoder_b"});
     EXPECT_NEAR(a.latest->payload.get<EncoderSample>()->angle_rad, 2.0 * kPi, 1e-12);
     EXPECT_NEAR(b.latest->payload.get<EncoderSample>()->angle_rad, -2.0 * kPi,
                 1e-12);   // invert=true
@@ -131,8 +134,8 @@ TEST(Sensors, NoUpdateKeepsLatestAndSequence) {
     f.system->step(hostTime(1));
     f.system->step(hostTime(2));   // nothing new
 
-    const SensorRecord& a = f.system->sensorResults().at(SensorId{"tracking_encoder_a"});
-    EXPECT_EQ(a.state, SensorState::kValid);   // healthy, no new sample
+    const MeasurementRecord& a = f.system->sensorMap().at(SensorId{"tracking_encoder_a"});
+    EXPECT_EQ(a.state, SourceState::kValid);   // healthy, no new sample
     ASSERT_TRUE(a.latest.has_value());
     EXPECT_EQ(a.latest->sequence, 1u);   // unchanged means no new publication
     EXPECT_EQ(a.latest->receivedAt.ms, 1);
@@ -145,7 +148,7 @@ TEST(Sensors, SequenceIncrementsPerPublication) {
         f.feed(packet(static_cast<uint8_t>(i), 1000 + 5 * i, 100 * i, 0, 0));
         f.system->step(hostTime(i));
     }
-    EXPECT_EQ(f.system->sensorResults()
+    EXPECT_EQ(f.system->sensorMap()
                   .at(SensorId{"tracking_encoder_a"})
                   .latest->sequence,
               3u);
@@ -174,10 +177,10 @@ TEST(Sensors, PartialMaskOnlyUpdatesPresentChannels) {
     f.feed(buf);
 
     f.system->step(hostTime(1));
-    EXPECT_EQ(f.system->sensorResults().at(SensorId{"tracking_encoder_a"}).state,
-              SensorState::kNoDataYet);
-    EXPECT_EQ(f.system->sensorResults().at(SensorId{"robot_imu"}).state,
-              SensorState::kValid);
+    EXPECT_EQ(f.system->sensorMap().at(SensorId{"tracking_encoder_a"}).state,
+              SourceState::kNoDataYet);
+    EXPECT_EQ(f.system->sensorMap().at(SensorId{"robot_imu"}).state,
+              SourceState::kValid);
 }
 
 TEST(Sensors, BatchedGyroPacketsKeepAccumulatedRotation) {
@@ -191,7 +194,7 @@ TEST(Sensors, BatchedGyroPacketsKeepAccumulatedRotation) {
     f.feed(packet(3, 1020, 0, 0, 0));
     f.system->step(hostTime(2));
 
-    const SensorRecord& imu = f.system->sensorResults().at(SensorId{"robot_imu"});
+    const MeasurementRecord& imu = f.system->sensorMap().at(SensorId{"robot_imu"});
     ASSERT_TRUE(imu.latest.has_value());
     const ImuSample* sample = imu.latest->payload.get<ImuSample>();
     ASSERT_NE(sample, nullptr);
@@ -205,7 +208,7 @@ TEST(Sensors, GyroAccumulatorMarksDiscontinuitiesWithAnEpoch) {
     Fixture f;
     f.feed(packet(1, 1000, 0, 0, 100000));
     f.system->step(hostTime(1));
-    const ImuSample first = *f.system->sensorResults()
+    const ImuSample first = *f.system->sensorMap()
                                  .at(SensorId{"robot_imu"})
                                  .latest->payload.get<ImuSample>();
 
@@ -213,7 +216,7 @@ TEST(Sensors, GyroAccumulatorMarksDiscontinuitiesWithAnEpoch) {
     // and must not be mistakable for zero rotation
     f.feed(packet(2, 2000, 0, 0, 100000));
     f.system->step(hostTime(2));
-    const ImuSample second = *f.system->sensorResults()
+    const ImuSample second = *f.system->sensorMap()
                                   .at(SensorId{"robot_imu"})
                                   .latest->payload.get<ImuSample>();
     EXPECT_EQ(second.accumulated_angle_rad, first.accumulated_angle_rad);
@@ -229,19 +232,22 @@ TEST(Sensors, SilentOpenLinkGoesUnavailableNotValidForever) {
         <Resource id="pico_uart" type="memory_link"/>
         <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="encoder_c" channel="2"/>
+            <Output id="imu" channel="imu"/>
         </Resource>
     </Resources>
     <Sensors>
         <Sensor id="enc" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="0"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_a"/>
             <Calibration counts_per_revolution="4000"/>
             <Freshness stale_after_ms="50"/>
         </Sensor>
     </Sensors>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="noop"/>
-        <Localization type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
         <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
@@ -259,21 +265,21 @@ TEST(Sensors, SilentOpenLinkGoesUnavailableNotValidForever) {
 
     pico->input().feed(packet(1, 1000, 500, 0, 0));
     system->step(hostTime(1));
-    EXPECT_EQ(system->sensorResults().at(SensorId{"enc"}).state, SensorState::kValid);
+    EXPECT_EQ(system->sensorMap().at(SensorId{"enc"}).state, SourceState::kValid);
 
     system->step(hostTime(20));   // quiet but within the window
-    EXPECT_EQ(system->sensorResults().at(SensorId{"enc"}).state, SensorState::kValid);
+    EXPECT_EQ(system->sensorMap().at(SensorId{"enc"}).state, SourceState::kValid);
 
     system->step(hostTime(100));   // silent past stale_after_ms
-    const SensorRecord& stale = system->sensorResults().at(SensorId{"enc"});
-    EXPECT_EQ(stale.state, SensorState::kUnavailable);
+    const MeasurementRecord& stale = system->sensorMap().at(SensorId{"enc"});
+    EXPECT_EQ(stale.state, SourceState::kUnavailable);
     ASSERT_TRUE(stale.latest.has_value());   // history retained
     EXPECT_EQ(stale.latest->sequence, 1u);
 
     pico->input().feed(packet(2, 1200, 600, 0, 0));   // data resumes
     system->step(hostTime(110));
-    EXPECT_EQ(system->sensorResults().at(SensorId{"enc"}).state, SensorState::kValid);
-    EXPECT_EQ(system->sensorResults().at(SensorId{"enc"}).latest->sequence, 2u);
+    EXPECT_EQ(system->sensorMap().at(SensorId{"enc"}).state, SourceState::kValid);
+    EXPECT_EQ(system->sensorMap().at(SensorId{"enc"}).latest->sequence, 2u);
 }
 
 TEST(Sensors, FaultRetainsHistoricalSample) {
@@ -315,18 +321,21 @@ TEST(Sensors, FaultRetainsHistoricalSample) {
         <Resource id="pico_uart" type="test_closing_link"/>
         <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="encoder_c" channel="2"/>
+            <Output id="imu" channel="imu"/>
         </Resource>
     </Resources>
     <Sensors>
         <Sensor id="enc" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="0"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_a"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
     </Sensors>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="noop"/>
-        <Localization type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
         <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
@@ -338,11 +347,11 @@ TEST(Sensors, FaultRetainsHistoricalSample) {
     ASSERT_NE(system, nullptr) << err;
 
     system->step(hostTime(1));
-    EXPECT_EQ(system->sensorResults().at(SensorId{"enc"}).state, SensorState::kValid);
+    EXPECT_EQ(system->sensorMap().at(SensorId{"enc"}).state, SourceState::kValid);
 
     system->step(hostTime(2));
-    const SensorRecord& record = system->sensorResults().at(SensorId{"enc"});
-    EXPECT_EQ(record.state, SensorState::kFault);   // unhealthy now
+    const MeasurementRecord& record = system->sensorMap().at(SensorId{"enc"});
+    EXPECT_EQ(record.state, SourceState::kFault);   // unhealthy now
     ASSERT_TRUE(record.latest.has_value());         // history preserved
     EXPECT_EQ(record.latest->sequence, 1u);
 }
@@ -359,13 +368,16 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
         <Resource id="pico_uart" type="memory_link"/>
         <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="encoder_c" channel="2"/>
+            <Output id="imu" channel="imu"/>
         </Resource>
     </Resources>
     <Sensors>)") + sensors_xml + R"(</Sensors>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="noop"/>
-        <Localization type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
         <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
@@ -377,21 +389,21 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
 
     // missing id
     EXPECT_EQ(build(R"(<Sensor type="pico_imu_channel">
-        <Source resource_id="pico_telemetry" channel="imu"/></Sensor>)"),
+        <Source resource_id="pico_telemetry" output_id="imu"/></Sensor>)"),
               nullptr);
     EXPECT_NE(err.find("id and type"), std::string::npos);
 
     // missing type
     EXPECT_EQ(build(R"(<Sensor id="x">
-        <Source resource_id="pico_telemetry" channel="imu"/></Sensor>)"),
+        <Source resource_id="pico_telemetry" output_id="imu"/></Sensor>)"),
               nullptr);
 
     // duplicate id
     EXPECT_EQ(build(R"(
         <Sensor id="x" type="pico_imu_channel">
-            <Source resource_id="pico_telemetry" channel="imu"/></Sensor>
+            <Source resource_id="pico_telemetry" output_id="imu"/></Sensor>
         <Sensor id="x" type="pico_imu_channel">
-            <Source resource_id="pico_telemetry" channel="imu"/></Sensor>)"),
+            <Source resource_id="pico_telemetry" output_id="imu"/></Sensor>)"),
               nullptr);
     EXPECT_NE(err.find("duplicate Sensor id"), std::string::npos);
 
@@ -402,7 +414,7 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
     // factory-owned children pass through the generic builder untouched;
     // unknown extra children are the factory's business
     EXPECT_NE(build(R"(<Sensor id="x" type="pico_encoder_channel">
-        <Source resource_id="pico_telemetry" channel="0"/>
+        <Source resource_id="pico_telemetry" output_id="encoder_a"/>
         <Calibration counts_per_revolution="4000"/>
         <VendorSpecificNote anything="goes"/></Sensor>)"),
               nullptr)
@@ -410,15 +422,15 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
 
     // the selected factory rejects its own invalid configuration
     EXPECT_EQ(build(R"(<Sensor id="x" type="pico_encoder_channel">
-        <Source resource_id="pico_telemetry" channel="0"/>
+        <Source resource_id="pico_telemetry" output_id="encoder_a"/>
         <Calibration counts_per_revolution="-5"/></Sensor>)"),
               nullptr);
     EXPECT_NE(err.find("counts_per_revolution"), std::string::npos);
 
-    // channel bounds are factory knowledge too
+    // the source binding is checked against the resource's declared outputs
     EXPECT_EQ(build(R"(<Sensor id="x" type="pico_encoder_channel">
-        <Source resource_id="pico_telemetry" channel="9"/>
+        <Source resource_id="pico_telemetry" output_id="encoder_z"/>
         <Calibration counts_per_revolution="4000"/></Sensor>)"),
               nullptr);
-    EXPECT_NE(err.find("channel"), std::string::npos);
+    EXPECT_NE(err.find("encoder_z"), std::string::npos);
 }

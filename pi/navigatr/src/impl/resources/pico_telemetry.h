@@ -1,17 +1,25 @@
 // pico_telemetry.h
-// Shared decoder for one Pico telemetry stream. The Pico packs several
-// physical sensors into one packet; this resource drains and decodes the
-// serial link at most once per runtime cycle and keeps a coherent snapshot
-// of the latest value per channel, so every logical channel sensor reads
-// from the same decoded packet and nobody re-drains the UART. All Pico wire
-// knowledge lives here and in common/, nowhere else in navigatr.
+// Shared decoder for one Pico telemetry stream, and the resource that
+// publishes its configured channels. The Pico packs several physical
+// sensors into one packet; the resource drains and decodes the serial link
+// once per cycle and publishes each configured channel as a named output
+// in the ResourceMap, so every channel sensor reads from the same decoded
+// packet and nobody re-drains the UART. All Pico wire knowledge lives here
+// and in common/, nowhere else in navigatr.
 //
-//   <Resource id="pico_telemetry" type="resource/pico_telemetry">
+//   <Resource id="pico_telemetry" type="pico_telemetry">
 //       <Serial resource_id="pico_uart"/>
+//       <Output id="encoder_a" channel="0"/>
+//       <Output id="encoder_b" channel="1"/>
+//       <Output id="imu" channel="imu"/>
 //   </Resource>
 //
+// channel is 0..2 for an encoder counter (pico.encoder_counts) or imu for
+// the yaw gyro (pico.gyro_rate). Output ids are configuration; sensors
+// bind to them by name.
+//
 // Thread safety: single-threaded; refresh and channel reads happen on the
-// pipeline thread. Cycle-snapshot based for consumers.
+// pipeline thread.
 
 #pragma once
 #include <cstdint>
@@ -20,7 +28,7 @@
 
 #include "common/frame_codec.h"
 #include "core/time.h"
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 #include "resources/serial_link.h"
 
 namespace navigatr
@@ -62,6 +70,14 @@ public:
     static constexpr int64_t kGyroGapMs = 250;
 
     bool linkDead() const { return link_dead_; }
+    bool anyPacket() const { return have_seq_; }
+
+    // Device restart generation: bumps when the device clock runs backwards
+    // (a Pico reboot); every packet counter and accumulator baseline
+    // restarts with it.
+    uint64_t deviceEpoch() const { return device_epoch_; }
+    uint64_t packetsDecoded() const { return packets_decoded_; }
+    const std::string& clockId() const { return diagnostics_id_; }
 
     void reset();
 
@@ -84,13 +100,17 @@ private:
 
     bool     have_seq_        = false;
     uint8_t  last_seq_        = 0;
+    bool     have_stamp_      = false;
+    MonotonicTime last_stamp_;
+    uint64_t device_epoch_    = 0;
+    uint64_t packets_decoded_ = 0;
     uint64_t last_poll_cycle_ = 0;
     bool     polled_once_     = false;
     bool     link_dead_       = false;
 };
 
 ResourceInstance make_pico_telemetry(const ConfigNode& node,
-                                  ResourceInitializationContext& context,
-                                  std::string& err);
+                                     ResourceInitializationContext& context,
+                                     std::string& err);
 
 } // namespace navigatr

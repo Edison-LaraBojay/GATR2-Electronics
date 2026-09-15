@@ -40,6 +40,7 @@ public:
 
     void reset() override {
         has_processed_           = false;
+        last_processed_epoch_    = 0;
         last_processed_sequence_ = 0;
     }
 
@@ -51,6 +52,7 @@ private:
     // has_processed_ distinguishes "never ran" from a first frame whose
     // sequence happens to be zero.
     bool     has_processed_           = false;
+    uint64_t last_processed_epoch_    = 0;
     uint32_t last_processed_sequence_ = 0;
 };
 

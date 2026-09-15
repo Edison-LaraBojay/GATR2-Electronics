@@ -10,6 +10,12 @@
 // observed_id, and deciding which mount produced an observation is an
 // association implementation's job, decided by full pose, never forced.
 //
+// Optional display data, never read by estimation: a Dimensions element
+// (perimeter box plus the provenance of the numbers), Feature elements
+// (static unobserved geometry drawn as labeled boxes or tape), and one
+// Visual per Landmark (prism or box plus the tag carrier plate). See
+// docs/field_assets.md.
+//
 // Frames:
 //   landmark frame: planar at the landmark origin, yaw = nominal heading
 //   tag surface frame S: origin at the center of the detector's four
@@ -43,11 +49,30 @@ struct ApproachFrameDecl {
     Transform3 T_landmark_approach;
 };
 
+// Display geometry for one landmark. Never read by estimation: the viewer
+// draws it, and a wrong value moves a picture, not an estimate.
+struct LandmarkVisualDecl {
+    bool        declared = false;
+    std::string shape;   // octagonal_prism | box
+    double      height_m             = 0.0;
+    double      base_across_flats_m  = 0.0;   // octagonal_prism
+    double      top_across_flats_m   = 0.0;
+    double      size_x_m             = 0.0;   // box
+    double      size_y_m             = 0.0;
+    double      size_z_m             = 0.0;
+    double      tag_plate_width_m    = 0.0;   // carrier plate behind every mount, 0 = none
+    double      tag_plate_height_m   = 0.0;
+    double      tag_plate_thickness_m = 0.0;
+    std::string color;   // #rrggbb
+    std::string note;
+};
+
 struct LandmarkDecl {
     FieldObjectId id;
     Pose2D        nominal;   // T_field_landmark from the map
     std::vector<ApproachFrameDecl> approaches;
     std::vector<TagMountDecl>      mounts;
+    LandmarkVisualDecl             visual;
 
     const ApproachFrameDecl* findApproach(const FrameId& frame) const {
         for (const ApproachFrameDecl& a : approaches) {
@@ -68,8 +93,36 @@ struct LandmarkDecl {
     }
 };
 
+// Whole-field display data: the perimeter box, provenance of the numbers,
+// and static unobserved features (loaders, toggles, tape) drawn as labeled
+// simple geometry. Display only, like LandmarkVisualDecl.
+struct FieldDimensions {
+    bool        declared = false;
+    double      inside_x_m       = 0.0;
+    double      inside_y_m       = 0.0;
+    double      wall_height_m    = 0.0;
+    double      wall_thickness_m = 0.0;
+    double      tile_m           = 0.0;   // tile pitch, 0 = undeclared
+    std::string source;     // where the numbers came from
+    std::string revision;   // document or CAD revision
+    std::string units_note;
+};
+
+struct FieldFeatureDecl {
+    std::string id;
+    std::string kind;   // box | tape
+    double      x_m = 0.0, y_m = 0.0, z_m = 0.0;   // center, field frame
+    double      size_x_m = 0.0, size_y_m = 0.0, size_z_m = 0.0;
+    double      yaw_rad = 0.0;
+    std::string color;
+    std::string note;
+};
+
 struct FieldMap {
-    std::vector<LandmarkDecl> landmarks;
+    std::string                   name;   // display name, may be empty
+    FieldDimensions               dimensions;
+    std::vector<FieldFeatureDecl> features;
+    std::vector<LandmarkDecl>     landmarks;
 
     const LandmarkDecl* find(const FieldObjectId& id) const {
         for (const LandmarkDecl& l : landmarks) {
@@ -94,7 +147,7 @@ struct FieldMap {
 // Parses the Landmark children of a field map resource node. Every
 // calibration-critical attribute is required and calibration gated; false
 // and err on bad content.
-bool parseFieldMap(const ConfigNode& node, bool allow_provisional, FieldMap& out,
+bool parseFieldMap(const ConfigNode& node, FieldMap& out,
                    std::string& err);
 
 } // namespace navigatr

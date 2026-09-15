@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>navigatr inspector</title>
+<link rel="stylesheet" href="./style.css">
+<!-- 'three' resolves to the pinned module served by the runtime; OrbitControls
+     imports 'three' through this same map. No CDN, no build step. -->
+<script type="importmap">{"imports":{"three":"./vendor/three.module.min.js"}}</script>
+</head>
+<body>
+
+<div id="status" data-state="connecting" data-snapshots="0" data-frames="0" data-session="" data-cycle="" data-errors="" data-attitude="" data-webgl="" data-live-seen="0">
+  <span id="conn" class="badge info">connecting</span>
+  <span id="badges" class="badges"></span>
+  <span id="readout" class="readout"></span>
+</div>
+
+<div id="main">
+  <div id="view">
+    <div id="view-controls">
+      <button id="btn-reset" type="button">reset view</button>
+      <button id="btn-top" type="button">top-down</button>
+      <button id="btn-follow" type="button">follow robot</button>
+    </div>
+    <div id="view-legend">ghost = nominal placement, solid = estimated (observed), line = nominal to estimate</div>
+    <div id="view-note" hidden></div>
+    <div id="tooltip"></div>
+  </div>
+
+  <aside id="side">
+    <section id="camera" class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Camera</span>
+        <select id="camera-select" title="camera"></select>
+        <span id="camera-frame-info" class="muted"></span>
+      </div>
+      <div id="camera-badges" class="badges"></div>
+      <div id="camera-stage">
+        <canvas id="camera-canvas" width="320" height="240"></canvas>
+        <div id="camera-empty">no image</div>
+      </div>
+      <div id="camera-overlay-note" class="muted"></div>
+      <div id="tag-list" class="tag-list"></div>
+      <div id="tag-details" class="tag-details"></div>
+    </section>
+
+    <section id="landmarks" class="panel">
+      <div class="panel-head"><span class="panel-title">Landmarks</span><span class="muted">estimate vs nominal</span></div>
+      <table id="landmark-table"></table>
+    </section>
+  </aside>
+</div>
+
+<section id="diag" class="panel">
+  <div class="panel-head">
+    <span class="panel-title">Diagnostics</span>
+    <span id="diag-summary" class="muted"></span>
+    <button id="diag-toggle" type="button">hide</button>
+  </div>
+  <div id="diag-body">
+    <div class="diag-col">
+      <h3>Sources</h3>
+      <table id="sources-table"></table>
+    </div>
+    <div class="diag-col">
+      <h3>Workers</h3>
+      <table id="workers-table"></table>
+      <h3>Localization functions</h3>
+      <table id="loc-table"></table>
+    </div>
+    <div class="diag-col">
+      <h3>Diagnostics functions</h3>
+      <table id="diagfn-table"></table>
+      <h3>Links</h3>
+      <table id="links-table"></table>
+    </div>
+    <div class="diag-col">
+      <h3>Preview budget</h3>
+      <form id="preview-form">
+        <label>hz <input id="preview-hz" type="number" min="0" max="30" step="0.5" value="5"></label>
+        <label>quality <input id="preview-quality" type="number" min="1" max="100" step="1" value="70"></label>
+        <label>max width <input id="preview-width" type="number" min="64" max="1920" step="1" value="640"></label>
+        <button type="submit">apply</button>
+      </form>
+      <div id="preview-note" class="muted"></div>
+      <h3>Session</h3>
+      <table id="session-table"></table>
+    </div>
+  </div>
+</section>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

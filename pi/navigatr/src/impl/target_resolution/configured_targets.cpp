@@ -7,7 +7,7 @@
 
 #include "math/angles.h"
 #include "payloads/field_object_evidence.h"
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 
 namespace navigatr
 {
@@ -216,10 +216,10 @@ TargetResolutionOutput ConfiguredTargetResolution::run(const TargetResolutionInp
                 }
                 // Motion is gated at the moment of exposure, not at
                 // processing time: with camera latency those differ.
-                auto rate_at_exposure = std::fabs(in.robot.yaw_rate_rad_s);
-                double sampled        = 0.0;
-                if (in.robot.yawRateAt(entry.measuredAt, sampled)) {
-                    rate_at_exposure = std::fabs(sampled);
+                auto                   rate_at_exposure = std::fabs(in.robot.yaw_rate_rad_s);
+                const RateLookupResult sampled = in.history.yawRateAt(entry.measuredAt);
+                if (sampled.status == LookupStatus::kOk) {
+                    rate_at_exposure = std::fabs(sampled.yaw_rate_rad_s);
                 }
                 if (rate_at_exposure >
                     decl->vision.maximum_robot_angular_speed_rad_s) {

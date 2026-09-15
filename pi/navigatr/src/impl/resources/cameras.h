@@ -1,8 +1,10 @@
 // cameras.h
-// Camera device resources. libcamera_camera is the Pi CSI camera behind
-// libcamera; its configuration is fully validated everywhere, and on builds
-// without a capture backend the device comes up dead with a warning, the
-// same degrade-not-hang policy as an unplugged serial device.
+// Camera device resources.
+//
+// libcamera_camera is the Raspberry Pi camera behind libcamera. It exists
+// only in a binary configured with NAVIGATR_WITH_LIBCAMERA; selecting it
+// elsewhere is a build error naming the missing backend, never a device
+// that silently produces nothing.
 //
 //   <Resource id="front_camera_device" type="libcamera_camera">
 //       <Device index="0"/>
@@ -16,23 +18,55 @@
 //               k1="-0.31" k2="0.11" p1="0.0002" p2="-0.0001" k3="-0.02"
 //               rms_reprojection_px="0.4"/>
 //           <Extrinsic frame_id="front_camera_engineering"/>
-//       </Calibration>
+//       </Calibration>                         optional: absent = uncalibrated
+//       <Output id="frame"/>                   optional, default frame
 //   </Resource>
 //
-// Startup fails when capture resolution and calibration resolution disagree.
+// Without a Calibration element the camera runs uncalibrated: frames flow
+// for preview and 2D decoding, consumers see null intrinsics, and no
+// metric tag pose is ever solved from them. Startup fails when capture
+// resolution and calibration resolution disagree. The resource publishes
+// one output, a CameraFramePayload per new device frame.
 
 #pragma once
+#include <memory>
 #include <string>
 
 #include "config/config_node.h"
+#include "resources/camera.h"
 #include "resources/resource_instance.h"
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 
 namespace navigatr
 {
 
+// What every camera factory parses before choosing a backend.
+struct CameraCaptureConfig {
+    long        device_index = 0;
+    long        width_px     = 0;
+    long        height_px    = 0;
+    std::string pixel_format = "Y8";
+    double      frame_rate_hz = 0.0;
+
+    bool             calibrated = false;
+    std::string      calibration_id;
+    CameraIntrinsics intrinsics;
+    FrameId          engineering_frame;   // empty when uncalibrated
+};
+
+// Parses Device, Capture and the optional Calibration. False with err.
+bool parseCameraConfig(const ConfigNode& node, CameraCaptureConfig& out,
+                       std::string& err);
+
 ResourceInstance make_libcamera_camera(const ConfigNode&              node,
                                        ResourceInitializationContext& context,
                                        std::string&                   err);
+
+// Any CameraDevice as an executable resource publishing frames under
+// output. Test and synthetic cameras go through this too.
+ResourceInstance cameraResource(std::shared_ptr<CameraDevice> device, OutputId output);
+
+// Reads the optional <Output id=.../> child; "frame" when absent.
+bool cameraOutputId(const ConfigNode& node, OutputId& out, std::string& err);
 
 } // namespace navigatr

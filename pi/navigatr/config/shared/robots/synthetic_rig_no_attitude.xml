@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Hardware-free robot description: the synthetic rig stands in for the Pico,
+the encoders, the gyro, an attitude source and the camera. Everything
+downstream is the real pipeline: the same channel sensors, wheel and
+attitude models, the real AprilTag detector over rendered tagCircle21h7
+frames, association and the landmark estimator. Evidence produced here is
+synthetic truth and is labeled as such by the rig resource; nothing in it
+is a measurement of a physical robot.
+
+The rig drives a circle around the center goal, facing it, with the center
+goal displaced from its nominal placement so the estimator has something to
+discover. The rig still rocks physically (the camera sees it) but publishes no
+attitude: this fragment exercises the assumed-level path. synthetic_rig.xml
+is the same rig with a measured attitude source.
+
+Wheel geometry and the camera mount are plausible GATR2-like numbers chosen
+for the demo, not measurements of the real robot; the real robot
+description lives in gatr2_as5047_bno08x.xml.in.
+-->
+<Robot>
+
+    <Resources>
+        <Resource id="robot_geometry" type="robot_frame_map">
+            <Frame id="front_camera_engineering" parent_frame_id="robot_body"
+                   calibration_status="verified">
+                <PoseOfChildInParent x_m="0.18" y_m="0" z_m="0.22"
+                    roll_deg="0" pitch_deg="8" yaw_deg="0"/>
+            </Frame>
+        </Resource>
+
+        <Resource id="wheel_geometry" type="wheel_geometry">
+            <Wheel id="left_wheel" sensor_id="tracking_encoder_a" label="left"
+                   calibration_status="verified"
+                   radius_m="0.0254" position_x_m="0" position_y_m="0.13"
+                   measurement_angle_deg="0" direction="positive"/>
+            <Wheel id="right_wheel" sensor_id="tracking_encoder_b" label="right"
+                   calibration_status="verified"
+                   radius_m="0.0254" position_x_m="0" position_y_m="-0.13"
+                   measurement_angle_deg="0" direction="positive"/>
+            <Wheel id="rear_wheel" sensor_id="tracking_encoder_c" label="rear"
+                   calibration_status="verified"
+                   radius_m="0.0254" position_x_m="-0.12" position_y_m="0"
+                   measurement_angle_deg="90" direction="positive"/>
+        </Resource>
+
+        <Resource id="rig" type="synthetic_rig">
+            <Field resource_id="override_field"/>
+            <Wheels resource_id="wheel_geometry" counts_per_revolution="4000"/>
+            <Trajectory center_x_m="1.7832" center_y_m="1.7832" radius_m="0.75"
+                        period_s="45" facing="center" start_deg="180" hold_s="2"/>
+            <Displace landmark_id="neutral_goal_0_center" dx_m="0.06" dy_m="-0.04" dyaw_deg="6"/>
+            <Telemetry tick_hz="50" device_offset_ms="5000" gyro_bias_mdps="800"/>
+            <Attitude mode="unavailable" rock_deg="3" period_s="2.5"/>
+            <Camera frame_id="front_camera_engineering" robot_frames_resource_id="robot_geometry"
+                    width_px="800" height_px="600" fx_px="760" fy_px="760" cx_px="400" cy_px="300"
+                    k1="-0.08" k2="0.01" frame_rate_hz="10" latency_ms="30"/>
+            <Output id="encoder_a" wheel_id="left_wheel"/>
+            <Output id="encoder_b" wheel_id="right_wheel"/>
+            <Output id="encoder_c" wheel_id="rear_wheel"/>
+            <Output id="imu" channel="imu"/>
+            <Output id="attitude" channel="attitude"/>
+            <Output id="frame" channel="camera"/>
+        </Resource>
+
+        <Resource id="tag_detector" type="apriltag_detector">
+            <Family name="tagCircle21h7" detection_size_m="0.01761272"/>
+            <Detector quad_decimate="1.0" nthreads="2"/>
+        </Resource>
+    </Resources>
+
+    <Sensors>
+        <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
+            <Source resource_id="rig" output_id="encoder_a"/>
+            <Calibration counts_per_revolution="4000"/>
+        </Sensor>
+        <Sensor id="tracking_encoder_b" type="pico_encoder_channel">
+            <Source resource_id="rig" output_id="encoder_b"/>
+            <Calibration counts_per_revolution="4000"/>
+        </Sensor>
+        <Sensor id="tracking_encoder_c" type="pico_encoder_channel">
+            <Source resource_id="rig" output_id="encoder_c"/>
+            <Calibration counts_per_revolution="4000"/>
+        </Sensor>
+        <Sensor id="robot_imu" type="pico_imu_channel">
+            <Source resource_id="rig" output_id="imu"/>
+        </Sensor>
+        <Sensor id="robot_attitude" type="attitude_channel">
+            <Source resource_id="rig" output_id="attitude"/>
+            <Mounting calibration_status="verified" roll_deg="0" pitch_deg="0" yaw_deg="0"/>
+        </Sensor>
+        <Sensor id="front_camera" type="camera_frame">
+            <Source resource_id="rig" output_id="frame"/>
+        </Sensor>
+    </Sensors>
+
+</Robot>

@@ -36,9 +36,9 @@ struct TypedId {
 };
 
 using ResourceId     = TypedId<struct ResourceIdTag>;
+using OutputId       = TypedId<struct OutputIdTag>;   // one named output of a resource
 using SensorId       = TypedId<struct SensorIdTag>;
-using PreprocessorId = TypedId<struct PreprocessorIdTag>;
-using ArtifactId     = TypedId<struct ArtifactIdTag>;
+using ObservationFunctionId = TypedId<struct ObservationFunctionIdTag>;
 using ObservationId  = TypedId<struct ObservationIdTag>;
 using AssociationId  = TypedId<struct AssociationIdTag>;
 using FieldObjectId  = TypedId<struct FieldObjectIdTag>;

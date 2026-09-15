@@ -1,6 +1,6 @@
 // target_resolution.h
 // Target Resolution slot: combine the configured target definitions, the
-// command state, the robot estimate, the world estimate, and the published
+// command state, the robot estimate, the field estimate, and the published
 // evidence into the active resolved target. This is focused domain logic
 // driven by configuration, not an open algorithm ecosystem: the robot is
 // not expected to vary here beyond which targets are configured, so the
@@ -19,9 +19,10 @@
 #include "core/function_status.h"
 #include "core/records.h"
 #include "state/command_state.h"
+#include "state/field_state.h"
+#include "state/pose_history.h"
 #include "state/robot_state.h"
 #include "state/target_state.h"
-#include "state/field_state.h"
 
 namespace navigatr
 {
@@ -29,8 +30,9 @@ namespace navigatr
 struct TargetResolutionInput {
     const CommandState&   command;
     const RobotState&     robot;
+    const PoseLookup&     history;        // motion at measurement time
     const FieldState&     field;          // committed estimates only
-    const ObservationMap& observations;   // world estimation's published evidence
+    const ObservationMap& observations;   // field estimation's published evidence
     const AssociationMap& associations;
     const TargetState&    previous;
     MonotonicTime         now;   // host clock

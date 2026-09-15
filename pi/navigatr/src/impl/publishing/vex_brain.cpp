@@ -9,7 +9,7 @@
 #include "common/frame_codec.h"
 #include "math/angles.h"
 #include "payloads/landmark_associations.h"
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 #include "runtime/sensor_catalog.h"
 
 namespace navigatr
@@ -102,9 +102,13 @@ std::unique_ptr<Publishing> VexBrainPublisher::create(const ConfigNode& node,
         }
         const ConfigNode bias = health.child("BiasCal");
         if (bias.valid()) {
-            publisher->bias_cal_ref_ = ArtifactId{bias.attr("artifact_id")};
-            if (!context.requireArtifact(publisher->bias_cal_ref_, nullptr, bias.path(),
-                                         err)) {
+            publisher->bias_cal_function_ = bias.attr("function_id");
+            if (publisher->bias_cal_function_.empty()) {
+                err = bias.path() + ": BiasCal needs function_id";
+                return nullptr;
+            }
+            if (!context.requireObservationFunction(publisher->bias_cal_function_,
+                                                    bias.path(), err)) {
                 return nullptr;
             }
         }
@@ -161,10 +165,10 @@ void VexBrainPublisher::reset() {
     seq_           = 0;
 }
 
-bool VexBrainPublisher::sensorFresh(const SensorResultsMap& results, const SensorId& id,
+bool VexBrainPublisher::sensorFresh(const SensorMap& results, const SensorId& id,
                                     MonotonicTime now) const {
     const auto it = results.find(id);
-    if (it == results.end() || it->second.state != SensorState::kValid ||
+    if (it == results.end() || it->second.state != SourceState::kValid ||
         !it->second.latest.has_value()) {
         return false;
     }
@@ -177,9 +181,11 @@ PublishingOutput VexBrainPublisher::run(const PublishingInput& in) {
         return out;
     }
 
-    if (!bias_cal_ref_.empty() &&
-        in.artifacts.find(bias_cal_ref_) != in.artifacts.end()) {
-        bias_cal_seen_ = true;
+    if (!bias_cal_function_.empty()) {
+        const ObservationFunctionStatus* f = in.localization.find(bias_cal_function_);
+        if (f != nullptr && f->ready) {
+            bias_cal_seen_ = true;
+        }
     }
 
     const Pose2D field_pose = in.robot.fieldPose();
@@ -201,13 +207,13 @@ PublishingOutput VexBrainPublisher::run(const PublishingInput& in) {
     if (!encoder_health_.empty()) {
         bool all_fresh = true;
         for (const SensorId& id : encoder_health_) {
-            all_fresh = all_fresh && sensorFresh(in.sensorResults, id, in.now);
+            all_fresh = all_fresh && sensorFresh(in.sensors, id, in.now);
         }
         if (all_fresh) {
             status |= gatr2::kStatusEncHealthy;
         }
     }
-    if (!gyro_health_.empty() && sensorFresh(in.sensorResults, gyro_health_, in.now)) {
+    if (!gyro_health_.empty() && sensorFresh(in.sensors, gyro_health_, in.now)) {
         status |= gatr2::kStatusGyroHealthy;
     }
     if (!in.observations.empty()) {

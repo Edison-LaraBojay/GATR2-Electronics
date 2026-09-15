@@ -23,8 +23,7 @@ const char* kAllNoop = R"(
 <System>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="noop"/>
-        <Localization type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
         <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
@@ -88,8 +87,8 @@ TEST(SystemBuild, MissingTypeIsAnError) {
 
 TEST(SystemBuild, UnknownTypeIsAnError) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<Localization type=\"noop\"/>",
-                                "<Localization type=\"quantum\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<Estimator type=\"noop\"/>",
+                                "<Estimator type=\"quantum\"/>")
                            .c_str(),
                        err),
               nullptr);
@@ -100,8 +99,8 @@ TEST(SystemBuild, WrongCategoryKeyCannotBeConstructed) {
     // a publisher-only name in the localization slot fails on signature,
     // while the shared name noop resolves per category
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<Localization type=\"noop\"/>",
-                                "<Localization type=\"vex_brain\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<Estimator type=\"noop\"/>",
+                                "<Estimator type=\"vex_brain\"/>")
                            .c_str(),
                        err),
               nullptr);
@@ -164,8 +163,7 @@ TEST(SystemBuild, ErrorsCarryPathIdAndType) {
     </Resources>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="noop"/>
-        <Localization type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
         <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
@@ -196,22 +194,25 @@ TEST(SystemBuild, DeclarationReorderingChangesNothing) {
     <Resources>
         <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="encoder_c" channel="2"/>
+            <Output id="imu" channel="imu"/>
         </Resource>
         <Resource id="pico_uart" type="memory_link"/>
     </Resources>
     <Sensors>
         <Sensor id="robot_imu" type="pico_imu_channel">
-            <Source resource_id="pico_telemetry" channel="imu"/>
+            <Source resource_id="pico_telemetry" output_id="imu"/>
         </Sensor>
         <Sensor id="enc" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="0"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_a"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
     </Sensors>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="noop"/>
-        <Localization type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
         <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
@@ -237,10 +238,10 @@ TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
             SensorExecutable executable;
             executable.outputPayload =
                 PayloadDescriptor::of<EncoderSample>(payload_names::kEncoderSample);
-            executable.execute = [](const SensorExecutionInput&) {
-                SensorPollResult result;
-                result.state = SensorState::kValid;
-                SensorPublication publication;
+            executable.execute = [](const ResourceMap&, const ExecutionContext&) {
+                PollResult result;
+                result.state = SourceState::kValid;
+                Publication publication;
                 publication.measuredAt = deviceTime(1);
                 publication.payload =
                     TypedPayload::store(ImuSample{1.0}, payload_names::kImuSample);
@@ -290,6 +291,10 @@ TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
         <Resource id="pico_uart" type="memory_link"/>
         <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="encoder_c" channel="2"/>
+            <Output id="imu" channel="imu"/>
         </Resource>
     </Resources>
     <Sensors>
@@ -297,8 +302,7 @@ TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
     </Sensors>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="noop"/>
-        <Localization type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
         <FieldEstimation type="liar_field"/>
         <TargetResolution type="capture"/>
         <Publishing type="noop"/>
@@ -310,14 +314,14 @@ TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
     system->step(hostTime(1));
 
     // the lying publication never entered the record and reads as a fault
-    const auto& record = system->sensorResults().at(SensorId{"liar"});
-    EXPECT_EQ(record.state, SensorState::kFault);
+    const auto& record = system->sensorMap().at(SensorId{"liar"});
+    EXPECT_EQ(record.state, SourceState::kFault);
     EXPECT_FALSE(record.latest.has_value());
     EXPECT_NE(record.diagnostic.find("declared"), std::string::npos);
 
     // the undeclared observation was dropped before anyone downstream saw it
     EXPECT_EQ(*seen, 0u);
-    EXPECT_EQ(system->diagnostics()
+    EXPECT_EQ(system->fieldDiagnostics()
                   .functions.count("FieldEstimation/liar_field/undeclared_output:ghost"),
               1u);
 }
@@ -339,23 +343,18 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
             return CommandsOutput{in.previous, FunctionStatus::kOk};
         }
     };
-    struct ProbePreprocessing : Preprocessing {
+    struct ProbeLocalization : StateEstimator {
         std::shared_ptr<std::vector<std::string>> log;
-        explicit ProbePreprocessing(std::shared_ptr<std::vector<std::string>> l)
-            : log(std::move(l)) {}
-        PreprocessingOutput run(const PreprocessingInput&) override {
-            log->push_back("preprocessing");
-            return PreprocessingOutput{};
-        }
-    };
-    struct ProbeLocalization : Localization {
-        std::shared_ptr<std::vector<std::string>> log;
+        std::string                               type_name = "probe";
         explicit ProbeLocalization(std::shared_ptr<std::vector<std::string>> l)
             : log(std::move(l)) {}
-        LocalizationOutput run(const LocalizationInput& in) override {
+        StateEstimatorOutput run(const StateEstimatorInput& in) override {
             log->push_back("localization");
-            return LocalizationOutput{in.previous, FunctionStatus::kOk};
+            StateEstimatorOutput out;
+            out.robot = in.previous;
+            return out;
         }
+        const std::string& type() const override { return type_name; }
     };
     struct ProbeField : FieldEstimation {
         std::shared_ptr<std::vector<std::string>> log;
@@ -392,14 +391,9 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
         [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
             return std::make_unique<ProbeCommands>(log);
         });
-    functions.add<PreprocessingMakeFunction>(
+    functions.add<StateEstimatorMakeFunction>(
         FunctionKey{"probe"},
-        [log](const ConfigNode&, PreprocessorInitializationContext&, std::string&) {
-            return std::make_unique<ProbePreprocessing>(log);
-        });
-    functions.add<LocalizationMakeFunction>(
-        FunctionKey{"probe"},
-        [log](const ConfigNode&, SlotInitializationContext&, std::string&) {
+        [log](const ConfigNode&, StateEstimatorInitializationContext&, std::string&) {
             return std::make_unique<ProbeLocalization>(log);
         });
     functions.add<FieldEstimationMakeFunction>(
@@ -427,8 +421,7 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
         <TargetResolution type="probe"/>
         <CommandCollection type="probe"/>
         <FieldEstimation type="probe"/>
-        <Localization type="probe"/>
-        <Preprocessing type="probe"/>
+        <Localization><Estimator type="probe"/></Localization>
     </Pipeline>
 </System>
 )";
@@ -437,7 +430,7 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
     ASSERT_NE(system, nullptr) << err;
 
     system->step(hostTime(1));
-    EXPECT_EQ(*log, (std::vector<std::string>{"commands", "preprocessing", "localization",
+    EXPECT_EQ(*log, (std::vector<std::string>{"commands", "localization",
                                               "field_estimation", "target_resolution",
                                               "publishing"}));
 }

@@ -30,6 +30,10 @@ const char* kFullConfig = R"(
         <Resource id="pico_uart" type="memory_link"/>
         <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="encoder_c" channel="2"/>
+            <Output id="imu" channel="imu"/>
         </Resource>
         <Resource id="brain_uart" type="memory_link"/>
         <Resource id="override_field" type="field_map">
@@ -41,28 +45,27 @@ const char* kFullConfig = R"(
     </Resources>
     <Sensors>
         <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="0"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_a"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
         <Sensor id="tracking_encoder_b" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="1"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_b"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
         <Sensor id="tracking_encoder_c" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="2"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_c"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
         <Sensor id="robot_imu" type="pico_imu_channel">
-            <Source resource_id="pico_telemetry" channel="imu"/>
+            <Source resource_id="pico_telemetry" output_id="imu"/>
         </Sensor>
     </Sensors>
     <Pipeline>
         <CommandCollection type="vex_brain_serial">
             <Serial resource_id="brain_uart"/>
         </CommandCollection>
-        <Preprocessing type="configured_collection">
-            <Preprocessor id="tracking_motion"
-                          type="tracking_wheel_odometry">
+        <Localization>
+            <Observation id="tracking_motion" type="tracking_wheel_motion">
                 <TrackingWheel sensor_id="tracking_encoder_a" label="left"
                                radius_m="0.0254" position_x_m="0"
                                position_y_m="0.13" measurement_angle_deg="0" direction="positive"/>
@@ -72,17 +75,16 @@ const char* kFullConfig = R"(
                 <TrackingWheel sensor_id="tracking_encoder_c" label="rear"
                                radius_m="0.0254" position_x_m="-0.12"
                                position_y_m="0" measurement_angle_deg="90" direction="positive"/>
-                <Output artifact_id="tracking_motion_delta"/>
-            </Preprocessor>
-            <Preprocessor id="imu_normalization"
-                          type="imu_normalization">
+                <Output observation_id="tracking_motion"/>
+            </Observation>
+            <Observation id="imu_heading" type="imu_heading_increment">
                 <Input sensor_id="robot_imu"/>
                 <Calibration bias_samples="200"/>
-                <Output artifact_id="imu_orientation"/>
-            </Preprocessor>
-        </Preprocessing>
-        <Localization type="wheel_imu_prediction">
-            <Motion artifact_id="tracking_motion_delta"/>
+                <Output observation_id="imu_heading"/>
+            </Observation>
+            <Estimator type="planar_motion_integrator">
+                <Motion observation_id="tracking_motion"/>
+            </Estimator>
         </Localization>
         <FieldEstimation type="landmark_field">
             <FieldMap resource_id="override_field"/>
@@ -100,7 +102,7 @@ const char* kFullConfig = R"(
                 <Encoder sensor_id="tracking_encoder_b"/>
                 <Encoder sensor_id="tracking_encoder_c"/>
                 <Gyro sensor_id="robot_imu"/>
-                <BiasCal artifact_id="imu_orientation"/>
+                <BiasCal function_id="imu_heading"/>
             </Health>
             <FieldObject object_id="center_goal" wire_id="1"/>
         </Publishing>
@@ -278,8 +280,8 @@ TEST(EndToEnd, NothingAttachedStillRunsAndPublishesHealth) {
 
     EXPECT_EQ(rig.system->cycle(), 20u);
     EXPECT_FALSE(rig.system->robot().valid);
-    EXPECT_EQ(rig.system->sensorResults().at(SensorId{"tracking_encoder_a"}).state,
-              SensorState::kNoDataYet);
+    EXPECT_EQ(rig.system->sensorMap().at(SensorId{"tracking_encoder_a"}).state,
+              SourceState::kNoDataYet);
 
     gatr2::FrameReader reader;
     gatr2::PoseFrame   last{};
@@ -328,17 +330,17 @@ std::string fusedConfig(bool three_wheel) {
     }
     std::string sensors = R"(
         <Sensor id="enc_a" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="0"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_a"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>
         <Sensor id="enc_b" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="1"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_b"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>)";
     if (three_wheel) {
         sensors += R"(
         <Sensor id="enc_c" type="pico_encoder_channel">
-            <Source resource_id="pico_telemetry" channel="2"/>
+            <Source resource_id="pico_telemetry" output_id="encoder_c"/>
             <Calibration counts_per_revolution="4000"/>
         </Sensor>)";
     }
@@ -349,26 +351,30 @@ std::string fusedConfig(bool three_wheel) {
         <Resource id="pico_uart" type="memory_link"/>
         <Resource id="pico_telemetry" type="pico_telemetry">
             <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="encoder_c" channel="2"/>
+            <Output id="imu" channel="imu"/>
         </Resource>
     </Resources>
     <Sensors>)") +
            sensors + R"(
         <Sensor id="robot_imu" type="pico_imu_channel">
-            <Source resource_id="pico_telemetry" channel="imu"/>
+            <Source resource_id="pico_telemetry" output_id="imu"/>
         </Sensor>
     </Sensors>
     <Pipeline>
         <CommandCollection type="noop"/>
-        <Preprocessing type="configured_collection">
-            <Preprocessor id="tracking_motion" type="tracking_wheel_odometry">)" +
+        <Localization>
+            <Observation id="tracking_motion" type="tracking_wheel_motion">)" +
            wheels + R"(
                 <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
                                    max_calibration_travel_m="0.005"/>
-                <Output artifact_id="tracking_motion_delta"/>
-            </Preprocessor>
-        </Preprocessing>
-        <Localization type="wheel_imu_prediction">
-            <Motion artifact_id="tracking_motion_delta"/>
+                <Output observation_id="tracking_motion"/>
+            </Observation>
+            <Estimator type="planar_motion_integrator">
+                <Motion observation_id="tracking_motion"/>
+            </Estimator>
         </Localization>
         <FieldEstimation type="noop"/>
         <TargetResolution type="noop"/>

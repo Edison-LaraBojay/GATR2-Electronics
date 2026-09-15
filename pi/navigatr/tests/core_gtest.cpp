@@ -7,8 +7,8 @@
 #include "core/function_registry.h"
 #include "core/records.h"
 #include "core/time.h"
-#include "resources/resource_map.h"
-#include "runtime/sensor_map.h"
+#include "resources/resource_store.h"
+#include "runtime/sensor_stage.h"
 
 using namespace navigatr;
 
@@ -104,22 +104,22 @@ TEST(TypedPayload, EmptyIsNull) {
 }
 
 TEST(TypedIds, DistinctTypesDoNotMix) {
-    SensorResultsMap results;
-    results[SensorId{"tracking"}] = SensorRecord{};
+    SensorMap results;
+    results[SensorId{"tracking"}] = MeasurementRecord{};
     EXPECT_EQ(results.count(SensorId{"tracking"}), 1u);
     // ResourceId{"tracking"} would not compile as a key here.
     EXPECT_NE(SensorId{"a"}, SensorId{"b"});
 }
 
-TEST(SensorMapClass, IdKeyedDeterministicOrder) {
+TEST(SensorFunctionsClass, IdKeyedDeterministicOrder) {
     const auto executable = [] {
         SensorExecutable e;
         e.outputPayload = PayloadDescriptor::of<AlphaPayload>("test.alpha");
-        e.execute = [](const SensorExecutionInput&) { return SensorPollResult{}; };
+        e.execute = [](const ResourceMap&, const ExecutionContext&) { return PollResult{}; };
         return e;
     };
 
-    SensorMap sensors;
+    SensorFunctions sensors;
     EXPECT_TRUE(sensors.add(SensorId{"b"}, executable(), "Sensor/b"));
     EXPECT_TRUE(sensors.add(SensorId{"a"}, executable(), "Sensor/a"));
     EXPECT_FALSE(sensors.add(SensorId{"a"}, executable(), "Sensor/a"));   // duplicate
@@ -129,7 +129,7 @@ TEST(SensorMapClass, IdKeyedDeterministicOrder) {
     EXPECT_EQ(sensors.executionOrder()[0].id, SensorId{"b"});
     EXPECT_EQ(sensors.executionOrder()[1].id, SensorId{"a"});
 
-    const SensorMap::Entry* found = sensors.find(SensorId{"a"});
+    const SensorFunctions::Entry* found = sensors.find(SensorId{"a"});
     ASSERT_NE(found, nullptr);
     EXPECT_EQ(found->label, "Sensor/a");
     EXPECT_EQ(sensors.find(SensorId{"missing"}), nullptr);

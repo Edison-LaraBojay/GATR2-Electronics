@@ -4,7 +4,6 @@
 
 #include <memory>
 
-#include "config/calibration.h"
 #include "config/field_map.h"
 #include "config/pose3_config.h"
 #include "math/angles.h"
@@ -236,8 +235,7 @@ ResourceInstance make_target_set(const ConfigNode&              node,
                 ok  = false;
                 return;
             }
-            if (!checkCalibration(desired, context.allow_provisional, err) ||
-                !parsePlanarPose(desired, decl.desired_controlled_in_approach, err)) {
+            if (!parsePlanarPose(desired, decl.desired_controlled_in_approach, err)) {
                 ok = false;
                 return;
             }

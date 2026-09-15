@@ -1,8 +1,8 @@
 // geometry_resources_gtest.cpp
 // The measured-geometry resources and their strictness: robot frame chains,
-// the calibration_status policy, camera configuration validation, and
-// target set validation. Placeholder or unmeasured values must fail the
-// build, never silently run as zero.
+// annotation-only calibration labels, camera configuration validation,
+// and target set validation. Required numeric values must remain usable
+// regardless of a human-readable annotation.
 
 #include <gtest/gtest.h>
 
@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "config/field_map.h"
+#include "impl/resources/cameras.h"
 #include "math/angles.h"
 #include "resources/camera.h"
 #include "resources/robot_frames.h"
@@ -32,15 +33,13 @@ struct Fixture {
 
     // Builds the resources of one <Resources> document; returns the map or
     // nothing with err set.
-    bool build(const char* xml, ResourceMap& out, std::string& err,
-               bool allow_provisional = false) {
+    bool build(const char* xml, ResourceStore& out, std::string& err) {
         doc_.Clear();
         if (doc_.Parse(xml) != tinyxml2::XML_SUCCESS) {
             err = "parse";
             return false;
         }
-        ResourceMapBuilder builder(functions, &warnings);
-        builder.setAllowProvisional(allow_provisional);
+        ResourceStoreBuilder builder(functions, &warnings);
         bool ok = true;
         ConfigNode{doc_.RootElement()}.forEach("Resource", [&](const ConfigNode& r) {
             if (ok) {
@@ -78,7 +77,7 @@ const char* frameXml(const char* status) {
 
 TEST(RobotFrameMap, ResolvesChainsToRobotBody) {
     Fixture       f;
-    ResourceMap map;
+    ResourceStore map;
     std::string   err;
     ASSERT_TRUE(f.build(R"(
 <Resources>
@@ -110,7 +109,7 @@ TEST(RobotFrameMap, ResolvesChainsToRobotBody) {
 
 TEST(RobotFrameMap, MissingParentIsAnError) {
     Fixture       f;
-    ResourceMap map;
+    ResourceStore map;
     std::string   err;
     EXPECT_FALSE(f.build(R"(
 <Resources>
@@ -125,31 +124,38 @@ TEST(RobotFrameMap, MissingParentIsAnError) {
     EXPECT_NE(err.find("ghost"), std::string::npos);
 }
 
-TEST(CalibrationPolicy, UnconfiguredIsAlwaysAnError) {
+TEST(CalibrationAnnotations, LabelsDoNotAffectGeometry) {
     Fixture       f;
-    ResourceMap map;
+    ResourceStore map;
     std::string   err;
-    EXPECT_FALSE(f.build(frameXml("UNCONFIGURED"), map, err));
-    EXPECT_NE(err.find("UNCONFIGURED"), std::string::npos);
-    // even the bench flag never accepts a template placeholder
-    EXPECT_FALSE(f.build(frameXml("UNCONFIGURED"), map, err, true));
+    for (const char* label : {"UNCONFIGURED", "provisional", "verified", "finished", ""}) {
+        ASSERT_TRUE(f.build(frameXml(label), map, err)) << label << ": " << err;
+        auto frames = map.require<const RobotFrameMap>(ResourceId{"robot_geometry"}, err);
+        ASSERT_NE(frames, nullptr);
+        const auto* contact = frames->find(FrameId{"front_contact"});
+        ASSERT_NE(contact, nullptr);
+        EXPECT_DOUBLE_EQ(contact->x_m, 0.35);
+        EXPECT_DOUBLE_EQ(contact->z_m, 0.1);
+    }
 }
 
-TEST(CalibrationPolicy, ProvisionalNeedsTheExplicitBenchOption) {
+TEST(CalibrationAnnotations, LabelCannotMakeInvalidNumericGeometryUsable) {
     Fixture       f;
-    ResourceMap map;
+    ResourceStore map;
     std::string   err;
-    EXPECT_FALSE(f.build(frameXml("provisional"), map, err));
-    EXPECT_NE(err.find("provisional"), std::string::npos);
-    EXPECT_TRUE(f.build(frameXml("provisional"), map, err, true)) << err;
-    EXPECT_TRUE(f.build(frameXml("verified"), map, err)) << err;
+    for (const char* label : {"UNCONFIGURED", "provisional", "verified"}) {
+        std::string xml = frameXml(label);
+        xml.replace(xml.find("x_m=\"0.35\""), 10, "x_m=\"@MEASURE_X@\"");
+        EXPECT_FALSE(f.build(xml.c_str(), map, err));
+        EXPECT_NE(err.find("x_m"), std::string::npos);
+    }
 }
 
-TEST(CalibrationPolicy, MissingStatusAndUnknownStatusAreErrors) {
+TEST(CalibrationAnnotations, MissingLabelIsAllowed) {
     Fixture       f;
-    ResourceMap map;
+    ResourceStore map;
     std::string   err;
-    EXPECT_FALSE(f.build(R"(
+    EXPECT_TRUE(f.build(R"(
 <Resources>
     <Resource id="robot_geometry" type="robot_frame_map">
         <Frame id="front_contact" parent_frame_id="robot_body">
@@ -158,16 +164,12 @@ TEST(CalibrationPolicy, MissingStatusAndUnknownStatusAreErrors) {
         </Frame>
     </Resource>
 </Resources>)",
-                         map, err));
-    EXPECT_NE(err.find("calibration_status"), std::string::npos);
-
-    EXPECT_FALSE(f.build(frameXml("finished"), map, err));
-    EXPECT_NE(err.find("finished"), std::string::npos);
+                         map, err)) << err;
 }
 
 TEST(FieldMapStrictness, MissingGeometryAttributesAreErrors) {
     Fixture       f;
-    ResourceMap map;
+    ResourceStore map;
     std::string   err;
     // z_m deliberately missing from the tag surface pose
     EXPECT_FALSE(f.build(R"(
@@ -190,7 +192,7 @@ TEST(FieldMapStrictness, MissingGeometryAttributesAreErrors) {
 
 TEST(CameraResource, CalibrationResolutionMustMatchCapture) {
     Fixture           f;
-    ResourceMap     map;
+    ResourceStore     map;
     std::string       err;
     const std::string base = R"(
 <Resources>
@@ -216,21 +218,69 @@ TEST(CameraResource, CalibrationResolutionMustMatchCapture) {
 
     std::string matched = base;
     matched.replace(matched.find("WIDTH"), 5, "1456");
+#if NAVIGATR_HAVE_LIBCAMERA
+    // with the backend compiled in, an absent device is a warning and a
+    // dead camera, never a silent absence
     ASSERT_TRUE(f.build(matched.c_str(), map, err)) << err;
-    // no capture backend on this build: configured but dead, with a warning
     auto camera = map.require<CameraDevice>(ResourceId{"cam"}, err);
     ASSERT_NE(camera, nullptr) << err;
-    EXPECT_FALSE(camera->alive());
-    bool warned = false;
-    for (const std::string& w : f.warnings) {
-        warned = warned || w.find("capture backend") != std::string::npos;
+#else
+    // this binary has no libcamera backend: selecting the type is an
+    // explicit configuration error naming the missing feature, not a dead
+    // device that quietly produces nothing
+    EXPECT_FALSE(f.build(matched.c_str(), map, err));
+    EXPECT_NE(err.find("NAVIGATR_WITH_LIBCAMERA"), std::string::npos) << err;
+#endif
+}
+
+TEST(CameraResource, LabelsAreOptionalAndNumericCalibrationControlsMetricAvailability) {
+    const std::string base = R"(
+        <Resource><Device index="0"/>
+            <Capture width_px="640" height_px="480" pixel_format="Y8" frame_rate_hz="30"/>
+            <Calibration LABEL calibration_id="test">
+                <Intrinsics model="brown_conrady" calibrated_width_px="640" calibrated_height_px="480"
+                    fx_px="500" fy_px="500" cx_px="320" cy_px="240"
+                    k1="0" k2="0" p1="0" p2="0" k3="0" rms_reprojection_px="0.5"/>
+                <Extrinsic frame_id="camera"/>
+            </Calibration>
+        </Resource>)";
+    auto parse = [](const std::string& xml, CameraCaptureConfig& config, std::string& err) {
+        tinyxml2::XMLDocument doc;
+        if (doc.Parse(xml.c_str()) != tinyxml2::XML_SUCCESS) {
+            return false;
+        }
+        return parseCameraConfig(ConfigNode{doc.RootElement()}, config, err);
+    };
+    for (const char* label : {"", "calibration_status=\"UNCONFIGURED\"",
+                              "calibration_status=\"provisional\"", "calibration_status=\"verified\"",
+                              "calibration_status=\"notes for the operator\""}) {
+        std::string xml = base;
+        xml.replace(xml.find("LABEL"), 5, label);
+        CameraCaptureConfig config;
+        std::string err;
+        ASSERT_TRUE(parse(xml, config, err)) << err;
+        EXPECT_TRUE(config.calibrated);
+        EXPECT_DOUBLE_EQ(config.intrinsics.fx_px, 500.0);
+
+        xml.replace(xml.find("fx_px=\"500\""), 11, "fx_px=\"0\"");
+        EXPECT_FALSE(parse(xml, config, err));
+        EXPECT_NE(err.find("fx_px"), std::string::npos);
     }
-    EXPECT_TRUE(warned);
+    for (const char* bad : {"-1", "nan", "@MEASURE_RATE@", "1e-100", "2000000"}) {
+        std::string xml = R"(<Resource><Device index="0"/>
+            <Capture width_px="640" height_px="480" pixel_format="Y8" frame_rate_hz="RATE"/>
+        </Resource>)";
+        xml.replace(xml.find("RATE"), 4, bad);
+        CameraCaptureConfig config;
+        std::string err;
+        EXPECT_FALSE(parse(xml, config, err));
+        EXPECT_NE(err.find("frame_rate_hz"), std::string::npos);
+    }
 }
 
 TEST(TargetSetValidation, RejectsBrokenDeclarations) {
     Fixture           f;
-    ResourceMap     map;
+    ResourceStore     map;
     std::string       err;
     const std::string prelude = R"(
 <Resources>

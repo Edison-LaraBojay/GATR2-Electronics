@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Resource id="override_field" type="field_map">
+<Resource id="override_field" type="field_map" name="V5RC Override 2026-2027">
     <!--
     V5RC Override 2026-2027 nominal field geometry.
 
@@ -19,7 +19,102 @@
     provisional until checked against physical field elements. The
     tagCircle21h7 detection size is the detector-corner edge, not the
     carrier plate or outer printed graphic.
+
+    Dimensions, Feature and Visual elements are display data for the
+    inspection viewer, from Game Manual v2.0 Appendix A and the CAD parse
+    described in docs/field_assets.md. Estimation never reads them; a
+    wrong value there moves a picture, not an estimate.
     -->
+
+    <!--
+    Perimeter: 276-8242 portable field perimeter, manual v2.0 sheet A13
+    (140.40 in [3566.4 mm] inside wall to wall, 11.54 in [293 mm] wall
+    height, 2.00 in [50.8 mm] wall thickness). The metal perimeter
+    278-1501 on sheet A14 is 3568.7 mm inside with 292.1 mm walls. Tile
+    pitch is inside/6; the CAD tile part 276-6904-001 is a 618.1 mm
+    interlocking square, so the part size is not the pitch.
+    -->
+    <Dimensions
+        inside_x_m="3.5664"
+        inside_y_m="3.5664"
+        wall_height_m="0.293"
+        wall_thickness_m="0.0508"
+        tile_m="0.5944"
+        source="V5RC Override Game Manual v2.0 Appendix A sheets A10 and A13; CAD 276-9250-000 (2026-04-26)"
+        revision="manual v2.0 (2026-09-03); CAD zip Last-Modified 2026-04-27"
+        units_note="meters here; the manual gives inches [mm]; tile pitch = inside/6, the CAD tile part is 618.1 mm interlocking"/>
+
+    <!--
+    Loaders (sheets A9, A10): wall mounted at y = 290.6 and 3275.8 mm on
+    the red (small x) and blue (large x) walls, 95 mm into the field,
+    102.1 mm wide, 583.5 mm tall. Each box is the projecting body.
+    -->
+    <Feature id="loader_red_south" kind="box"
+        x_m="0.0475" y_m="0.2906" z_m="0.29175"
+        size_x_m="0.095" size_y_m="0.1021" size_z_m="0.5835"
+        color="#d50032" note="manual A9, A10; red wall"/>
+    <Feature id="loader_red_north" kind="box"
+        x_m="0.0475" y_m="3.2758" z_m="0.29175"
+        size_x_m="0.095" size_y_m="0.1021" size_z_m="0.5835"
+        color="#d50032" note="manual A9, A10; red wall"/>
+    <Feature id="loader_blue_south" kind="box"
+        x_m="3.5189" y_m="0.2906" z_m="0.29175"
+        size_x_m="0.095" size_y_m="0.1021" size_z_m="0.5835"
+        color="#00a3e0" note="manual A9, A10; blue wall"/>
+    <Feature id="loader_blue_north" kind="box"
+        x_m="3.5189" y_m="3.2758" z_m="0.29175"
+        size_x_m="0.095" size_y_m="0.1021" size_z_m="0.5835"
+        color="#00a3e0" note="manual A9, A10; blue wall"/>
+
+    <!--
+    Toggles (sheet A8): centered on every wall, 660.2 mm long, a 51.6 x
+    30.2 mm triangular section drawn as a 52 mm box, top dimensioned
+    335.3 mm above the wall base as drawn. The CAD toggle sub-assemblies
+    did not parse to a clean bounding box, so the height is the manual's.
+    -->
+    <Feature id="toggle_north" kind="box"
+        x_m="1.7832" y_m="3.5404" z_m="0.3093"
+        size_x_m="0.6602" size_y_m="0.052" size_z_m="0.052"
+        color="#ffd100" note="manual A8, A10; 0-degree wall"/>
+    <Feature id="toggle_south" kind="box"
+        x_m="1.7832" y_m="0.026" z_m="0.3093"
+        size_x_m="0.6602" size_y_m="0.052" size_z_m="0.052"
+        color="#ffd100" note="manual A8, A10; audience wall"/>
+    <Feature id="toggle_west" kind="box"
+        x_m="0.026" y_m="1.7832" z_m="0.3093"
+        size_x_m="0.052" size_y_m="0.6602" size_z_m="0.052"
+        color="#ffd100" note="manual A8, A10; red wall"/>
+    <Feature id="toggle_east" kind="box"
+        x_m="3.5404" y_m="1.7832" z_m="0.3093"
+        size_x_m="0.052" size_y_m="0.6602" size_z_m="0.052"
+        color="#ffd100" note="manual A8, A10; blue wall"/>
+
+    <!--
+    Midfield tape diamond (sheet A11): four 63.5 mm white strips, 864.8 mm
+    per side, rotated 45 degrees about the field center, so each strip's
+    center sits 432.4 mm from the field center along a diagonal. The
+    sheet does not say whether 864.8 mm is the tape centerline or an
+    edge; sheet A12 draws the vertices on the 598.06 mm goal grid, which
+    implies an 845.8 mm centerline. The difference is below the manual's
+    1 in element tolerance. The two diagonal autonomous lines are
+    omitted: nothing in Appendix A dimensions where they start.
+    -->
+    <Feature id="midfield_tape_ne" kind="tape"
+        x_m="2.08895" y_m="2.08895" z_m="0"
+        size_x_m="0.8648" size_y_m="0.0635" size_z_m="0" yaw_deg="-45"
+        color="#f2f2f2" note="manual A11; reference edge unverified"/>
+    <Feature id="midfield_tape_nw" kind="tape"
+        x_m="1.47745" y_m="2.08895" z_m="0"
+        size_x_m="0.8648" size_y_m="0.0635" size_z_m="0" yaw_deg="45"
+        color="#f2f2f2" note="manual A11; reference edge unverified"/>
+    <Feature id="midfield_tape_sw" kind="tape"
+        x_m="1.47745" y_m="1.47745" z_m="0"
+        size_x_m="0.8648" size_y_m="0.0635" size_z_m="0" yaw_deg="-45"
+        color="#f2f2f2" note="manual A11; reference edge unverified"/>
+    <Feature id="midfield_tape_se" kind="tape"
+        x_m="2.08895" y_m="1.47745" z_m="0"
+        size_x_m="0.8648" size_y_m="0.0635" size_z_m="0" yaw_deg="45"
+        color="#f2f2f2" note="manual A11; reference edge unverified"/>
 
     <!-- short neutral goal; all four physical faces decode observed ID 4. -->
     <Landmark id="neutral_goal_4_north">
@@ -28,6 +123,17 @@
             x_m="1.185141466"
             y_m="2.979317068"
             heading_deg="0"/>
+
+        <Visual
+            shape="octagonal_prism"
+            height_m="0.1465"
+            base_across_flats_m="0.1425"
+            top_across_flats_m="0.0888"
+            tag_plate_width_m="0.056"
+            tag_plate_height_m="0.0508"
+            tag_plate_thickness_m="0.0049"
+            color="#2b2b2b"
+            note="manual A7: base plus 64 mm riser 276-9250-004, 146.5 mm"/>
 
         <TagMount
             instance_id="neutral_goal_4_north_east_tag"
@@ -98,6 +204,17 @@
             y_m="2.979317068"
             heading_deg="0"/>
 
+        <Visual
+            shape="octagonal_prism"
+            height_m="0.0825"
+            base_across_flats_m="0.1425"
+            top_across_flats_m="0.0888"
+            tag_plate_width_m="0.056"
+            tag_plate_height_m="0.0508"
+            tag_plate_thickness_m="0.0049"
+            color="#00a3e0"
+            note="manual A7: base 276-9250-003 alone, 82.5 mm; plate 276-9250-006 on each axis face"/>
+
         <TagMount
             instance_id="blue_goal_3_north_east_tag"
             calibration_status="provisional"
@@ -166,6 +283,17 @@
             x_m="0.587082932"
             y_m="2.381258534"
             heading_deg="0"/>
+
+        <Visual
+            shape="octagonal_prism"
+            height_m="0.1465"
+            base_across_flats_m="0.1425"
+            top_across_flats_m="0.0888"
+            tag_plate_width_m="0.056"
+            tag_plate_height_m="0.0508"
+            tag_plate_thickness_m="0.0049"
+            color="#2b2b2b"
+            note="manual A7: base plus 64 mm riser 276-9250-004, 146.5 mm"/>
 
         <TagMount
             instance_id="neutral_goal_1_west_east_tag"
@@ -236,6 +364,17 @@
             y_m="2.381258534"
             heading_deg="0"/>
 
+        <Visual
+            shape="octagonal_prism"
+            height_m="0.0825"
+            base_across_flats_m="0.1425"
+            top_across_flats_m="0.0888"
+            tag_plate_width_m="0.056"
+            tag_plate_height_m="0.0508"
+            tag_plate_thickness_m="0.0049"
+            color="#00a3e0"
+            note="manual A7: base 276-9250-003 alone, 82.5 mm; plate 276-9250-006 on each axis face"/>
+
         <TagMount
             instance_id="blue_goal_2_east_east_tag"
             calibration_status="provisional"
@@ -304,6 +443,17 @@
             x_m="1.783200000"
             y_m="1.783200000"
             heading_deg="0"/>
+
+        <Visual
+            shape="octagonal_prism"
+            height_m="0.2227"
+            base_across_flats_m="0.1425"
+            top_across_flats_m="0.0888"
+            tag_plate_width_m="0.056"
+            tag_plate_height_m="0.0508"
+            tag_plate_thickness_m="0.0049"
+            color="#2b2b2b"
+            note="manual A7: base plus 140.2 mm riser 276-9250-005, 222.7 mm"/>
 
         <TagMount
             instance_id="neutral_goal_0_center_east_tag"
@@ -374,6 +524,17 @@
             y_m="1.185141466"
             heading_deg="0"/>
 
+        <Visual
+            shape="octagonal_prism"
+            height_m="0.0825"
+            base_across_flats_m="0.1425"
+            top_across_flats_m="0.0888"
+            tag_plate_width_m="0.056"
+            tag_plate_height_m="0.0508"
+            tag_plate_thickness_m="0.0049"
+            color="#d50032"
+            note="manual A7: base 276-9250-003 alone, 82.5 mm; plate 276-9250-006 on each axis face"/>
+
         <TagMount
             instance_id="red_goal_2_west_east_tag"
             calibration_status="provisional"
@@ -442,6 +603,17 @@
             x_m="2.979317068"
             y_m="1.185141466"
             heading_deg="0"/>
+
+        <Visual
+            shape="octagonal_prism"
+            height_m="0.1465"
+            base_across_flats_m="0.1425"
+            top_across_flats_m="0.0888"
+            tag_plate_width_m="0.056"
+            tag_plate_height_m="0.0508"
+            tag_plate_thickness_m="0.0049"
+            color="#2b2b2b"
+            note="manual A7: base plus 64 mm riser 276-9250-004, 146.5 mm"/>
 
         <TagMount
             instance_id="neutral_goal_1_east_east_tag"
@@ -512,6 +684,17 @@
             y_m="0.587082932"
             heading_deg="0"/>
 
+        <Visual
+            shape="octagonal_prism"
+            height_m="0.0825"
+            base_across_flats_m="0.1425"
+            top_across_flats_m="0.0888"
+            tag_plate_width_m="0.056"
+            tag_plate_height_m="0.0508"
+            tag_plate_thickness_m="0.0049"
+            color="#d50032"
+            note="manual A7: base 276-9250-003 alone, 82.5 mm; plate 276-9250-006 on each axis face"/>
+
         <TagMount
             instance_id="red_goal_3_south_east_tag"
             calibration_status="provisional"
@@ -580,6 +763,17 @@
             x_m="2.381258534"
             y_m="0.587082932"
             heading_deg="0"/>
+
+        <Visual
+            shape="octagonal_prism"
+            height_m="0.1465"
+            base_across_flats_m="0.1425"
+            top_across_flats_m="0.0888"
+            tag_plate_width_m="0.056"
+            tag_plate_height_m="0.0508"
+            tag_plate_thickness_m="0.0049"
+            color="#2b2b2b"
+            note="manual A7: base plus 64 mm riser 276-9250-004, 146.5 mm"/>
 
         <TagMount
             instance_id="neutral_goal_4_south_east_tag"

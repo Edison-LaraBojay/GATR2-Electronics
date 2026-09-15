@@ -13,23 +13,24 @@
 #include "core/function_status.h"
 #include "core/records.h"
 #include "state/command_state.h"
-#include "state/robot_state.h"
-#include "state/target_state.h"
 #include "state/field_state.h"
+#include "state/robot_state.h"
+#include "state/robot_state_feed.h"
+#include "state/target_state.h"
 
 namespace navigatr
 {
 
 struct PublishingInput {
-    const SensorResultsMap& sensorResults;
-    const ArtifactMap&      artifacts;
-    const ObservationMap&   observations;
-    const AssociationMap&   associations;
-    const RobotState&       robot;
-    const FieldState&       field;
-    const CommandState&     command;
-    const TargetState&      target;
-    MonotonicTime           now;   // host clock
+    const SensorMap&          sensors;
+    const ObservationMap&     observations;
+    const AssociationMap&     associations;
+    const RobotState&         robot;
+    const LocalizationStatus& localization;
+    const FieldState&         field;
+    const CommandState&       command;
+    const TargetState&        target;
+    MonotonicTime             now;   // host clock
 };
 
 struct PublishingOutput {

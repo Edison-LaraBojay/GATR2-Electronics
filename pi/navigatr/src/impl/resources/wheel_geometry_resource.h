@@ -16,7 +16,7 @@
 
 #include "config/config_node.h"
 #include "resources/resource_instance.h"
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 
 namespace navigatr
 {

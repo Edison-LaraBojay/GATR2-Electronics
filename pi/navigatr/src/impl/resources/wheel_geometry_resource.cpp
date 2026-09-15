@@ -4,14 +4,13 @@
 
 #include <memory>
 
-#include "config/calibration.h"
 #include "resources/wheel_geometry.h"
 
 namespace navigatr
 {
 
 ResourceInstance make_wheel_geometry(const ConfigNode&              node,
-                                     ResourceInitializationContext& context,
+                                     ResourceInitializationContext&,
                                      std::string&                   err) {
     auto map = std::make_shared<WheelGeometryMap>();
     bool ok  = true;
@@ -40,10 +39,6 @@ ResourceInstance make_wheel_geometry(const ConfigNode&              node,
                 ok = false;
                 return;
             }
-        }
-        if (!checkCalibration(w, context.allow_provisional, err)) {
-            ok = false;
-            return;
         }
         if (!w.requireDouble("radius_m", decl.radius_m, err) ||
             !w.requireDouble("position_x_m", decl.position_x_m, err) ||

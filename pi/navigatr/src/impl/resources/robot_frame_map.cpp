@@ -5,7 +5,6 @@
 #include <memory>
 #include <vector>
 
-#include "config/calibration.h"
 #include "config/pose3_config.h"
 #include "resources/robot_frames.h"
 
@@ -13,7 +12,7 @@ namespace navigatr
 {
 
 ResourceInstance make_robot_frame_map(const ConfigNode&              node,
-                                      ResourceInitializationContext& context,
+                                      ResourceInitializationContext&,
                                       std::string&                   err) {
     struct Pending {
         FrameId    id;
@@ -48,10 +47,6 @@ ResourceInstance make_robot_frame_map(const ConfigNode&              node,
                 ok  = false;
                 return;
             }
-        }
-        if (!checkCalibration(f, context.allow_provisional, err)) {
-            ok = false;
-            return;
         }
         const ConfigNode pose = f.child("PoseOfChildInParent");
         if (!pose.valid()) {

@@ -30,6 +30,12 @@ reference, and selection prioritizes processing work.
 - [Architecture and scheduling](pi/navigatr/docs/architecture.md)
 - [Coordinates and heading](pi/navigatr/docs/coordinates.md)
 - [Landmark reporting and retention](pi/navigatr/docs/landmarks.md)
+- [Inspection service and browser viewer](pi/navigatr/docs/inspection.md)
+- [Pi camera setup and libcamera build](pi/navigatr/docs/pi_camera_setup.md)
+
+A hardware-free demo (`pi/navigatr/config/demo/`) drives the whole runtime
+from a synthetic rig and serves the field viewer on loopback; the README above
+has the run and SSH port-forward commands.
 
 ## Repository map
 

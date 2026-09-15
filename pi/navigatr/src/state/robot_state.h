@@ -2,7 +2,7 @@
 // The one continuous fused robot estimate, split across two frames:
 //
 //   O = smooth local odometry frame; T_odom_robot is continuous and updated
-//       by localization prediction every cycle
+//       by localization every accepted observation
 //   F = corrected/configured field frame; T_field_odom re-anchors O in F
 //       and changes only on explicit events such as a commanded pose init
 //
@@ -11,32 +11,32 @@
 // Odometry-anchored data (latched targets, exposure-time lookups) lives in
 // O, so a field re-anchor cannot change its physical error relative to the
 // robot. odometry_epoch increments whenever O itself becomes discontinuous
-// (hard reset, device time regression from a Pico reboot); anything latched
-// in O is valid only while the epoch matches.
+// (hard reset, device time regression from a source reboot); anything
+// latched in O is valid only while the epoch matches. anchor_revision
+// increments on every re-anchor, so consumers can tell which T_field_odom
+// a field-frame value was derived under.
 //
-// history holds recent T_odom_robot poses on the host clock, appended by the
-// framework after each cycle's estimate settles, so perception evidence with
-// an exposure timestamp can be evaluated against the pose at exposure.
+// This is the lightweight snapshot. History and timestamped lookups live in
+// PoseHistory behind the RobotStateFeed; localization is their only writer.
+// The planar pose always identifies the configured fixed chassis origin.
 
 #pragma once
 #include <cstdint>
-#include <deque>
 
+#include "math/quaternion.h"
+#include "math/se3.h"
 #include "math/transforms.h"
+#include "state/attitude.h"
 
 namespace navigatr
 {
-
-struct TimedOdomPose {
-    MonotonicTime at;   // host clock
-    Pose2D        T_odom_robot;
-};
 
 struct RobotState {
     Pose2D odom_pose;        // T_odom_robot
     Pose2D field_from_odom;  // T_field_odom, identity until re-anchored
 
-    uint64_t odometry_epoch = 0;
+    uint64_t odometry_epoch  = 0;
+    uint64_t anchor_revision = 0;
 
     double vx_m_s         = 0.0;   // odometry frame
     double vy_m_s         = 0.0;
@@ -44,83 +44,39 @@ struct RobotState {
 
     double confidence  = 0.0;
     bool   valid       = false;   // an estimator has produced a pose
-    bool   initialized = false;   // field anchor was set from a brain command
+    bool   initialized = false;   // field anchor was set from a request
 
-    MonotonicTime measuredAt;   // device clock of the newest folded measurement
-
-    // Host-clock estimate of when odom_pose was physically true, produced
-    // by the estimator's device-to-host clock mapping. Unset when no
-    // mapping exists yet; the framework then falls back to the loop time.
+    // Effective time of odom_pose: the source clock of the newest folded
+    // measurement and, when the estimator has a clock mapping, its host
+    // time. Unset host time means the pose cannot be placed on the host
+    // axis; nothing substitutes the loop time for it.
+    MonotonicTime measuredAt;
     MonotonicTime measuredAtHost;
 
-    std::deque<TimedOdomPose> history;   // host clock, oldest first
+    // Measured tilt (odometry reference, yaw equal to odom_pose.heading)
+    // with its own validity and age; assumed level when no source exists.
+    Attitude attitude;
 
     Pose2D fieldPose() const { return compose(field_from_odom, odom_pose); }
 
-    // T_odom_robot at a host timestamp, interpolated between history
-    // entries. False when there is no history, the timestamp is older than
-    // everything retained, or it lies further past the newest entry than
-    // sensor latency explains: a future timestamp is rejected, not clamped.
-    bool odomPoseAt(MonotonicTime t, Pose2D& out) const {
-        if (history.empty()) {
-            return false;
+    // Full SE(3) body pose in the odometry frame at ground height: yaw from
+    // the planar heading and roll/pitch from the attitude when it is
+    // measured, level otherwise. Height stays zero: vertical position is an
+    // explicit ground-plane assumption, never estimated here.
+    Transform3 T_odom_robot3() const {
+        Transform3 T;
+        if (attitude.valid) {
+            double roll = 0.0, pitch = 0.0, yaw = 0.0;
+            attitudeEuler(attitude, roll, pitch, yaw);
+            T.R = rotationFromEuler(roll, pitch, odom_pose.heading_rad);
+        } else {
+            T.R = rotationFromEuler(0.0, 0.0, odom_pose.heading_rad);
         }
-        if (t <= history.front().at) {
-            if ((history.front().at - t) > kHistoryClampMs) {
-                return false;
-            }
-            out = history.front().T_odom_robot;
-            return true;
-        }
-        if (t >= history.back().at) {
-            if ((t - history.back().at) > kHistoryClampMs) {
-                return false;
-            }
-            out = history.back().T_odom_robot;
-            return true;
-        }
-        for (std::size_t i = 1; i < history.size(); ++i) {
-            if (t <= history[i].at) {
-                const TimedOdomPose& a = history[i - 1];
-                const TimedOdomPose& b = history[i];
-                const double span      = static_cast<double>(b.at - a.at);
-                const double f = span <= 0.0 ? 1.0 : static_cast<double>(t - a.at) / span;
-                out.x_m = a.T_odom_robot.x_m + (b.T_odom_robot.x_m - a.T_odom_robot.x_m) * f;
-                out.y_m = a.T_odom_robot.y_m + (b.T_odom_robot.y_m - a.T_odom_robot.y_m) * f;
-                out.heading_rad = wrapAngle(
-                    a.T_odom_robot.heading_rad +
-                    wrapAngle(b.T_odom_robot.heading_rad - a.T_odom_robot.heading_rad) * f);
-                return true;
-            }
-        }
-        out = history.back().T_odom_robot;
-        return true;
+        T.x_m = odom_pose.x_m;
+        T.y_m = odom_pose.y_m;
+        T.z_m = 0.0;
+        return T;
     }
-
-    // Yaw rate around a host timestamp, from the pair of history entries
-    // bracketing it (nearest pair at the ends). Evidence gated on motion
-    // must use motion at its exposure time, not at processing time.
-    bool yawRateAt(MonotonicTime t, double& rate_rad_s) const {
-        if (history.size() < 2) {
-            return false;
-        }
-        std::size_t hi = 1;
-        while (hi < history.size() - 1 && history[hi].at < t) {
-            ++hi;
-        }
-        const TimedOdomPose& a  = history[hi - 1];
-        const TimedOdomPose& b  = history[hi];
-        const double         dt = secondsBetween(b.at, a.at);
-        if (dt <= 1e-6) {
-            return false;
-        }
-        rate_rad_s =
-            wrapAngle(b.T_odom_robot.heading_rad - a.T_odom_robot.heading_rad) / dt;
-        return true;
-    }
-
-    static constexpr int64_t     kHistoryClampMs   = 50;
-    static constexpr std::size_t kHistoryCapacity  = 512;
 };
 
 } // namespace navigatr

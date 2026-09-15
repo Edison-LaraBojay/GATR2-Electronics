@@ -16,20 +16,22 @@ public:
     }
 };
 
-class NoopPreprocessing : public Preprocessing
+class NoopStateEstimator : public StateEstimator
 {
 public:
-    PreprocessingOutput run(const PreprocessingInput&) override {
-        return PreprocessingOutput{};
+    StateEstimatorOutput run(const StateEstimatorInput& in) override {
+        StateEstimatorOutput out;
+        out.robot  = in.previous;
+        out.status = FunctionStatus::kOk;
+        for (const auto& observation : in.observations) {
+            out.rejected.push_back(observation.first);
+        }
+        return out;
     }
-};
+    const std::string& type() const override { return type_; }
 
-class NoopLocalization : public Localization
-{
-public:
-    LocalizationOutput run(const LocalizationInput& in) override {
-        return LocalizationOutput{in.previous, FunctionStatus::kOk};
-    }
+private:
+    std::string type_ = "noop";
 };
 
 class NoopPerception : public Perception
@@ -75,16 +77,10 @@ std::unique_ptr<Commands> makeNoopCommands(const ConfigNode&, SlotInitialization
     return std::make_unique<NoopCommands>();
 }
 
-std::unique_ptr<Preprocessing> makeNoopPreprocessing(const ConfigNode&,
-                                                     PreprocessorInitializationContext&,
-                                                     std::string&) {
-    return std::make_unique<NoopPreprocessing>();
-}
-
-std::unique_ptr<Localization> makeNoopLocalization(const ConfigNode&,
-                                                   SlotInitializationContext&,
-                                                   std::string&) {
-    return std::make_unique<NoopLocalization>();
+std::unique_ptr<StateEstimator> makeNoopStateEstimator(const ConfigNode&,
+                                                       StateEstimatorInitializationContext&,
+                                                       std::string&) {
+    return std::make_unique<NoopStateEstimator>();
 }
 
 std::unique_ptr<Perception> makeNoopPerception(const ConfigNode&,

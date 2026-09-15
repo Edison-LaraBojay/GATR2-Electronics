@@ -1,19 +1,22 @@
-// resource_value.h
-// Type-erased ownership of one initialized resource with typed retrieval.
-// A resource is stored under the contract it satisfies (SpiBus, SerialLink,
-// PicoTelemetry, ...); asking for the wrong contract or an unknown id fails
-// during initialization, and no caller ever sees a raw void pointer.
+// resource_instance.h
+// Type-erased ownership of one initialized resource with typed retrieval,
+// plus its optional runtime executable. A resource is stored under the
+// contract it satisfies (SpiBus, SerialLink, PicoTelemetry, ...); asking for
+// the wrong contract or an unknown id fails during initialization, and no
+// caller ever sees a raw void pointer.
 //
 // This contract erasure is a separate concept from the immutable payload
 // erasure in TypedPayload.
 
 #pragma once
-#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <typeindex>
 #include <utility>
+
+#include "contracts/resource.h"
 
 namespace navigatr
 {
@@ -54,21 +57,18 @@ public:
 
     const char* contractName() const { return contract_name_; }
 
-    // Optional back-to-power-on hook. Shared resources are reset exactly
-    // once through this, never repeatedly by every consumer that captured
-    // them.
-    void setResetHook(std::function<void()> hook) { reset_hook_ = std::move(hook); }
-    void resetOnce() const {
-        if (reset_hook_) {
-            reset_hook_();
-        }
+    // Runtime half: declared outputs polled every cycle and the once-only
+    // reset. Absent for configuration-only resources.
+    void setExecutable(ResourceExecutable executable) {
+        executable_ = std::move(executable);
     }
+    const std::optional<ResourceExecutable>& executable() const { return executable_; }
 
 private:
-    std::type_index       contract_ = std::type_index(typeid(void));
-    std::shared_ptr<void> object_;
-    const char*           contract_name_ = "none";
-    std::function<void()> reset_hook_;
+    std::type_index                   contract_ = std::type_index(typeid(void));
+    std::shared_ptr<void>             object_;
+    const char*                       contract_name_ = "none";
+    std::optional<ResourceExecutable> executable_;
 };
 
 } // namespace navigatr

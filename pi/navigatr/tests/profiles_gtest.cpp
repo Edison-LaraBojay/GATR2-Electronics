@@ -7,8 +7,11 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <string>
 
 #include "config/composition.h"
@@ -28,6 +31,10 @@ const char* kRobotFragment = R"(
     <Resource id="pico_uart" type="memory_link"/>
     <Resource id="pico_telemetry" type="pico_telemetry">
       <Serial resource_id="pico_uart"/>
+      <Output id="encoder_a" channel="0"/>
+      <Output id="encoder_b" channel="1"/>
+      <Output id="encoder_c" channel="2"/>
+      <Output id="imu" channel="imu"/>
     </Resource>
     <Resource id="wheel_geometry" type="wheel_geometry">
       <Wheel id="forward_wheel" sensor_id="enc_a" calibration_status="verified"
@@ -40,15 +47,15 @@ const char* kRobotFragment = R"(
   </Resources>
   <Sensors>
     <Sensor id="enc_a" type="pico_encoder_channel">
-      <Source resource_id="pico_telemetry" channel="0"/>
+      <Source resource_id="pico_telemetry" output_id="encoder_a"/>
       <Calibration counts_per_revolution="4000"/>
     </Sensor>
     <Sensor id="enc_b" type="pico_encoder_channel">
-      <Source resource_id="pico_telemetry" channel="1"/>
+      <Source resource_id="pico_telemetry" output_id="encoder_b"/>
       <Calibration counts_per_revolution="4000"/>
     </Sensor>
     <Sensor id="imu" type="pico_imu_channel">
-      <Source resource_id="pico_telemetry" channel="imu"/>
+      <Source resource_id="pico_telemetry" output_id="imu"/>
     </Sensor>
   </Sensors>
 </Robot>
@@ -57,18 +64,18 @@ const char* kRobotFragment = R"(
 const char* kPipelineFragment = R"(
 <Pipeline>
   <CommandCollection type="noop"/>
-  <Preprocessing type="configured_collection">
-    <Preprocessor id="motion" type="tracking_wheel_odometry">
+  <Localization>
+    <Observation id="motion" type="tracking_wheel_motion">
       <Wheels resource_id="wheel_geometry">
         <Use wheel_id="forward_wheel"/>
         <Use wheel_id="lateral_wheel"/>
       </Wheels>
       <HeadingConstraint sensor_id="imu" bias_samples="0"/>
-      <Output artifact_id="motion_delta"/>
-    </Preprocessor>
-  </Preprocessing>
-  <Localization type="wheel_imu_prediction">
-    <Motion artifact_id="motion_delta"/>
+      <Output observation_id="motion"/>
+    </Observation>
+    <Estimator type="planar_motion_integrator">
+      <Motion observation_id="motion"/>
+    </Estimator>
   </Localization>
   <FieldEstimation type="noop"/>
   <TargetResolution type="noop"/>
@@ -98,9 +105,14 @@ struct Workspace {
     std::filesystem::path dir;
 
     Workspace() {
-        dir = std::filesystem::temp_directory_path() / "navigatr_profiles_gtest";
-        std::filesystem::remove_all(dir);
-        std::filesystem::create_directories(dir);
+        static std::atomic<uint64_t> sequence{0};
+        std::random_device random;
+        do {
+            const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+            dir = std::filesystem::temp_directory_path() /
+                  ("navigatr_profiles_gtest_" + std::to_string(stamp) + "_" +
+                   std::to_string(random()) + "_" + std::to_string(sequence++));
+        } while (!std::filesystem::create_directory(dir));
         write("robot.xml", kRobotFragment);
         write("pipeline.xml", kPipelineFragment);
         write("field.xml", kFieldFragment);
@@ -109,6 +121,7 @@ struct Workspace {
     ~Workspace() { std::filesystem::remove_all(dir); }
 
     void write(const char* name, const std::string& content) {
+        std::filesystem::create_directories((dir / name).parent_path());
         std::ofstream f(dir / name, std::ios::binary);
         f << content;
     }
@@ -116,7 +129,244 @@ struct Workspace {
     std::string path(const char* name) const { return (dir / name).string(); }
 };
 
+std::string xmlOf(const tinyxml2::XMLElement* element) {
+    tinyxml2::XMLPrinter printer;
+    element->Accept(&printer);
+    return printer.CStr();
+}
+
+// Replace one section with a reference after saving its current subtree.
+void externalize(Workspace& ws, tinyxml2::XMLElement* element,
+                 const char* destination, const char* reference) {
+    ws.write(destination, xmlOf(element));
+    auto* replacement = element->GetDocument()->NewElement(element->Name());
+    replacement->SetAttribute("file", reference);
+    auto* parent = element->Parent();
+    parent->InsertAfterChild(element, replacement);
+    parent->DeleteChild(element);
+}
+
 } // namespace
+
+TEST(Profiles, PlainSystemSectionsAndIndividualEntriesResolveLikeInlineConfiguration) {
+    Workspace ws;
+    tinyxml2::XMLDocument robot;
+    ASSERT_EQ(robot.Parse(kRobotFragment), tinyxml2::XML_SUCCESS);
+    auto* resources = robot.RootElement()->FirstChildElement("Resources");
+    auto* sensors = robot.RootElement()->FirstChildElement("Sensors");
+    ws.write("inline.xml", "<System><Loop rate_hz=\"50\"/>" + xmlOf(resources) +
+             xmlOf(sensors) + kPipelineFragment + "</System>");
+    for (auto* resource = resources->FirstChildElement(); resource != nullptr;) {
+        auto* next = resource->NextSiblingElement();
+        const std::string reference = std::string("devices/") + resource->Attribute("id") + ".xml";
+        const std::string destination = "parts/hardware/" + reference;
+        externalize(ws, resource, destination.c_str(), reference.c_str());
+        resource = next;
+    }
+    for (auto* sensor = sensors->FirstChildElement(); sensor != nullptr;) {
+        auto* next = sensor->NextSiblingElement();
+        const std::string reference = std::string("channels/") + sensor->Attribute("id") + ".xml";
+        const std::string destination = "parts/sensing/" + reference;
+        externalize(ws, sensor, destination.c_str(), reference.c_str());
+        sensor = next;
+    }
+    ws.write("parts/hardware/resources.xml", xmlOf(resources));
+    ws.write("parts/sensing/sensors.xml", xmlOf(sensors));
+    tinyxml2::XMLDocument pipeline;
+    ASSERT_EQ(pipeline.Parse(kPipelineFragment), tinyxml2::XML_SUCCESS);
+    auto* localization = pipeline.RootElement()->FirstChildElement("Localization");
+    externalize(ws, localization->FirstChildElement("Observation"),
+                "parts/localization/models/motion.xml", "models/motion.xml");
+    externalize(ws, localization->FirstChildElement("Estimator"),
+                "parts/localization/estimator.xml", "estimator.xml");
+    externalize(ws, localization, "parts/localization/localization.xml",
+                "localization/localization.xml");
+    ws.write("parts/pipeline.xml", xmlOf(pipeline.RootElement()));
+    ws.write("main.xml", R"(<System><Loop rate_hz="50"/>
+        <Resources file="parts/hardware/resources.xml"/>
+        <Sensors file="parts/sensing/sensors.xml"/>
+        <Pipeline file="parts/pipeline.xml"/></System>)");
+
+    FunctionRegistry functions;
+    registerAll(functions);
+    std::string err;
+    auto inline_system = System::buildFromFile(ws.path("inline.xml"), functions, err);
+    ASSERT_NE(inline_system, nullptr) << err;
+    auto modular = System::buildFromFile(ws.path("main.xml"), functions, err);
+    ASSERT_NE(modular, nullptr) << err;
+    EXPECT_EQ(modular->configurationId(), ws.path("main.xml"));
+    EXPECT_EQ(modular->loopRateHz(), inline_system->loopRateHz());
+    for (const char* id : {"enc_a", "enc_b", "imu"}) {
+        ASSERT_NE(modular->sensorCatalog().payloadOf(SensorId{id}), nullptr);
+    }
+    EXPECT_NE(modular->resources().findValue(ResourceId{"pico_telemetry"}), nullptr);
+    EXPECT_EQ(modular->localization().estimatorType(), inline_system->localization().estimatorType());
+    EXPECT_EQ(modular->localization().observationOutputs().size(),
+              inline_system->localization().observationOutputs().size());
+    modular->step(hostTime(10));
+    inline_system->step(hostTime(10));
+    EXPECT_EQ(modular->robot().valid, inline_system->robot().valid);
+    EXPECT_EQ(modular->sensorMap().size(), inline_system->sensorMap().size());
+    ResolvedConfiguration resolved;
+    ASSERT_TRUE(resolveConfiguration(ws.path("main.xml"), resolved, err)) << err;
+    EXPECT_EQ(resolved.files.size(), 13u);
+    EXPECT_EQ(resolved.xml.find("file="), std::string::npos);
+    EXPECT_EQ(modular->configurationDigest(), resolved.digest);
+
+    const auto old_digest = resolved.digest;
+    ws.write("parts/localization/models/motion.xml",
+             [&] { tinyxml2::XMLDocument doc; doc.Parse(kPipelineFragment);
+                   return xmlOf(doc.RootElement()->FirstChildElement("Localization")
+                                    ->FirstChildElement("Observation")) + "<!-- changed -->"; }());
+    ASSERT_TRUE(resolveConfiguration(ws.path("main.xml"), resolved, err)) << err;
+    EXPECT_NE(resolved.digest, old_digest); // deepest dependency participates
+}
+
+TEST(Profiles, NestedStagePipelinesAndAbsoluteReferencesResolve) {
+    Workspace ws;
+    ws.write("stage/field.xml", R"(<FieldEstimation type="landmark_field">
+        <FieldMap resource_id="test_field"/><Pipeline file="inner/pipeline.xml"/>
+        </FieldEstimation>)");
+    ws.write("stage/inner/pipeline.xml", R"(<Pipeline>
+        <ObservationExtraction file="observation.xml"/>
+        <Association file="association.xml"/><Estimator file="estimator.xml"/>
+        </Pipeline>)");
+    ws.write("stage/inner/observation.xml", R"(<ObservationExtraction type="noop"/>)");
+    ws.write("stage/inner/association.xml", R"(<Association type="noop"/>)");
+    ws.write("stage/inner/estimator.xml", R"(<Estimator type="landmark_estimator" commit="never"/>)");
+    tinyxml2::XMLDocument main;
+    ASSERT_EQ(main.Parse(R"(<System><Resources><Resource file="field.xml"/></Resources>
+        <Sensors/><Pipeline><CommandCollection type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
+        <FieldEstimation/><TargetResolution type="noop"/><Publishing type="noop"/>
+        </Pipeline></System>)"), tinyxml2::XML_SUCCESS);
+    main.RootElement()->FirstChildElement("Pipeline")->FirstChildElement("FieldEstimation")
+        ->SetAttribute("file", ws.path("stage/field.xml").c_str());
+    ws.write("nested.xml", xmlOf(main.RootElement()));
+    std::string err;
+    ResolvedConfiguration resolved;
+    ASSERT_TRUE(resolveConfiguration(ws.path("nested.xml"), resolved, err)) << err;
+    EXPECT_EQ(resolved.files.size(), 7u);
+    tinyxml2::XMLDocument expanded;
+    ASSERT_EQ(expanded.Parse(resolved.xml.c_str()), tinyxml2::XML_SUCCESS);
+    const auto* field = expanded.RootElement()->FirstChildElement("Pipeline")
+                           ->FirstChildElement("FieldEstimation");
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field->Attribute("type"), "landmark_field");
+    EXPECT_STREQ(field->FirstChildElement("Pipeline")->FirstChildElement("Estimator")
+                     ->Attribute("commit"), "never");
+    FunctionRegistry functions;
+    registerAll(functions);
+    EXPECT_NE(System::buildFromFile(ws.path("nested.xml"), functions, err), nullptr) << err;
+}
+
+TEST(Profiles, ExistingConfigurationFragmentsCanRecursivelyReferenceSections) {
+    Workspace ws;
+    tinyxml2::XMLDocument robot;
+    ASSERT_EQ(robot.Parse(kRobotFragment), tinyxml2::XML_SUCCESS);
+    externalize(ws, robot.RootElement()->FirstChildElement("Resources"),
+                "hardware/resources.xml", "hardware/resources.xml");
+    externalize(ws, robot.RootElement()->FirstChildElement("Sensors"),
+                "hardware/sensors.xml", "hardware/sensors.xml");
+    ws.write("robot.xml", xmlOf(robot.RootElement()));
+    ws.write("pipeline.xml", R"(<Pipeline file="pipeline/actual.xml"/>)");
+    ws.write("pipeline/actual.xml", kPipelineFragment);
+    FunctionRegistry functions;
+    registerAll(functions);
+    std::string err;
+    const auto system = System::buildFromFile(ws.path("profile.xml"), functions, err);
+    ASSERT_NE(system, nullptr) << err;
+    EXPECT_EQ(system->configurationId(), "test_profile");
+    EXPECT_NE(system->sensorCatalog().payloadOf(SensorId{"imu"}), nullptr);
+}
+
+TEST(Profiles, RecursiveReferenceFailuresAreExplicitAndAtomic) {
+    Workspace ws;
+    ws.write("resources.xml", "<Resources/>");
+    const std::pair<const char*, const char*> conflicts[] = {
+        {R"(<Resources file="resources.xml" id="override"/>)", "cannot also specify id"},
+        {R"(<Resources file="resources.xml" type="override"/>)", "cannot also specify type"},
+        {R"(<Resources file="resources.xml"><Resource id="r" type="memory_link"/></Resources>)", "inline content"},
+        {R"(<Resources file="resources.xml">unexpected text</Resources>)", "inline content"},
+        {R"(<Resources file=""/>)", "nonempty file"},
+        {R"(<Resources file="missing.xml"/>)", "missing.xml"},
+        {R"(<Resources file="pipeline.xml"/>)", "must be Resources"},
+    };
+    ResolvedConfiguration resolved;
+    std::string err;
+    for (const auto& conflict : conflicts) {
+        ws.write("invalid.xml", std::string("<System>") + conflict.first + "</System>");
+        resolved.xml = "old result";
+        resolved.digest = 42;
+        EXPECT_FALSE(resolveConfiguration(ws.path("invalid.xml"), resolved, err)) << conflict.first;
+        EXPECT_NE(err.find(conflict.second), std::string::npos) << err;
+        EXPECT_NE(err.find("include chain"), std::string::npos) << err;
+        EXPECT_TRUE(resolved.xml.empty());
+        EXPECT_EQ(resolved.digest, 0u);
+    }
+    ws.write("main.xml", R"(<System><Resources file="cycle/a.xml"/></System>)");
+    ws.write("cycle/a.xml", R"(<Resources file="b.xml"/>)");
+    ws.write("cycle/b.xml", R"(<Resources file="../cycle/./a.xml"/>)");
+    EXPECT_FALSE(resolveConfiguration(ws.path("main.xml"), resolved, err));
+    EXPECT_NE(err.find("cyclic include"), std::string::npos) << err;
+    EXPECT_NE(err.find("a.xml"), std::string::npos);
+    EXPECT_NE(err.find("b.xml"), std::string::npos);
+}
+
+TEST(Profiles, ImplementationFileAttributesAndHumanAnnotationsAreNotIncludesOrGates) {
+    Workspace ws;
+    ws.write("resources.xml", R"(<Resources calibration_status="@UNMEASURED@">
+        <Resource id="device" type="implementation_owned">
+            <Device file="not-an-xml-document.raw"/>
+            <Options><Pipeline file="also-implementation-owned.raw"/></Options>
+        </Resource></Resources>)");
+    ws.write("main.xml", R"(<System>
+        <Resources file="resources.xml" calibration_status="@READER_NOTE@">
+            <!-- comments on references are fine -->
+        </Resources><Sensors/><Pipeline><Localization><Estimator type="noop"/>
+        </Localization></Pipeline></System>)");
+    ResolvedConfiguration resolved;
+    std::string err;
+    ASSERT_TRUE(resolveConfiguration(ws.path("main.xml"), resolved, err)) << err;
+    EXPECT_EQ(resolved.files.size(), 2u);
+    EXPECT_NE(resolved.xml.find("not-an-xml-document.raw"), std::string::npos);
+    EXPECT_NE(resolved.xml.find("also-implementation-owned.raw"), std::string::npos);
+    EXPECT_NE(resolved.xml.find("@UNMEASURED@"), std::string::npos);
+    ws.write("resources.xml", R"(<Resources><Resource id="w" type="wheel_geometry">
+        <Wheel radius_m="@REAL_VALUE_REQUIRED@"/></Resource></Resources>)");
+    EXPECT_FALSE(resolveConfiguration(ws.path("main.xml"), resolved, err));
+    EXPECT_NE(err.find("radius_m"), std::string::npos);
+}
+
+TEST(Profiles, StringConstructionRejectsUnresolvedSectionReferencesWithoutReadingFiles) {
+    FunctionRegistry functions;
+    registerAll(functions);
+    std::string err;
+    const char* unresolved[] = {
+        R"(<System file="unknown.xml"/>)",
+        R"(<System><Resources file="unknown.xml"/></System>)",
+        R"(<System><Resources><Resource file="unknown.xml"/></Resources></System>)",
+        R"(<System><Sensors><Sensor file="unknown.xml"/></Sensors></System>)",
+        R"(<System><Pipeline file="unknown.xml"/></System>)",
+        R"(<System><Pipeline><Localization file="unknown.xml"/></Pipeline></System>)",
+        R"(<System><Pipeline><Localization><Observation file="unknown.xml"/></Localization></Pipeline></System>)",
+        R"(<System><Pipeline><FieldEstimation type="landmark_field"><Pipeline>
+            <Association file="unknown.xml"/></Pipeline></FieldEstimation></Pipeline></System>)",
+    };
+    for (const char* xml : unresolved) {
+        EXPECT_EQ(System::buildFromString(xml, functions, err), nullptr);
+        EXPECT_NE(err.find("unresolved XML file reference"), std::string::npos) << err;
+        EXPECT_NE(err.find("System::buildFromFile"), std::string::npos) << err;
+    }
+    EXPECT_NE(System::buildFromString(R"(<System><Resources>
+        <Resource id="memory" type="memory_link" calibration_status="@HUMAN_NOTE@">
+            <Device file="implementation-owned.raw"/>
+            <Options><Pipeline file="also-not-an-include.raw"/></Options>
+        </Resource></Resources><Sensors/><Pipeline><CommandCollection type="noop"/>
+        <Localization><Estimator type="noop"/></Localization><FieldEstimation type="noop"/>
+        <TargetResolution type="noop"/><Publishing type="noop"/></Pipeline></System>)",
+        functions, err), nullptr) << err;
+}
 
 TEST(Profiles, ComposedProfileResolvesBuildsAndCarriesIdentity) {
     Workspace        ws;
@@ -234,6 +484,10 @@ TEST(Profiles, WheelGeometryReferenceFormMatchesInlineAndValidates) {
     <Resource id="pico_uart" type="memory_link"/>
     <Resource id="pico_telemetry" type="pico_telemetry">
       <Serial resource_id="pico_uart"/>
+      <Output id="encoder_a" channel="0"/>
+      <Output id="encoder_b" channel="1"/>
+      <Output id="encoder_c" channel="2"/>
+      <Output id="imu" channel="imu"/>
     </Resource>
     <Resource id="wheel_geometry" type="wheel_geometry">
       <Wheel id="forward_wheel" sensor_id="enc_a" calibration_status="verified"
@@ -243,21 +497,21 @@ TEST(Profiles, WheelGeometryReferenceFormMatchesInlineAndValidates) {
   </Resources>
   <Sensors>
     <Sensor id="enc_a" type="pico_encoder_channel">
-      <Source resource_id="pico_telemetry" channel="0"/>
+      <Source resource_id="pico_telemetry" output_id="encoder_a"/>
       <Calibration counts_per_revolution="4000"/>
     </Sensor>
   </Sensors>
   <Pipeline>
     <CommandCollection type="noop"/>
-    <Preprocessing type="configured_collection">
-      <Preprocessor id="motion" type="tracking_wheel_odometry">
+    <Localization>
+      <Observation id="motion" type="tracking_wheel_motion">
         <Wheels resource_id="wheel_geometry">
           <Use wheel_id="phantom_wheel"/>
         </Wheels>
-        <Output artifact_id="motion_delta"/>
-      </Preprocessor>
-    </Preprocessing>
-    <Localization type="noop"/>
+        <Output observation_id="motion"/>
+      </Observation>
+      <Estimator type="noop"/>
+    </Localization>
     <FieldEstimation type="noop"/>
     <TargetResolution type="noop"/>
     <Publishing type="noop"/>
@@ -266,7 +520,7 @@ TEST(Profiles, WheelGeometryReferenceFormMatchesInlineAndValidates) {
     EXPECT_EQ(System::buildFromString(bad_use, functions, err), nullptr);
     EXPECT_NE(err.find("phantom_wheel"), std::string::npos);
 
-    // an unmeasured wheel cannot exist without the bench escape hatch
+    // A calibration label is an annotation; valid configured geometry runs.
     const char* provisional = R"(
 <System>
   <Resources>
@@ -278,19 +532,13 @@ TEST(Profiles, WheelGeometryReferenceFormMatchesInlineAndValidates) {
   </Resources>
   <Pipeline>
     <CommandCollection type="noop"/>
-    <Preprocessing type="noop"/>
-    <Localization type="noop"/>
+    <Localization><Estimator type="noop"/></Localization>
     <FieldEstimation type="noop"/>
     <TargetResolution type="noop"/>
     <Publishing type="noop"/>
   </Pipeline>
 </System>)";
-    EXPECT_EQ(System::buildFromString(provisional, functions, err), nullptr);
-    EXPECT_NE(err.find("provisional"), std::string::npos);
-
-    BuildOptions bench;
-    bench.allow_provisional = true;
-    EXPECT_NE(System::buildFromString(provisional, functions, err, bench), nullptr)
+    EXPECT_NE(System::buildFromString(provisional, functions, err), nullptr)
         << err;
 }
 
@@ -324,7 +572,7 @@ TEST(Profiles, CheckedInTreeStaysHonest) {
     ASSERT_EQ(field_doc.LoadFile((config_dir + "/override/field.xml").c_str()),
               tinyxml2::XML_SUCCESS);
     FieldMap map;
-    ASSERT_TRUE(parseFieldMap(ConfigNode{field_doc.RootElement()}, true, map, err))
+    ASSERT_TRUE(parseFieldMap(ConfigNode{field_doc.RootElement()}, map, err))
         << err;
     EXPECT_EQ(map.landmarks.size(), 9u);
     std::size_t mounts = 0;

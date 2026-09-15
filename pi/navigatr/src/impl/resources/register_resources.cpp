@@ -5,10 +5,11 @@
 #include "impl/resources/pico_telemetry.h"
 #include "impl/resources/robot_frame_map.h"
 #include "impl/resources/serial_links.h"
+#include "impl/resources/synthetic_rig.h"
 #include "impl/resources/tag_detectors.h"
 #include "impl/resources/target_set_resource.h"
 #include "impl/resources/wheel_geometry_resource.h"
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 #include "runtime/register_all.h"
 
 namespace navigatr
@@ -31,6 +32,7 @@ void register_resources(FunctionRegistry& functions) {
     registerOrDie<ResourceMakeFunction>(functions, "target_set", &make_target_set);
     registerOrDie<ResourceMakeFunction>(functions, "wheel_geometry",
                                         &make_wheel_geometry);
+    registerOrDie<ResourceMakeFunction>(functions, "synthetic_rig", &make_synthetic_rig);
 }
 
 } // namespace navigatr

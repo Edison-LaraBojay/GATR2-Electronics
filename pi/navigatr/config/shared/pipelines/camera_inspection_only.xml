@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Camera-only inspection: the AprilTag detector runs on every frame of
+     front_camera and nothing else moves. Localization is the noop
+     estimator with no observations, association is the noop, and the
+     landmark estimator never commits, so the field stays at its nominal
+     definition and every decoded tag shows in the viewer's detection
+     frames, as a 2D decode or as a metric pose when the camera is
+     calibrated. The noop association is deliberate: tag_mount_association
+     needs the camera's mounting frame, which an uncalibrated camera does
+     not have, and would fault instead of publishing. Runs with any robot
+     that publishes the front_camera sensor and the tag_detector resource:
+     gatr2_front_camera_uncalibrated.xml on the Pi, synthetic_rig.xml on a
+     bench. -->
+<Pipeline>
+
+    <CommandCollection type="noop"/>
+
+    <Localization>
+        <Estimator type="noop"/>
+    </Localization>
+
+    <FieldEstimation type="landmark_field">
+        <FieldMap resource_id="override_field"/>
+        <Pipeline>
+            <ObservationExtraction type="apriltag_tag_observation">
+                <Camera sensor_id="front_camera"/>
+                <Detector resource_id="tag_detector"/>
+                <Output observation_id="tag_observations"/>
+            </ObservationExtraction>
+            <Association type="noop"/>
+            <Estimator type="landmark_estimator" commit="never"/>
+        </Pipeline>
+    </FieldEstimation>
+
+    <TargetResolution type="noop"/>
+
+    <Publishing type="noop"/>
+
+</Pipeline>

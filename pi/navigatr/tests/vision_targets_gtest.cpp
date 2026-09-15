@@ -17,8 +17,11 @@
 #include <vector>
 
 #include "config/field_map.h"
+#include "impl/resources/cameras.h"
 #include "math/angles.h"
 #include "math/se3.h"
+#include "payloads/field_object_evidence.h"
+#include "payloads/tag_observations.h"
 #include "resources/camera.h"
 #include "resources/tag_detector.h"
 #include "resources/target_set.h"
@@ -49,11 +52,11 @@ public:
     }
 
     bool alive() const override { return true; }
-    const CameraIntrinsics& intrinsics() const override { return intrinsics_; }
-    FrameId engineeringFrame() const override {
+    const CameraIntrinsics* intrinsics() const override { return &intrinsics_; }
+    FrameId     engineeringFrame() const override {
         return FrameId{"front_camera_engineering"};
     }
-    std::optional<CameraFrameData> latestFrame(uint32_t after) override {
+    std::optional<CameraFrameData> latestFrame(uint64_t, uint32_t after) override {
         if (script_->pending.has_value() && script_->pending->sequence > after) {
             return script_->pending;
         }
@@ -71,7 +74,7 @@ class ScriptedDetector : public TagDetector
 {
 public:
     ScriptedDetector(std::shared_ptr<DetectionScript> script) : script_(std::move(script)) {}
-    bool detect(const CameraFrameData& frame, const CameraIntrinsics&,
+    bool detect(const CameraFrameData& frame, const CameraIntrinsics*,
                 std::vector<NativeTagDetection>& out, std::string&) override {
         const auto it = script_->find(frame.sequence);
         out           = it == script_->end() ? std::vector<NativeTagDetection>{}
@@ -100,24 +103,38 @@ struct RobotScript {
     uint64_t epoch    = 0;
     double   yaw_rate = 0.0;
     bool     valid    = true;
+    Pose2D   field_from_odom;
+    uint64_t anchor_revision = 0;
+    Attitude attitude;
 };
 
-class ScriptedLocalization : public Localization
+// Scripted estimator: the pose is whatever the test says, stamped at the
+// loop time on the host clock so history appends every cycle.
+class ScriptedLocalization : public StateEstimator
 {
 public:
     ScriptedLocalization(std::shared_ptr<RobotScript> script) : script_(std::move(script)) {}
-    LocalizationOutput run(const LocalizationInput& in) override {
-        LocalizationOutput out;
-        out.robot                 = in.previous;
-        out.robot.odom_pose       = script_->odom;
-        out.robot.odometry_epoch  = script_->epoch;
-        out.robot.yaw_rate_rad_s  = script_->yaw_rate;
-        out.robot.valid           = script_->valid;
+    StateEstimatorOutput run(const StateEstimatorInput& in) override {
+        StateEstimatorOutput out;
+        out.robot                = in.previous;
+        out.robot.odom_pose      = script_->odom;
+        out.robot.odometry_epoch = script_->epoch;
+        out.robot.yaw_rate_rad_s = script_->yaw_rate;
+        out.robot.valid          = script_->valid;
+        out.robot.field_from_odom = script_->field_from_odom;
+        out.robot.anchor_revision = script_->anchor_revision;
+        out.robot.attitude       = script_->attitude;
+        out.robot.measuredAt     = in.context.now;
+        out.robot.measuredAtHost = in.context.now;
+        out.advanced             = true;
+        out.clock_mapped         = true;
         return out;
     }
+    const std::string& type() const override { return type_; }
 
 private:
     std::shared_ptr<RobotScript> script_;
+    std::string                  type_ = "scripted_localization";
 };
 
 std::string configXml(double camera_yaw_deg, double ambiguity_margin_m) {
@@ -270,13 +287,12 @@ std::string configXml(double camera_yaw_deg, double ambiguity_margin_m) {
   </Resources>
   <Sensors>
     <Sensor id="front_camera" type="camera_frame">
-      <Source resource_id="camera_device"/>
+      <Source resource_id="camera_device" output_id="frame"/>
     </Sensor>
   </Sensors>
   <Pipeline>
     <CommandCollection type="scripted_commands"/>
-    <Preprocessing type="noop"/>
-    <Localization type="scripted_localization"/>
+    <Localization><Estimator type="scripted_localization"/></Localization>
     <FieldEstimation type="landmark_field">
       <FieldMap resource_id="game_field"/>
       <Pipeline>
@@ -293,6 +309,7 @@ std::string configXml(double camera_yaw_deg, double ambiguity_margin_m) {
                  max_range_m="3.0" min_decision_margin="20"
                  min_projected_size_px="4"/>
           <Output association_id="landmark_pose_observations"/>
+          <Trace association_id="association_trace"/>
         </Association>
         <Estimator type="landmark_estimator" commit="always"/>
       </Pipeline>
@@ -329,8 +346,8 @@ struct Fixture {
                       ResourceMakeFunction([cam](const ConfigNode&,
                                                  ResourceInitializationContext&,
                                                  std::string&) {
-                          return ResourceInstance::asContract<CameraDevice>(
-                              std::make_shared<ScriptedCamera>(cam));
+                          return cameraResource(std::make_shared<ScriptedCamera>(cam),
+                                                OutputId{"frame"});
                       }));
         auto det = detections;
         functions.add(FunctionKey{"scripted_detector"},
@@ -349,9 +366,9 @@ struct Fixture {
                       }));
         auto rob = robot;
         functions.add(FunctionKey{"scripted_localization"},
-                      LocalizationMakeFunction([rob](const ConfigNode&,
-                                                     SlotInitializationContext&,
-                                                     std::string&) {
+                      StateEstimatorMakeFunction([rob](const ConfigNode&,
+                                                       StateEstimatorInitializationContext&,
+                                                       std::string&) {
                           return std::make_unique<ScriptedLocalization>(rob);
                       }));
 
@@ -376,10 +393,16 @@ struct Fixture {
     NativeTagDetection detectionFor(const Pose2D& landmark_field,
                                     const Transform3& T_landmark_surface,
                                     int observed_id) const {
-        const Transform3 T_odom_surface =
-            compose(transform3FromPlanar(landmark_field), T_landmark_surface);
-        const Transform3 T_odom_camera =
-            compose(transform3FromPlanar(robot->odom), cameraExtrinsic());
+        const Transform3 T_odom_surface = compose(
+            inverse(transform3FromPlanar(robot->field_from_odom)),
+            compose(transform3FromPlanar(landmark_field), T_landmark_surface));
+        Transform3 body = transform3FromPlanar(robot->odom);
+        if (robot->attitude.valid) {
+            double roll = 0, pitch = 0, yaw = 0;
+            attitudeEuler(robot->attitude, roll, pitch, yaw);
+            body.R = rotationFromEuler(roll, pitch, robot->odom.heading_rad);
+        }
+        const Transform3 T_odom_camera = compose(body, cameraExtrinsic());
         const Transform3 T_ce_s = compose(inverse(T_odom_camera), T_odom_surface);
 
         Transform3 T_ce_cd;
@@ -388,6 +411,7 @@ struct Fixture {
         T_sd_s.R = rotationCanonicalTagFromNative();
 
         NativeTagDetection d;
+        d.has_pose            = true;
         d.family              = "tag36h11";
         d.observed_id         = observed_id;
         d.decision_margin     = 60.0;
@@ -459,6 +483,79 @@ TEST(VisionTargets, AcquireOnceLocksLatchSurvivesFrameLossAndMotion) {
     EXPECT_EQ(after.y_m, latched.y_m);
     EXPECT_EQ(after.heading_rad, latched.heading_rad);
     EXPECT_EQ(f.system->target().status, TargetStatus::kLockedVision);
+}
+
+TEST(VisionTargets, UnreliableExposureKeepsDetectionsButRejectsFieldEvidence) {
+    Fixture f;
+    f.robot->odom = Pose2D{0.9, 1.7832, 0};
+    f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
+    f.camera->pending->exposure_time_reliable = false;
+    f.stepOnce();
+    const auto snapshot = f.system->fieldSnapshot();
+    ASSERT_NE(snapshot, nullptr);
+    const auto observed = snapshot->observations.find(ObservationId{"tag_observations"});
+    ASSERT_NE(observed, snapshot->observations.end());
+    const auto* tags = observed->second.payload.get<TagObservationSet>();
+    ASSERT_NE(tags, nullptr);
+    ASSERT_EQ(tags->tags.size(), 1u); // preview/detection remains available
+    EXPECT_FALSE(tags->exposure_time_reliable);
+    EXPECT_EQ(snapshot->associations.count(AssociationId{"landmark_pose_observations"}), 0u);
+    EXPECT_FALSE(f.system->field().objects.at(FieldObjectId{"center_goal"}).observed);
+    const auto trace_record = snapshot->associations.find(AssociationId{"association_trace"});
+    ASSERT_NE(trace_record, snapshot->associations.end());
+    const auto* trace = trace_record->second.payload.get<TagAssociationTraceSet>();
+    ASSERT_NE(trace, nullptr);
+    EXPECT_NE(trace->frame_note.find("exposure"), std::string::npos);
+    EXPECT_FALSE(trace->frame_note.empty());
+}
+
+TEST(VisionTargets, DelayedAssociationTraceRetainsExactCapturePoseTiltAndAnchor) {
+    Fixture f(7.0);
+    f.robot->odom = Pose2D{0.9, 1.7832, 0};
+    f.robot->field_from_odom = Pose2D{0.1, -0.05, 0.1};
+    f.robot->anchor_revision = 7;
+    f.robot->attitude.valid = true;
+    f.robot->attitude.q_reference_body = quaternionFromEuler(0.1, 0.05, 0);
+    f.robot->attitude.measuredAt = hostTime(10);
+    f.robot->attitude.source = "scripted_attitude";
+    f.stepOnce(); // state and tilt at exposure time
+    f.pushFrame({f.detectionFor(kCenterGoal, kCenterMount, 0)});
+    f.camera->pending->exposureAt = hostTime(10);
+    f.robot->odom = Pose2D{0.92, 1.7832, 0.1};
+    f.robot->attitude.q_reference_body = quaternionFromEuler(0.2, 0.03, 0.1);
+    f.robot->attitude.measuredAt = hostTime(20);
+    f.stepOnce(); // detection arrives after the robot has moved and rocked
+    const auto snapshot = f.system->fieldSnapshot();
+    const auto trace_record = snapshot->associations.find(AssociationId{"association_trace"});
+    ASSERT_NE(trace_record, snapshot->associations.end());
+    const auto* trace = trace_record->second.payload.get<TagAssociationTraceSet>();
+    ASSERT_NE(trace, nullptr);
+    ASSERT_TRUE(trace->has_exposure_context);
+    ASSERT_EQ(trace->exposure_context.pose.status, LookupStatus::kOk);
+    ASSERT_EQ(trace->exposure_context.attitude.status, LookupStatus::kOk);
+    EXPECT_EQ(trace->exposureAt.ms, 10);
+    EXPECT_EQ(trace->anchor_revision, 7u);
+    EXPECT_DOUBLE_EQ(trace->field_from_odom.x_m, 0.1);
+    EXPECT_DOUBLE_EQ(trace->field_from_odom.y_m, -0.05);
+    EXPECT_DOUBLE_EQ(trace->field_from_odom.heading_rad, 0.1);
+    EXPECT_DOUBLE_EQ(trace->exposure_context.pose.odom_pose.x_m, 0.9);
+    EXPECT_DOUBLE_EQ(trace->exposure_context.pose.odom_pose.heading_rad, 0.0);
+    double roll = 0, pitch = 0, yaw = 0;
+    attitudeEuler(trace->exposure_context.attitude.attitude, roll, pitch, yaw);
+    EXPECT_NEAR(roll, 0.1, 1e-9);
+    EXPECT_NEAR(pitch, 0.05, 1e-9);
+    ASSERT_EQ(trace->tags.size(), 1u);
+    EXPECT_TRUE(trace->tags.front().accepted) << trace->tags.front().rejection;
+    const auto& goal = f.system->field().objects.at(FieldObjectId{"center_goal"});
+    ASSERT_TRUE(goal.observed);
+    EXPECT_NEAR(goal.pose.pose.x_m, kCenterGoal.x_m, 1e-9);
+    EXPECT_NEAR(goal.pose.pose.y_m, kCenterGoal.y_m, 1e-9);
+
+    f.robot->anchor_revision = 8;
+    f.robot->field_from_odom = Pose2D{0.2, 0, 0};
+    f.stepOnce();
+    EXPECT_EQ(trace->anchor_revision, 7u); // retained trace does not query newer state
+    EXPECT_DOUBLE_EQ(trace->exposure_context.pose.odom_pose.x_m, 0.9);
 }
 
 TEST(VisionTargets, SevenDegreeCameraYawMatchesStraightCamera) {

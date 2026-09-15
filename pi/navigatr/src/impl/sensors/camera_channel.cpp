@@ -6,8 +6,7 @@
 
 #include "core/payload_descriptor.h"
 #include "payloads/camera_frames.h"
-#include "resources/camera.h"
-#include "resources/resource_map.h"
+#include "runtime/resource_catalog.h"
 
 namespace navigatr
 {
@@ -15,64 +14,72 @@ namespace navigatr
 std::optional<SensorExecutable> make_camera_frame(const ConfigNode&            node,
                                                   SensorInitializationContext& context,
                                                   std::string&                 err) {
-    const ResourceId device_id{node.child("Source").attr("resource_id")};
-    if (device_id.empty()) {
-        err = node.path() + ": needs <Source resource_id=.../>";
+    const ConfigNode source = node.child("Source");
+    const ResourceId resource{source.attr("resource_id")};
+    const OutputId   output{source.attr("output_id")};
+    if (resource.empty() || output.empty()) {
+        err = node.path() + ": needs <Source resource_id=... output_id=.../>";
         return std::nullopt;
     }
-    if (context.resources == nullptr) {
-        err = node.path() + ": no resources available";
-        return std::nullopt;
-    }
-    std::string inner;
-    std::shared_ptr<CameraDevice> device =
-        context.resources->require<CameraDevice>(device_id, inner);
-    if (device == nullptr) {
-        err = node.path() + ": " + inner;
+    if (context.outputs == nullptr) {
+        err = node.path() + ": no resource outputs available";
         return std::nullopt;
     }
 
     struct State {
-        uint32_t last_sequence  = 0;
-        bool     published_once = false;
+        TypedOutputBinding<CameraFramePayload> binding;
+        uint64_t                               last_sequence = 0;
+        uint64_t                               last_epoch    = 0;
+        bool                                   forwarded     = false;
     };
     auto state = std::make_shared<State>();
-    const FrameId engineering_frame = device->engineeringFrame();
-    auto intrinsics = std::make_shared<const CameraIntrinsics>(device->intrinsics());
+    if (!context.outputs->bind<CameraFramePayload>(resource, output, node.path(),
+                                                   state->binding, err)) {
+        return std::nullopt;
+    }
 
     SensorExecutable executable;
     executable.outputPayload =
         PayloadDescriptor::of<CameraFramePayload>(payload_names::kCameraFrame);
-    executable.execute = [device, state, engineering_frame,
-                          intrinsics](const SensorExecutionInput&) {
-        SensorPollResult result;
-        std::optional<CameraFrameData> frame =
-            device->latestFrame(state->published_once ? state->last_sequence : 0);
-        if (frame.has_value()) {
-            state->last_sequence  = frame->sequence;
-            state->published_once = true;
-            CameraFramePayload payload;
-            payload.frame             = std::move(*frame);
-            payload.engineering_frame = engineering_frame;
-            payload.intrinsics        = intrinsics;
-            SensorPublication publication;
-            publication.measuredAt = payload.frame.exposureAt;
-            publication.payload =
-                TypedPayload::store(std::move(payload), payload_names::kCameraFrame);
-            result.state       = SensorState::kValid;
-            result.publication = std::move(publication);
+    executable.execute = [state](const ResourceMap& resources, const ExecutionContext&) {
+        PollResult               result;
+        const MeasurementRecord* record = state->binding.record(resources);
+        if (record == nullptr) {
+            result.state      = SourceState::kFault;
+            result.diagnostic = "bound resource output is missing";
             return result;
         }
-        if (!device->alive()) {
-            result.state      = SensorState::kUnavailable;
-            result.diagnostic = "camera device is dead";
+        if (record->latest.has_value() &&
+            (!state->forwarded || record->latest->sequence != state->last_sequence ||
+             record->latest->epoch != state->last_epoch)) {
+            // a frame is forwarded once with its original receipt and
+            // identity; the same retained frame is never republished as
+            // new evidence
+            const StoredSample& stored = *record->latest;
+            state->forwarded           = true;
+            state->last_sequence       = stored.sequence;
+            state->last_epoch          = stored.epoch;
+            result.state               = SourceState::kValid;
+            Publication p;
+            p.measuredAt        = stored.measuredAt;
+            p.receivedAt        = stored.receivedAt;
+            p.upstream.source   = state->binding.resource.value + "." + state->binding.output.value;
+            p.upstream.clock    = stored.upstream.clock;
+            p.upstream.sequence = stored.sequence;
+            p.upstream.epoch    = stored.epoch + stored.upstream.epoch;
+            p.payload           = stored.payload;
+            result.publication  = std::move(p);
             return result;
         }
-        result.state = state->published_once ? SensorState::kValid
-                                             : SensorState::kNoDataYet;
+        result.state      = record->state;
+        result.diagnostic = record->diagnostic;
         return result;
     };
-    executable.reset = [state]() { *state = State{}; };
+    executable.reset = [state] {
+        state->forwarded     = false;
+        state->last_sequence = 0;
+        state->last_epoch    = 0;
+    };
     return executable;
 }
 

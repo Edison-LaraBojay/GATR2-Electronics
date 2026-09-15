@@ -2,6 +2,9 @@
 find_package(GTest QUIET)
 if(NOT GTest_FOUND)
     include(FetchContent)
+    if(POLICY CMP0135)
+        cmake_policy(SET CMP0135 NEW)
+    endif()
     FetchContent_Declare(
         googletest
         URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
@@ -14,13 +17,20 @@ endif()
 
 # Test files.
 set(TEST_SOURCES
+    command_line_gtest.cpp
+    ../src/app/command_line.cpp
     core_gtest.cpp
     transforms_gtest.cpp
     se3_gtest.cpp
     resources_gtest.cpp
     geometry_resources_gtest.cpp
     sensors_gtest.cpp
-    preprocessing_gtest.cpp
+    stages_gtest.cpp
+    apriltag_gtest.cpp
+    synthetic_rig_gtest.cpp
+    pose_history_gtest.cpp
+    attitude_gtest.cpp
+    localization_models_gtest.cpp
     localization_gtest.cpp
     brain_io_gtest.cpp
     field_estimation_gtest.cpp
@@ -28,6 +38,12 @@ set(TEST_SOURCES
     system_build_gtest.cpp
     profiles_gtest.cpp
     end_to_end_gtest.cpp
+    inspection_gtest.cpp
+    workers_gtest.cpp
+    field_assets_gtest.cpp
+    capture_transform_gtest.cpp
+    camera_capture_gtest.cpp
+    inspection_document_gtest.cpp
 )
 
 add_executable(navigatr_tests ${TEST_SOURCES})

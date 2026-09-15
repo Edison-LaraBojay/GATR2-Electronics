@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Hardware-free demo: the synthetic rig drives the whole runtime and the
+inspection service serves the viewer on loopback.
+
+    ./build/navigatr config/demo/synthetic_field_demo.xml
+    (from the viewing computer)  ssh -N -L 8765:127.0.0.1:8765 <user>@<pi-host>
+    browser                      http://127.0.0.1:8765/
+
+The field map uses nominal Override geometry. Every measurement in this run is synthetic truth
+produced by the rig; the detections are real detector output over rendered
+tag images. Attitude is measured (rocking) here; the _no_attitude variant
+runs the same rig without an attitude source.
+-->
+<Configuration id="demo_synthetic_field">
+    <ConfigurationName>Synthetic field demo (measured attitude)</ConfigurationName>
+    <Loop rate_hz="100"/>
+    <Inspection enabled="true" bind="127.0.0.1" port="8765"
+                snapshot_hz="20" preview_hz="5" preview_quality="70" preview_max_width="640">
+        <RobotBody length_m="0.40" width_m="0.36" height_m="0.25" origin_x_m="0" origin_y_m="0"/>
+    </Inspection>
+    <Robot file="../shared/robots/synthetic_rig.xml"/>
+    <Field file="../override/field.xml"/>
+    <Pipeline file="../shared/pipelines/synthetic_field_demo.xml"/>
+</Configuration>

@@ -26,7 +26,7 @@
 #include <memory>
 #include <string>
 
-#include "resources/resource_map.h"
+#include "resources/resource_store.h"
 #include "resources/serial_link.h"
 #include "transport/byte_stream.h"
 #include "transport/file_stream.h"

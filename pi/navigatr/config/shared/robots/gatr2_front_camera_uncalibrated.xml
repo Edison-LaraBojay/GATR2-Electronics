@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Uncalibrated camera add-on for the GATR2 robot: the front camera before
+any intrinsic or mount calibration exists, so live images and 2D tag
+decodes can be inspected in the viewer. Nothing in this file is a
+measurement.
+
+The Capture values are selections, not calibration. The intrinsic
+calibration must later be done at this same mode: the camera resource
+refuses a calibration whose resolution differs from the capture mode.
+Change them to a mode listed by rpicam-hello --list-cameras on the Pi
+before calibrating. Without a Calibration element the frames carry null
+intrinsics, the detector decodes tags in 2D with has_pose false, and no
+metric tag pose or landmark evidence is ever produced from them; the
+viewer labels this state metric unavailable.
+
+robot_geometry is deliberately empty: the camera mount is unmeasured and
+the noop association in camera_inspection_only.xml needs no frames. It
+keeps the resource ids of gatr2_front_camera.xml so a profile swaps to the
+measured fragment without a pipeline change.
+
+Needs a binary built with -DNAVIGATR_WITH_LIBCAMERA=ON; elsewhere the
+build fails naming the missing backend. Not yet run on the Pi.
+-->
+<Robot>
+
+    <Resources>
+        <Resource id="robot_geometry" type="robot_frame_map"/>
+
+        <Resource id="front_camera_device" type="libcamera_camera">
+            <Device index="0"/>
+            <Capture width_px="1280" height_px="960" pixel_format="Y8"
+                     frame_rate_hz="30"/>
+        </Resource>
+
+        <!-- The size only matters for metric poses, which are unavailable
+             without calibration. It is the detector-corner edge inferred
+             for tagCircle21h7 from the CAD (docs/field_assets.md) and must
+             be measured on a physical goal. -->
+        <Resource id="tag_detector" type="apriltag_detector">
+            <Family name="tagCircle21h7" detection_size_m="0.01761272"/>
+        </Resource>
+    </Resources>
+
+    <Sensors>
+        <Sensor id="front_camera" type="camera_frame">
+            <Source resource_id="front_camera_device" output_id="frame"/>
+        </Sensor>
+    </Sensors>
+
+</Robot>
