@@ -12,6 +12,18 @@ The Pi combines timestamped sensor measurements into robot localization and
 information about a requested physical landmark. The Brain owns destinations,
 alignment behavior, mechanisms, and motor control.
 
+## PCBs
+
+The [PCB overview](pcb/README.md) lists the board revisions, what each does,
+and the changes between them. Each revision folder has a short README and links
+to its KiCad project, schematic, and layout.
+
+| Board family | Purpose | Where to start |
+|---|---|---|
+| Pi HAT | Plugs into the Pi's 40-pin header to reduce loose wiring and provide dedicated sensor and Brain connections. | [v3](pcb/PiHat_v3/README.md) is in progress; [v2](pcb/PiHat_v2/README.md) has passed initial power-up; [v1](pcb/PiHat_v1/README.md) demonstrated tracking-wheel acquisition and Brain communication. |
+| IMU | Separate inertial sensor board with an SPI connection. | [v1](pcb/IMU_v1/README.md) failed assembly due to a mirrored footprint; [v2](pcb/IMU_v2/README.md) is the correction effort, in progress. |
+| Magnetic encoder | Measures tracking-wheel rotation using an AS5047P encoder. | [v1](pcb/MagneticEncoder_v1/README.md). |
+
 ## Pi runtime
 
 The [Navigatr overview](pi/navigatr/README.md) is the entry point for the Pi

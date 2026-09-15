@@ -2,6 +2,10 @@
 
 Why each part was chosen and which of its specs the design actually depends on.
 
+For the board inventory, design status, and changes between revisions, start
+with the [PCB overview](../pcb/README.md). Each revision's README links its
+schematic and layout; connector and component choices vary between revisions.
+
 This is not a BOM. Per board BOMs are exported from the KiCad schematic into
 `pcb/<board>/`, so the schematic stays the single source of truth for what gets
 ordered. A hand maintained parts table drifts from the schematic and then the
@@ -74,10 +78,12 @@ detection, but nothing populates it.
 |-------|-------|
 | Part | AS5047P |
 | Role | Wheel displacement |
-| Interface | ABI quadrature |
+| Interface | A/B quadrature |
 | Resolution | 4000 counts per revolution |
 
-Magnetic rotary encoders read in ABI quadrature mode, not SPI. Three channels
+Magnetic rotary encoders read through A/B quadrature in this design. The
+[encoder board](../pcb/MagneticEncoder_v1/README.md) leaves the index/PWM pin
+unconnected and exposes separate SPI connections. Three channels
 are wired so a second parallel wheel can be enabled for redundancy and fault
 detection through the sensor mask without any wire format change.
 
