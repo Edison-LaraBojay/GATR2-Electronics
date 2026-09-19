@@ -1,6 +1,6 @@
 # Magnetic encoder v1
 
-[All PCBs](../README.md)
+[Magnetic encoder overview](../README.md) · [All PCBs](../../README.md)
 
 AS5047P-ATSM magnetic rotary encoder board for tracking-wheel displacement.
 Its four-pin horizontal JST-PH harness carries 3.3 V, A, B, and ground to the
@@ -20,4 +20,4 @@ repository.
 
 The AS5047P symbol library entry uses a workstation-specific path, although the
 schematic contains an embedded copy of the symbol. See the
-[PCB overview](../README.md) for library-path and fabrication-status notes.
+[PCB overview](../../README.md) for library-path notes.

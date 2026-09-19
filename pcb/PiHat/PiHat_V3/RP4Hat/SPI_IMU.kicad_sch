@@ -963,7 +963,7 @@
 		)
 		(uuid "eeca95ce-fe6e-4249-87c7-cc8de347c69c")
 	)
-	(hierarchical_label "MOSI"
+	(hierarchical_label "SCK"
 		(shape input)
 		(at 135.89 95.25 0)
 		(effects
@@ -974,7 +974,7 @@
 		)
 		(uuid "736a3858-0019-4a11-ae72-13f6f094c399")
 	)
-	(hierarchical_label "MISO"
+	(hierarchical_label "MOSI"
 		(shape input)
 		(at 135.89 92.71 0)
 		(effects
@@ -985,7 +985,7 @@
 		)
 		(uuid "a4ec4ae3-3cec-42f3-814e-823753578045")
 	)
-	(hierarchical_label "SCK"
+	(hierarchical_label "CS"
 		(shape input)
 		(at 135.89 97.79 0)
 		(effects
@@ -996,7 +996,7 @@
 		)
 		(uuid "ca50a711-ee23-4d45-b3b6-6adc38ed9379")
 	)
-	(hierarchical_label "CS"
+	(hierarchical_label "MISO"
 		(shape input)
 		(at 135.89 100.33 0)
 		(effects

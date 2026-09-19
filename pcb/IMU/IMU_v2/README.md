@@ -1,6 +1,6 @@
 # IMU v2
 
-[All PCBs](../README.md) · [Previous revision: v1](../IMU_v1/README.md)
+[IMU overview](../README.md) · [All PCBs](../../README.md) · [Previous revision: v1](../IMU_v1/README.md)
 
 **In progress.** This revision aims to correct the mirrored footprint that
 prevented [v1](../IMU_v1/README.md) from being assembled. Improved routing and
@@ -9,8 +9,7 @@ mounting holes are also under consideration.
 The saved KiCad project is still a placeholder: its schematic has no placed
 components and its PCB has no layout yet. An I3G4250DTR footprint has been
 imported into `Footprints/`, but a populated replacement circuit and corrected
-layout have not yet been saved. There are no reported assembly or bench results
-for this revision.
+layout have not yet been saved. Assembly and bench results are not yet documented.
 
 ## Files
 

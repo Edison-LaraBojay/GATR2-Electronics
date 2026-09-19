@@ -1,6 +1,6 @@
 # Pi HAT v1
 
-[All PCBs](../README.md) · [Next revision: v2](../PiHat_v2/README.md)
+[Pi HAT overview](../README.md) · [All PCBs](../../README.md) · [Next revision: v2](../PiHat_v2/README.md)
 
 Initial Raspberry Pi 4 carrier, built to get tracking-wheel acquisition and
 V5 Brain communication working while reducing loose wiring. The HAT plugs into
@@ -18,8 +18,8 @@ connectors.
 
 ## Bench results
 
-The designer reports successful tracking-wheel acquisition and communication
-with the Brain. The board powered up and operated without observed component
+Tracking-wheel acquisition and communication with the Brain were tested
+successfully. The board powered up and operated without observed component
 damage. These results cover the functions exercised on this revision.
 
 ## Files
@@ -29,5 +29,6 @@ damage. These results cover the functions exercised on this revision.
 - [PCB layout](RP4Hat/RP4Hat.kicad_pcb)
 - [Custom Pi symbols](RP4Pinout/)
 
-This is an earlier design; current HAT work is in [v3](../PiHat_v3/README.md).
-See the [PCB overview](../README.md) for library-path and revision-label notes.
+This is an earlier design; current HAT work is in [v3](../PiHat_V3/README.md).
+See the [Pi HAT overview](../README.md) for revision-label notes and the
+[PCB overview](../../README.md) for library-path notes.

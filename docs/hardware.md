@@ -82,7 +82,7 @@ detection, but nothing populates it.
 | Resolution | 4000 counts per revolution |
 
 Magnetic rotary encoders read through A/B quadrature in this design. The
-[encoder board](../pcb/MagneticEncoder_v1/README.md) leaves the index/PWM pin
+[encoder board](../pcb/MagneticEncoder/MagneticEncoder_v1/README.md) leaves the index/PWM pin
 unconnected and exposes separate SPI connections. Three channels
 are wired so a second parallel wheel can be enabled for redundancy and fault
 detection through the sensor mask without any wire format change.

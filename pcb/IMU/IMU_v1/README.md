@@ -1,10 +1,10 @@
 # IMU v1
 
-[All PCBs](../README.md) · [Next project: v2](../IMU_v2/README.md)
+[IMU overview](../README.md) · [All PCBs](../../README.md) · [Next project: v2](../IMU_v2/README.md)
 
-**Failed assembly.** The designer reports that the component's bottom-view
-pin arrangement was used for the PCB footprint without the required change of
-view. The resulting footprint was mirrored, so the device could not be
+**Failed assembly.** The component's bottom-view pin arrangement was used for
+the PCB footprint without the required change of view. The resulting footprint
+was mirrored, so the device could not be
 correctly soldered onto the board. This revision and its Gerber archive retain
 that error; the correction is being developed in v2.
 
@@ -12,7 +12,7 @@ Standalone 3.3 V inertial sensor board using the custom ASM330 symbol. It
 connects to the carrier over an eight-pin horizontal JST-PH connector carrying
 SPI, an interrupt signal, power, and ground.
 
-The [hardware rationale](../../docs/hardware.md) identifies the intended part as
+The [hardware rationale](../../../docs/hardware.md) identifies the intended part as
 ASM330LHHG1. The schematic's custom symbol does not record the complete ordering
 code in its value field.
 

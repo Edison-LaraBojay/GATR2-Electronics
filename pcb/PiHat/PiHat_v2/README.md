@@ -1,6 +1,6 @@
 # Pi HAT v2
 
-[All PCBs](../README.md) · [Previous: v1](../PiHat_v1/README.md) · [Next: v3](../PiHat_v3/README.md)
+[Pi HAT overview](../README.md) · [All PCBs](../../README.md) · [Previous: v1](../PiHat_v1/README.md) · [Next: v3](../PiHat_V3/README.md)
 
 Second Raspberry Pi/Pico carrier design, extending the tracking-wheel and
 V5 Brain connections with a dedicated SPI IMU connection, its own 3.3 V
@@ -17,20 +17,20 @@ regulator, and a four-layer layout.
 - Changes the harness connectors from vertical JST-XH 2.50 mm to horizontal
   JST-PH 2.00 mm footprints.
 - Uses the Pi's USB-C input for system power and the HAT's two-pin 5 V/ground
-  connector for a fan, according to the designer's intended setup. The saved
-  connector itself is not labeled with a power direction; USB-C is on the Pi.
+  connector for a fan. USB-C is on the Pi; the HAT connector is not labeled
+  with a power direction.
 
 ## Assembly substitution
 
-The saved schematic specifies THVD1410 for the RS-485 transceiver. The designer
-reports substituting **ST3485ECDR** during assembly because the originally
-selected part was out of stock and the ST part was easier to source. This
+The saved schematic specifies THVD1410 for the RS-485 transceiver.
+**ST3485ECDR** was substituted during assembly because the originally selected
+part was out of stock and the ST part was easier to source. This
 assembly choice is not yet reflected in the v2 schematic; v3 records it.
 
 ## Bench results
 
-Initial power-up completed without observed component damage, and the designer
-reports that the 3.3 V LDO operates. Full board testing is still pending; these
+Initial power-up completed without observed component damage, and the 3.3 V
+LDO operates. Full board testing is still pending; these
 results do not establish tracking-wheel, IMU, or Brain-interface operation on v2.
 
 ## Files
@@ -41,5 +41,6 @@ results do not establish tracking-wheel, IMU, or Brain-interface operation on v2
 - [Saved Gerber archive](gerbers.zip)
 - [Custom Pi symbols](RP4Pinout/) and [imported regulator assets](parts/AP2112K-3.3TRG1/)
 
-This is the predecessor to the in-progress [v3](../PiHat_v3/README.md).
-See the [PCB overview](../README.md) for library-path and revision-label notes.
+This is the predecessor to the in-progress [v3](../PiHat_V3/README.md).
+See the [Pi HAT overview](../README.md) for revision-label notes and the
+[PCB overview](../../README.md) for library-path notes.

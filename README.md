@@ -14,15 +14,15 @@ alignment behavior, mechanisms, and motor control.
 
 ## PCBs
 
-The [PCB overview](pcb/README.md) lists the board revisions, what each does,
-and the changes between them. Each revision folder has a short README and links
-to its KiCad project, schematic, and layout.
+The [PCB overview](pcb/README.md) links each board family. Its README explains
+the general purpose, and the iteration folders document changes, test results,
+and KiCad project files.
 
-| Board family | Purpose | Where to start |
-|---|---|---|
-| Pi HAT | Plugs into the Pi's 40-pin header to reduce loose wiring and provide dedicated sensor and Brain connections. | [v3](pcb/PiHat_v3/README.md) is in progress; [v2](pcb/PiHat_v2/README.md) has passed initial power-up; [v1](pcb/PiHat_v1/README.md) demonstrated tracking-wheel acquisition and Brain communication. |
-| IMU | Separate inertial sensor board with an SPI connection. | [v1](pcb/IMU_v1/README.md) failed assembly due to a mirrored footprint; [v2](pcb/IMU_v2/README.md) is the correction effort, in progress. |
-| Magnetic encoder | Measures tracking-wheel rotation using an AS5047P encoder. | [v1](pcb/MagneticEncoder_v1/README.md). |
+| Board family | Purpose |
+|---|---|
+| [Pi HAT](pcb/PiHat/README.md) | Plugs into the Pi's 40-pin header to reduce loose wiring and provide dedicated sensor and Brain connections. |
+| [IMU](pcb/IMU/README.md) | Inertial measurements for attitude estimation, primarily heading. |
+| [Magnetic encoder](pcb/MagneticEncoder/README.md) | Contactless rotation sensing for compact custom tracking-wheel assemblies. |
 
 ## Pi runtime
 
@@ -61,6 +61,7 @@ has the run and SSH port-forward commands.
 
 ## Hardware and bring-up references
 
+- [Contributing](CONTRIBUTING.md)
 - [Hardware architecture](docs/hardware.md)
 - [Shared interfaces and wire frames](docs/interfaces.md)
 - [Raspberry Pi setup](docs/pi_setup.md)
