@@ -1,9 +1,9 @@
 // payloads/landmark_associations.h
 // Landmark observations resolved to configured landmark objects, SI units,
-// field and robot frames. Produced by an association implementation,
-// consumed by world prediction and publishing. This is the seam a future
-// perception plus association pair fills in. Wire ids are not part of this
-// payload; the publisher maps object ids to its wire protocol.
+// field and robot frames. The optional Landmarks input of the VEX brain
+// publisher accepts this payload from a configured association function.
+// Wire ids are not part of this payload; the publisher maps object ids to
+// its wire protocol.
 
 #pragma once
 #include <string>

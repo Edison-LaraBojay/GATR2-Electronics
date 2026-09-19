@@ -16,7 +16,7 @@ is the same rig with a measured attitude source.
 
 Wheel geometry and the camera mount are plausible GATR2-like numbers chosen
 for the demo, not measurements of the real robot; the real robot
-description lives in gatr2_as5047_bno08x.xml.in.
+description lives in gatr2_as5047_imu.xml.in.
 -->
 <Robot>
 

@@ -24,6 +24,4 @@ inline const char* functionStatusName(FunctionStatus s) {
     return "unknown";
 }
 
-inline FunctionStatus worseOf(FunctionStatus a, FunctionStatus b) { return a > b ? a : b; }
-
 } // namespace navigatr

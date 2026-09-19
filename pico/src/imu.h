@@ -1,7 +1,6 @@
 // imu.h
-// Yaw rate source. No chip is selected yet, so read returns false and the
-// gyro bit stays clear in the frame. Fill in a driver and the bit turns on
-// with no change anywhere else.
+// ASM330LHHG1 yaw rate source over SPI1. A missing device or unavailable
+// sample leaves the gyro bit clear in the outgoing sensor frame.
 
 #pragma once
 #include <stdint.h>

@@ -5,7 +5,7 @@ THIS IS AN INTENTIONALLY NON-RUNNABLE TEMPLATE.
 Every @...@ token must be replaced with a measured/configured value.
 calibration_status labels are optional reader notes, ignored by runtime.
 Never replace a required value with zero merely to make parsing
-pass. Save the completed file as gatr2_as5047_bno08x.xml; the diagnostic
+pass. Save the completed file as gatr2_as5047_imu.xml; the diagnostic
 profiles reference that name and cannot resolve until it exists.
 
 This file owns the base physical robot: transports, encoder and IMU
@@ -18,11 +18,10 @@ Known-good values already filled in: the Pico link (/dev/ttyAMA0 at 115200,
 pico/src/config.h) and the brain link (UART5 /dev/ttyAMA5 at 115200, RS-485
 enable GPIO 6, one way Pi to brain, docs/hardware.md).
 
-BNO08x note: the IMU sits behind the Pico, so the Pi consumes it as a
-telemetry channel. The Pico-side BNO08x SPI driver, its report
-configuration, and the versioned acquisition handshake are firmware work in
-progress; until they land, this channel is served by the current firmware
-and the Pi-side contract is unchanged.
+The IMU sits behind the Pico. Its current ASM330LHHG1 driver publishes raw
+gyro Z in millidegrees per second through the sensor frame. The Pi consumes
+that chip-independent yaw-rate channel; this profile does not provide
+measured roll or pitch.
 -->
 <Robot>
 

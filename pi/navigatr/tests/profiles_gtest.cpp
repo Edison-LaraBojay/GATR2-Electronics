@@ -551,15 +551,15 @@ TEST(Profiles, CheckedInTreeStaysHonest) {
     ResolvedConfiguration resolved;
     std::string           err;
     EXPECT_FALSE(resolveConfiguration(
-        config_dir + "/override/diagnostics/three_wheel_bno08x.xml.in", resolved, err));
+        config_dir + "/override/diagnostics/three_wheel_imu.xml.in", resolved, err));
     EXPECT_NE(err.find("template"), std::string::npos);
 
     // the shared pipeline fragments are valid Pipeline documents
     for (const char* name :
-         {"/shared/pipelines/two_wheel_bno08x_no_correction.xml",
-          "/shared/pipelines/three_wheel_bno08x_no_correction.xml",
-          "/shared/pipelines/two_wheel_bno08x_camera_diagnostic.xml",
-          "/shared/pipelines/three_wheel_bno08x_camera_diagnostic.xml"}) {
+         {"/shared/pipelines/two_wheel_imu_no_correction.xml",
+          "/shared/pipelines/three_wheel_imu_no_correction.xml",
+          "/shared/pipelines/two_wheel_imu_camera_diagnostic.xml",
+          "/shared/pipelines/three_wheel_imu_camera_diagnostic.xml"}) {
         tinyxml2::XMLDocument doc;
         ASSERT_EQ(doc.LoadFile((config_dir + name).c_str()), tinyxml2::XML_SUCCESS)
             << name;

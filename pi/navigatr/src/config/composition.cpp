@@ -256,7 +256,7 @@ private:
             parent->InsertAfterChild(node, replacement);
             parent->DeleteChild(node);
             node = replacement;
-            // A legacy Field reference can contain a single Resource. Wrap
+            // A Field reference can contain a single Resource. Wrap
             // it in Field so the profile's structure remains explicit.
             if (field_resource) {
                 auto* wrapper = node->GetDocument()->NewElement("Field");

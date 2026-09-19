@@ -70,11 +70,6 @@ public:
 
     bool has(const ResourceId& id) const { return find(id) != nullptr; }
 
-    const std::vector<ResourceOutputDecl>* outputsOf(const ResourceId& id) const {
-        const Entry* e = find(id);
-        return e == nullptr ? nullptr : &e->outputs;
-    }
-
     const PayloadDescriptor* payloadOf(const ResourceId& id, const OutputId& output) const {
         const Entry* e = find(id);
         if (e == nullptr) {

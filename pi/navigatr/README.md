@@ -1,27 +1,27 @@
 # navigatr
 
 `navigatr` is the Raspberry Pi sensing runtime for the GATR2 VEX robot. It
-combines measurements into a robot pose and an estimate of one requested
-physical landmark or scoring face. The Brain owns destinations, desired contact
-geometry, alignment control, and motor commands.
+combines measurements into a robot pose and field-object estimates. Configured
+target resolution can turn a requested target into a desired robot pose; the
+Brain owns movement control and motor commands.
 
 Robot position and reported landmark position use the configured field
 coordinates. Robot heading is its orientation in that field. The landmark's
-reported `heading_error` is its estimated rotation away from its nominal field
-orientation, modulo any declared object symmetry. Internal transforms use a
-consistent full orientation representative and associated face/mount geometry.
+inspection `heading_error` is its estimated rotation away from nominal, wrapped
+to `(-180, 180]` degrees. The existing Brain publisher uses full field heading
+and gives a matching latched target precedence over a mapped field-object pose.
 
 ## Runtime design
 
-These documents define runtime requirements and data meaning. They are not
-evidence of completed hardware integration.
+These documents describe the implemented runtime and data contracts. Hardware
+integration still needs the checks recorded in the deployment documents.
 
 | Document | Responsibility |
 |---|---|
 | [Configuration](docs/configuration.md) | Run commands, the compiled default file, inline XML, and nested file references. |
 | [Architecture](docs/architecture.md) | Captured resource/sensor functions, ResourceMap and SensorMap result contracts, all runtime paths, nested stage I/O, workers, and pose history. |
-| [Coordinates](docs/coordinates.md) | Field and robot axes, heading error, square symmetry, side selection, camera mounting, and measurement-time transforms. |
-| [Landmarks](docs/landmarks.md) | One requested report, static field definitions, measured-object caching, association, and processing scope. |
+| [Coordinates](docs/coordinates.md) | Field and robot axes, heading, camera mounting, attitude, and measurement-time transforms. |
+| [Landmarks](docs/landmarks.md) | Nominal and observed field state, association, target resolution, and Brain output. |
 | [Inspection](docs/inspection.md) | The versioned inspection contract, the service, and the browser viewer. |
 | [Field assets](docs/field_assets.md) | Official Override CAD source, revision, units, axis conversion, and what the field file was checked against. |
 | [Calibration inventory](docs/calibration_inventory.md) | Every remaining measurement, where it goes, and what it gates. |
@@ -93,14 +93,14 @@ mapping and buffer ownership.
 
 Deferred, deliberately:
 
-- Live tilt: the Pico telemetry carries `gyro_z` and `accel_xy` only; no
+- Live tilt: the Pico firmware sends gyro Z alongside encoders; the protocol has
+  optional accel XY fields, but the firmware does not populate them. No
   attitude report exists, so live runs show attitude unavailable and the
   association uses the assumed-level policy. The attitude path is exercised by
   the synthetic rig.
 - Manual exposure and gain control for the camera (auto exposure is used).
-- The Brain landmark report described in the landmark document remains the
-  existing publisher and target semantics; the report contract there is not
-  what `vex_brain` emits.
+- Half-duplex RS-485 turnaround: `DriverEnable` is held high, so the shared HAT
+  link cannot yet receive Brain commands using that configuration.
 - Measured calibration values for the GATR2 robot: the robot templates stay
   `.xml.in` until measured (see the calibration inventory).
 

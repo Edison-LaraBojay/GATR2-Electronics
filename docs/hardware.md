@@ -1,187 +1,107 @@
 # Hardware parts and rationale
 
-Why each part was chosen and which of its specs the design actually depends on.
-
-For the board inventory, design status, and changes between revisions, start
-with the [PCB overview](../pcb/README.md). Each revision's README links its
-schematic and layout; connector and component choices vary between revisions.
-
-This is not a BOM. Per board BOMs are exported from the KiCad schematic into
-`pcb/<board>/`, so the schematic stays the single source of truth for what gets
-ordered. A hand maintained parts table drifts from the schematic and then the
-wrong part gets ordered. What a schematic cannot record is why, which is what
-this page is for.
-
-Datasheets are linked, not committed. They are multi megabyte binaries that
-cannot be diffed and would bloat the repository permanently.
+The [PCB overview](../pcb/README.md) describes each board family, iteration, and
+reported test status. Open the relevant revision's schematic for connector pins,
+component values, and assembly choices; those can differ between revisions.
+This page connects the hardware to the checked-in acquisition and Pi runtime.
 
 ## IMU
 
-| Field | Value |
-|-------|-------|
-| Part | ASM330LHHG1 |
-| Vendor | STMicroelectronics |
-| Role | Yaw rate for heading |
-| Interface | SPI |
-| Datasheet | https://www.st.com/resource/en/datasheet/asm330lhhg1.pdf |
+The [IMU board](../pcb/IMU/README.md) uses the ASM330LHHG1 for inertial sensing,
+primarily heading. The Pico's [driver](../pico/src/imu.cpp) communicates over SPI1
+and currently reads only gyro Z. It configures:
 
-Automotive qualified 6-axis inertial module. Only the gyroscope Z axis feeds
-fusion. The accelerometer is not used, see the accelerometer note below.
+| Firmware setting | Value |
+|---|---|
+| Gyro output data rate | 208 Hz |
+| Gyro full scale | 2000 degrees/second |
+| Conversion to wire units | 70 millidegrees/second per LSB |
+| Block-data update and address increment | Enabled |
+| Accelerometer | Disabled |
 
-### One IMU, not three
+The Pi's `pico_imu_channel` converts yaw rate and accumulated rotation into radians,
+then localization observation models estimate bias and use heading increments.
+The protocol defines optional accel XY fields, but the current firmware does not
+populate them. No quaternion/roll/pitch report exists. See the
+[attitude follow-up](../pi/navigatr/docs/attitude_firmware_followup.md) for the
+additional acquisition and protocol work needed for measured tilt.
 
-An earlier idea was three IMUs averaged for redundancy and lower noise. Rejected.
+The present estimator does not periodically correct robot heading from field
+landmarks: landmark position estimation uses robot localization as an input.
+`kStatusGyroHealthy` reports configured sensor freshness, not an implemented
+comparison between gyro and wheel-derived heading. Sensor specifications alone
+do not establish assembled-robot drift or alignment accuracy.
 
-Averaging N independent gyros reduces angle random walk by the square root of N,
-so three parts would improve bias instability from about 0.04 deg/hour to about
-0.023 deg/hour. Over a two minute match, 0.04 deg/hour accumulates roughly
-0.0013 degrees of drift. That is already far below anything measurable on this
-robot, and landmark corrections zero the accumulated error periodically anyway.
-Three parts would have cost board area, money, and two extra sets of decoupling
-capacitors to improve a term that was never the limiting factor.
+## Tracking wheels
 
-The errors that actually matter are gyro scale factor calibration, mounting
-rigidity, vibration, and temperature drift. None of those improve by adding
-more IMUs to the same board.
+The [magnetic encoder board](../pcb/MagneticEncoder/README.md) supports compact
+custom tracking-wheel assemblies using contactless magnetic rotation sensing.
+The Pico counts A/B quadrature for three channels. Its
+[pin configuration](../pico/src/config.h) assigns channels to GP0/1, GP2/3, and
+GP4/5; pin and connector wiring must match the chosen HAT revision.
 
-Redundancy is not lost. Yaw rate derived from the differential between the
-parallel tracking wheels cross checks the gyro, and disagreement is what
-`kStatusGyroHealthy` reports.
+Counts per revolution and electrical sign are sensor calibration. Effective
+wheel radius, position, and rolling direction belong to `wheel_geometry`, used
+by `tracking_wheel_motion` to calculate body movement. Verify the actual encoder
+configuration and counted edges rather than assuming every assembly has the same
+counts per revolution. Unpowered tracking wheels measure ground movement but
+still depend on contact, mounting rigidity, and calibration.
 
-### Settings the firmware depends on
+## Pi HAT
 
-| Setting | Value | Reason |
-|---------|-------|--------|
-| Full scale | 2000 dps | Headroom for collision spikes; 1000 dps would also work |
-| Sensitivity | 70 mdps/LSB | Integer, see below |
-| Output data rate | 208 Hz | Comfortably above the 50 Hz frame rate |
-| BDU | enabled | Prevents reading a high byte and low byte from different samples |
+The [Pi HAT](../pcb/PiHat/README.md) mounts through the Pi's 40-pin header to reduce
+loose wiring and provide a stable connection with dedicated sensor ports. The
+family README compares iterations; each revision records its power arrangement,
+regulator, peripheral connectors, and validation status.
 
-Full scale is chosen partly so the sensitivity is a whole number of
-millidegrees per second per LSB. The wire format carries yaw rate as an integer
-in mdeg/s and forbids floats, so a scale like 70 or 35 converts with a single
-multiply and no rounding. The 125, 250, and 500 dps settings have fractional
-sensitivities (4.375, 8.75, 17.5) and would force either float math or a
-lossy conversion.
+The transceiver fitted to v2 was ST3485ECDR, although its saved schematic retains
+the earlier THVD1410 selection. V3 records ST3485ECDR in its schematic. Use the
+revision documentation when ordering or assembling rather than assuming all
+boards share a BOM.
 
-### Accelerometer
+## Pico-to-Pi telemetry
 
-Present on the part but unused. Position from double integrated acceleration
-drifts as the square of time, and the tracking wheels already measure
-displacement directly and far better. `kSensorAccelXY` is reserved on the wire
-so the bit and width exist if a future use appears, such as slip or impact
-detection, but nothing populates it.
+The Pico sends sensor frames at 50 Hz on UART0 (Serial1), GP16 TX / GP17 RX,
+115200 baud. The Pi profile selects the Linux device path. The current template
+uses `/dev/ttyAMA0`; confirm the enabled UART and device mapping on the deployed
+Pi. The [wire specification](interfaces.md) defines masks, integer units,
+timestamps, and packet layouts.
 
-## Tracking wheel encoders
+## RS-485 to the V5 Brain
 
-| Field | Value |
-|-------|-------|
-| Part | AS5047P |
-| Role | Wheel displacement |
-| Interface | A/B quadrature |
-| Resolution | 4000 counts per revolution |
+The HAT routes Pi UART5 through a half-duplex transceiver:
 
-Magnetic rotary encoders read through A/B quadrature in this design. The
-[encoder board](../pcb/MagneticEncoder/MagneticEncoder_v1/README.md) leaves the index/PWM pin
-unconnected and exposes separate SPI connections. Three channels
-are wired so a second parallel wheel can be enabled for redundancy and fault
-detection through the sensor mask without any wire format change.
+| Signal | Pi GPIO | 40-pin header pin |
+|---|---|---|
+| UART5 TX to transceiver DI | 12 | 32 |
+| UART5 RX from transceiver RO | 13 | 33 |
+| Transceiver DE and /RE enable | 6 | 31 |
 
-The 4000 CPR figure is where the `counts` unit in the sensor frame comes from.
-Converting counts to millimeters needs the wheel diameter, which is a
-calibration constant measured on the bench rather than a datasheet number.
+The enable line is pulled down on the board. The checked-in Linux serial resource
+sets its configured `DriverEnable` GPIO high while open and low on destruction.
+There is no transmit/receive turnaround implementation; with DE and /RE tied
+together, that keeps this physical link in transmit mode. The runtime has a
+command-frame parser, but receive traffic on this shared link still needs the
+direction-control implementation and hardware validation.
 
-Tracking wheels are unpowered and spring loaded. No motor torque tries to spin
-them past the ground, which is why they slip far less than drive motor encoders.
+The [bench example](../bench/rs485_link/README.md) exercises Pi-to-Brain byte
+transfer separately from the production codec. It does not validate command
+return traffic. [Pi setup](pi_setup.md) covers access and UART provisioning.
 
-## Where the wire units come from
+## Camera and Pi runtime
 
-`docs/interfaces.md` fixes the units on the wire. Their origin is here.
+The runtime targets a Raspberry Pi 4 and uses C++, libcamera, and the bundled
+AprilRobotics detector. There is no Python/OpenCV localization process or EKF in
+the current executable. The implemented planar estimator integrates configured
+wheel-motion and heading observations.
 
-| Wire unit | Origin |
-|-----------|--------|
-| counts | AS5047P 4000 CPR, raw quadrature |
-| mdeg/s | Gyro full scale sensitivity, 70 mdps/LSB at 2000 dps |
-| mm | Calibrated from counts using measured wheel diameter |
-| mg | Accelerometer full scale, unused |
+Camera capture produces grayscale images for tag decoding. Intrinsics, detected
+corner size, and rigid camera mounting are required for metric field estimates.
+An uncalibrated inspection profile supports viewing images and decoded IDs first.
+The browser renders the 3D field on the viewing computer, reached through an SSH
+port forward to the Pi's inspection service.
 
-## RS-485 link to the brain
-
-| Field | Value |
-|-------|-------|
-| Part | ST3485ECDR |
-| Vendor | STMicroelectronics |
-| Role | Pi UART to RS-485 differential, into a V5 smart port |
-| Interface | Standard 8-pin 485 pinout, 3.3V, half duplex |
-| Datasheet | https://www.st.com/resource/en/datasheet/st3485e.pdf |
-
-The Pi transmits over UART5 (GPIO12/13). The transceiver converts that to the
-A/B differential pair, which plugs into a V5 smart port. V5 smart port data
-lines are RS-485, so no extra hardware is needed on the brain side and Chomp
-reads it as generic serial.
-
-| Transceiver pin | Connects to | Note |
-|-----------------|-------------|------|
-| DI (4) | Pi GPIO12 / TXD5 (RSTX) | driver input |
-| RO (1) | Pi GPIO13 / RXD5 (RSRX) | receiver output, unused, link is one way |
-| DE (3) and /RE (2) | Pi GPIO6 (EN) | tied together, 10k pulldown to GND |
-| A (6), B (7) | V5 smart port | differential pair |
-| VCC (8) | +3.3V | |
-| GND (5) | GND | |
-
-DE and /RE share one EN line, so the idle state (pulled low) is receive and
-driver disabled. The Pi drives EN high to transmit. The link is one way, Pi to
-brain, so EN stays high in operation. The pulldown means a dead or unbooted Pi
-leaves the bus idle instead of jamming it.
-
-Any 3.3V standard-pinout 485 transceiver is interchangeable here, the pinout is
-the common MAX485 layout.
-
-## Camera
-
-| Field | Value |
-|-------|-------|
-| Part | IMX296 (intended, not finalized) |
-| Interface | CSI |
-| Type | Global shutter, monochrome |
-
-Global shutter avoids the rolling-shutter skew a moving robot would put into tag
-corners, and bearing accuracy depends on corner positions. Monochrome is enough
-for AprilTags, the detector runs on grayscale, and it is cheaper and lower
-bandwidth than color. See the Pi platform note for why the vision workload is
-light on memory.
-
-## Pi platform
-
-| Field | Value |
-|-------|-------|
-| Board | Raspberry Pi 4 |
-| RAM | 2 GB |
-| OS | Pi OS Bookworm, headless (Lite) |
-
-2GB is enough. The vision plus fusion app is a few hundred MB resident: OpenCV
-and Python are the bulk, one mono frame is about 1.6 MB, the EKF is negligible.
-AprilTag detection is classical computer vision with no model weights, so it is
-memory light. The real constraint is CPU time per frame, tuned with resolution
-and frame rate, not RAM. 4GB was considered but the runtime never needs it, and
-the things that could (source builds, a desktop) are avoided by using prebuilt
-packages and developing on a laptop. RAM is soldered, so the only argument for
-4GB is reuse in a heavier future project.
-
-### Pi GPIO usage
-
-| GPIO | Pin | Use |
-|------|-----|-----|
-| 12 | 32 | UART5 TXD, RSTX to transceiver DI |
-| 13 | 33 | UART5 RXD, RSRX from transceiver RO (unused) |
-| 6 | 31 | RS-485 EN (DE + /RE), 10k pulldown |
-
-UART5 needs `dtoverlay=uart5` and presents as `/dev/ttyAMA5`. See
-`docs/pi_setup.md`.
-
-## To be filled in
-
-Add a section and the reasoning as each is chosen.
-
-- Regulators and protection on the Pi HAT
-- Connectors for the encoder harness
+See [camera setup](../pi/navigatr/docs/pi_camera_setup.md) for supported capture
+configuration and the remaining hardware checks. Pi throughput, capture timing,
+memory use, and physical alignment accuracy have not been established by host
+simulation tests. Measure them on the selected camera, mode, and robot.

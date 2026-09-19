@@ -54,7 +54,7 @@ constexpr uint8_t kSensorBitCount = sizeof(kSensorWidth);
 
 struct SensorSample {
     uint8_t  seq;
-    uint32_t stamp_ms;   // Pico clock, the reference for all fusion timing
+    uint32_t stamp_ms;   // Pico acquisition clock; the Pi maps it to host time
     uint16_t mask;
     int32_t  enc[3];
     int32_t  gyro_z;     // mdeg/s, raw, bias not removed
@@ -72,10 +72,12 @@ struct SensorSample {
 //   | n x { id u8, dx_mm i16, dy_mm i16, bearing_cdeg i16, quality u8 }
 //   | xor u8
 //
-// Pose is relative to the zero point. The object fields carry the absolute
-// pose of the world object the brain requested; the brain ignores them unless
-// kStatusObjValid is set. Landmark entries are the live relative transform,
-// for closing the loop directly on a target.
+// The Pi publisher uses field coordinates for the robot pose. For the requested
+// object_id, a latched target supplies the desired robot pose when available;
+// otherwise a configured field-object mapping supplies the object pose.
+// obj_heading_cdeg is a full field heading in both cases. kStatusObjValid marks
+// usable object fields. Landmark entries contain robot-relative observations
+// from the latest association snapshot, which may predate the published pose.
 // ---------------------------------------------------------------------------
 
 enum StatusBit : uint16_t {
@@ -87,7 +89,7 @@ enum StatusBit : uint16_t {
     kStatusLocInit      = 1u << 5,  // pose was initialized from a command
     kStatusObjRequested = 1u << 6,
     kStatusObjValid     = 1u << 7,  // object fields hold a usable estimate
-    kStatusObjObserved  = 1u << 8,  // object was seen this cycle, not just mapped
+    kStatusObjObserved  = 1u << 8,  // vision-locked target or observed field snapshot
 };
 
 constexpr uint8_t kMaxLandmarks = 8;
@@ -97,7 +99,7 @@ struct LandmarkObs {
     int16_t dx_mm;
     int16_t dy_mm;
     int16_t bearing_cdeg;
-    uint8_t quality;  // 0-255, derived from range and viewing angle
+    uint8_t quality;  // 0-255, scaled from the association's quality value
 };
 
 struct PoseFrame {
@@ -129,7 +131,7 @@ struct PoseFrame {
 // ---------------------------------------------------------------------------
 
 enum CommandType : uint8_t {
-    kCmdInitPose     = 0x01,  // reset localization to x, y, heading; mode selects config
+    kCmdInitPose     = 0x01,  // place robot at x, y, heading; mode is carried as metadata
     kCmdSelectObject = 0x02,  // request object_id, or clear when the flag is off
     kCmdSetStream    = 0x03,  // stream flag on or off
 };

@@ -85,7 +85,6 @@ public:
     AttitudeLookupResult attitudeAt(MonotonicTime t) const override;
     PoseSampleLookupResult sampleAt(MonotonicTime t) const override;
 
-    std::vector<PoseHistoryEntry> recentHistory(std::size_t max_entries) const;
     std::size_t                   historySize() const;
     const PoseHistoryConfig&      historyConfig() const { return history_.config(); }
 

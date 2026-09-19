@@ -98,13 +98,9 @@ public:
     // displacement, field frame.
     Pose2D landmarkTruth(const FieldObjectId& id) const;
 
-    const std::map<std::string, Pose2D>& displacements() const { return displacements_; }
-    const TrajectoryConfig&              trajectory() const { return trajectory_; }
-    const AttitudeConfig&                attitude() const { return attitude_; }
-    const CameraConfig&                  camera() const { return camera_; }
+    const CameraConfig& camera() const { return camera_; }
 
     uint64_t framesRendered() const { return frames_rendered_; }
-    uint64_t ticks() const { return ticks_; }
 
     // Renders the camera view at a truth pose into a packed Y8 image.
     void render(const RigTruth& truth, std::vector<uint8_t>& y8) const;

@@ -1,9 +1,8 @@
 // target_set_resource.h
 // Target declarations as a typed shared resource, validated at build against
 // the field map (landmarks, approach frames, tag mounts) and the robot frame
-// map (controlled frames). Association and world prediction implementations
-// reference the same set, so the selected side, stand-off, and vision policy
-// are configured once.
+// map (controlled frames). Target resolution consumes the selected side,
+// stand-off, and vision policy from this set.
 //
 //   <Resource id="targets" type="target_set">
 //       <FieldMap resource_id="game_field"/>

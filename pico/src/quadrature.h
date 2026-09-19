@@ -1,9 +1,6 @@
 // quadrature.h
-// x4 decode for ABI encoders. Counts accumulate in the background so a reader
-// can sample at any time without losing edges.
-//
-// This is an interrupt driven implementation. PIO decode is the intended
-// replacement, see pico/README.md.
+// Interrupt-driven x4 decode of encoder A/B signals. Counts accumulate in
+// the background and can be sampled independently of the UART send loop.
 
 #pragma once
 #include <stdint.h>

@@ -5,7 +5,7 @@
 // differ only through those references, never by restating measurements.
 //
 // Angles stay in degrees here because this is configuration data; the
-// consuming preprocessor converts once when it builds its solve.
+// consuming tracking-motion observation model converts once when it builds its solve.
 
 #pragma once
 #include <string>

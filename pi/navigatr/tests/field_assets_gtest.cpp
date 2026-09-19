@@ -412,10 +412,10 @@ TEST(FieldAssets, LiveCameraProfileResolvesAndNeedsTheLibcameraBackend) {
 
     // the diagnostic templates carry the same inspection settings
     for (const char* name :
-         {"/override/diagnostics/two_wheel_bno08x.xml.in",
-          "/override/diagnostics/three_wheel_bno08x.xml.in",
-          "/override/diagnostics/two_wheel_bno08x_camera.xml.in",
-          "/override/diagnostics/three_wheel_bno08x_camera.xml.in"}) {
+         {"/override/diagnostics/two_wheel_imu.xml.in",
+          "/override/diagnostics/three_wheel_imu.xml.in",
+          "/override/diagnostics/two_wheel_imu_camera.xml.in",
+          "/override/diagnostics/three_wheel_imu_camera.xml.in"}) {
         tinyxml2::XMLDocument doc;
         ASSERT_EQ(doc.LoadFile((kConfigDir + name).c_str()), tinyxml2::XML_SUCCESS) << name;
         ASSERT_NE(doc.RootElement(), nullptr) << name;

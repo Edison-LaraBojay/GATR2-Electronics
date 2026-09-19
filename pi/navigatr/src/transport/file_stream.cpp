@@ -31,28 +31,4 @@ int FileByteSource::read(uint8_t* dst, int cap) {
     return static_cast<int>(std::fread(dst, 1, static_cast<size_t>(want), f_));
 }
 
-FileByteSink::~FileByteSink() {
-    if (f_ != nullptr) {
-        std::fclose(f_);
-    }
-}
-
-bool FileByteSink::open(const std::string& path, std::string& err) {
-    f_ = std::fopen(path.c_str(), "wb");
-    if (f_ == nullptr) {
-        err = "cannot open " + path;
-        return false;
-    }
-    return true;
-}
-
-bool FileByteSink::write(const uint8_t* src, int len) {
-    if (f_ == nullptr || len < 0) {
-        return false;
-    }
-    const size_t n = std::fwrite(src, 1, static_cast<size_t>(len), f_);
-    std::fflush(f_);
-    return n == static_cast<size_t>(len);
-}
-
 } // namespace navigatr

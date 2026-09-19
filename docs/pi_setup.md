@@ -1,112 +1,64 @@
 # Raspberry Pi access
 
-How to reach the Pi over SSH and pull the code onto it. The Pi is just a host
-for the code in this repo, it holds nothing that is not already here.
+Use a headless Raspberry Pi OS installation with SSH enabled. Choose the hostname,
+account, network settings, and credentials during imaging. The examples below use
+`gatr2@gatr2.local`; replace them with the account and hostname on your Pi.
 
-This board uses the same value for user and hostname:
+## Connect
 
-- user: `gatr2`
-- hostname: `gatr2`, so `gatr2.local`
-- password: in `secrets.local` at the repo root, which is git-ignored so it
-  stays out of the public history. Set up a key below and you never type it.
+```text
+ssh gatr2@gatr2.local
+```
 
-## Provisioning after a reflash
+If local hostname resolution fails, use the address shown by the router or by
+`hostname -I` on the Pi. Ethernet or a directly connected keyboard/display can
+help establish the initial connection.
 
-Do these once on a fresh card, in order. The sections below have the detail.
+To enable SSH on an existing installation, use `sudo raspi-config` and its SSH
+interface option. For key-based login, create an SSH key on the viewing computer
+if needed and install its public key on the Pi:
 
-1. Image the card with Raspberry Pi Imager. In the settings gear, set hostname
-   `gatr2`, user `gatr2`, the password, enable SSH, and add the WiFi networks.
-2. Boot, then SSH in (see Find the Pi).
-3. Update the system:
+```text
+ssh-keygen -t ed25519
+ssh-copy-id gatr2@gatr2.local
+```
 
-       sudo apt update && sudo apt full-upgrade -y
+## Provision the runtime
 
-4. Enable UART5 for the brain link (GPIO12/13):
+Update packages, then clone this repository using its GitHub clone URL. The
+[Navigatr README](../pi/navigatr/README.md) has build, test, and run commands;
+[Pi camera setup](../pi/navigatr/docs/pi_camera_setup.md) lists camera packages and
+capture configuration. The default runnable profile is a synthetic demo. Physical
+robot profiles use the measurements in the
+[calibration inventory](../pi/navigatr/docs/calibration_inventory.md).
 
-       echo "dtoverlay=uart5" | sudo tee -a /boot/firmware/config.txt
-       sudo reboot
+## HAT UART
 
-   After the reboot, confirm the device exists:
+The HAT's Brain interface uses UART5 on GPIO12/13. Enable the corresponding overlay
+in `/boot/firmware/config.txt`:
 
-       ls -l /dev/ttyAMA*
+```text
+dtoverlay=uart5
+```
 
-   On the Pi 4 this is `/dev/ttyAMA5` (uart5 maps to ttyAMA5). If the name
-   differs on your board, set `SERIAL_PORT` in the bring-up script to match.
-5. Clone the repo (see Get the code).
-6. Run a bring-up test to confirm the hardware (see Run a bring-up test).
+Reboot after editing boot configuration and inspect the resulting `/dev/ttyAMA*`
+devices. The profiles use `/dev/ttyAMA5` for this link; confirm the device on the
+actual installation and update the XML or bench script if it differs. The Pico
+link is a separate UART and must match its 115200-baud firmware configuration.
 
-Add more here as hardware lands, for example the camera overlay.
+The [RS-485 bench test](../bench/rs485_link/README.md) documents transmit bring-up.
+The runtime's configured DriverEnable remains high while the link is open;
+bidirectional command traffic needs transmit/receive turnaround work.
 
-## Enable SSH
+## View the running Pi
 
-Easiest at imaging time: in Raspberry Pi Imager, open the settings gear and
-enable SSH, set the user, and set the hostname before writing the card.
+From the viewing computer:
 
-On a board that is already running:
+```text
+ssh -N -L 8765:127.0.0.1:8765 gatr2@gatr2.local
+```
 
-    sudo raspi-config    # Interface Options -> SSH -> enable
-
-## Find the Pi
-
-On the same network:
-
-    ping gatr2.local
-    ssh gatr2@gatr2.local        # user here, password in secrets.local
-
-If the hostname will not resolve:
-
-- Confirm the Pi is booted. The green activity LED should be blinking, not
-  sitting solid or dark.
-- Run an Ethernet cable straight from the Pi to your laptop, then try the same
-  `ssh gatr2@gatr2.local` again.
-- Last resort, plug in a monitor and keyboard and work on it directly.
-
-To get the IP another way, from your router, or on the Pi itself:
-
-    hostname -I
-
-## Networks
-
-The Pi has WiFi stored for the home network and the `<name>` hotspot. If
-neither is in range, use the Ethernet or monitor fallback above.
-
-## First connection
-
-    ssh gatr2@gatr2.local
-
-Accept the host key on first connect. Log in with the password once, then set
-up a key so you do not need it again.
-
-## Key login, recommended
-
-From your laptop, once:
-
-    ssh-keygen -t ed25519        # if you do not already have a key
-    ssh-copy-id gatr2@gatr2.local
-
-Now `ssh gatr2@gatr2.local` logs in with no password. Optionally add a shortcut
-to `~/.ssh/config` on your laptop:
-
-    Host gatr2
-        HostName gatr2.local
-        User gatr2
-
-Then it is just:
-
-    ssh gatr2
-
-## Get the code onto the Pi
-
-    git clone https://github.com/<owner>/GATR2-Electronics.git
-    cd GATR2-Electronics
-
-Pull later updates with:
-
-    git pull
-
-## Run a bring-up test
-
-    cd bench/rs485_link
-    python3 pi_transmit.py
-
-See that test's README for wiring and the one-time UART setup.
+Run Navigatr on the Pi with inspection enabled, then open
+`http://127.0.0.1:8765/` on the viewing computer. The
+[inspection guide](../pi/navigatr/docs/inspection.md) describes the field view,
+robot pose, camera overlays, diagnostics, and service configuration.

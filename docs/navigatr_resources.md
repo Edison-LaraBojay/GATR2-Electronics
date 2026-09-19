@@ -134,8 +134,10 @@ executable configuration and there is no monolithic robot config header.
   which mount produced an observation is association's decision, by full
   pose, never forced). `detection_size_m` is the edge of the detector's
   pose-estimation corners, not the sticker. Every geometry attribute is
-  required and calibration gated. Meters and degrees in, meters and
-  radians in memory. No brain wire ids here.
+  parsed and numerically validated. `calibration_status` is a reader annotation
+  with no runtime effect. Meters and degrees in, meters and radians in memory.
+  No brain wire ids here. Optional Dimensions, Feature, and Visual metadata
+  supplies viewer geometry only.
 - Thread safety: immutable after construction.
 
 ## robot_frame_map
@@ -164,31 +166,34 @@ executable configuration and there is no monolithic robot config header.
 
 - Contract: `CameraDevice`.
 - Schema: `Device index`, `Capture` (width, height, `pixel_format="Y8"`,
-  rate), `Calibration` (`calibration_status`, `calibration_id`,
+  rate), optional `Calibration` (`calibration_id`,
   `Intrinsics model="brown_conrady"` with the full distortion set tied to
   the exact camera/lens/resolution, `Extrinsic frame_id` naming the
-  engineering frame in the robot frame map). See
-  `config/*_apriltag_landmark_correction.xml.in`.
+  engineering frame in the robot frame map). See the
+  [camera template](../pi/navigatr/config/shared/robots/gatr2_front_camera.xml.in).
+  Omitting Calibration supports 2D detection and inspection without metric pose.
 - Output: one `sensor.camera_frame` (`CameraFramePayload`) under the id of
   the optional `<Output id="frame"/>` child (default `frame`), published
   per new device frame and stamped at exposure (host clock). Any
   `CameraDevice`, including test doubles, becomes an executable resource
   through `cameraResource(device, output_id)`.
 - Startup fails when calibration resolution and capture resolution
-  disagree. On builds without a capture backend the device is fully
-  validated but dead, with a build warning; the output is Unavailable, the
-  camera_frame sensor forwards that, and the robot keeps running. The
-  libcamera capture backend lands with camera bring-up on the Pi.
+  disagree. Selecting this resource without compiling the libcamera backend
+  fails configuration. With the backend built, a camera open failure produces
+  a warning and an unavailable device so the rest of the runtime can run.
+  Capture receives frames asynchronously and resource polling forwards the
+  newest completed frame. See [Pi camera setup](../pi/navigatr/docs/pi_camera_setup.md).
 
 ## apriltag_detector
 
 - Contract: `TagDetector` (frame in, detector-native detections out).
 - Schema: one or more `<Family name="tag36h11" detection_size_m="0.06"/>`.
-- The adapter around the upstream AprilRobotics library is not built into
-  the binary yet; the type registers and validates so configurations hold,
-  and selecting it fails loudly at build instead of detecting nothing.
-  Perception owns the single fixed conversion from detector-native axes to
-  engineering axes; no native axis escapes it.
+- The bundled AprilRobotics adapter decodes configured families, including
+  `tagCircle21h7`, and solves metric poses when calibration and corner size are
+  available. Detector settings are supplied in a `Detector` child (including
+  `quad_decimate`, `nthreads`, and `refine_edges`). Without intrinsics it still
+  publishes IDs/corners for inspection. Perception converts detector-native
+  axes to engineering camera/tag axes before association.
 
 ## target_set
 
@@ -201,8 +206,8 @@ executable configuration and there is no monolithic robot config header.
   `PreferredCamera` and `AllowedTagMount` preferences that never force
   association). Robot-relative targets carry a delta snapshotted once per
   new command sequence. Validated at build against the field map and the
-  robot frame map. See `config/*_apriltag_landmark_correction.xml.in` and
-  `docs/navigatr.md` for the runtime semantics in `target_tracker`.
+  robot frame map. The `configured_targets` implementation consumes this
+  resource; see [target lifecycle and output](../pi/navigatr/docs/landmarks.md).
 
 ## wheel_geometry
 
@@ -219,20 +224,23 @@ executable configuration and there is no monolithic robot config header.
 ```
 
 - Measured tracking-wheel geometry owned by the robot description. Every
-  attribute is required and calibration gated; radius is the loaded
-  effective rolling radius. `tracking_wheel_odometry` consumes it through
+  numeric geometry attribute is required and validated; radius is the loaded
+  effective rolling radius. `calibration_status` is an optional reader note.
+  `tracking_wheel_motion` consumes it through
   `<Wheels resource_id=...><Use wheel_id=.../></Wheels>`, so two- and
   three-wheel pipelines differ only through wheel references. The inline
-  `<TrackingWheel>` form remains for self-contained bring-up documents;
-  the two forms are mutually exclusive within one preprocessor.
+  `<TrackingWheel>` form supports self-contained configurations;
+  the two forms are mutually exclusive within one observation function.
 - Thread safety: immutable after construction.
 
-## SpiBus contract
+## synthetic_rig
 
-`SpiBus`/`SpiDevice` are typed contracts ready for direct-wired SPI sensors:
-bus wiring belongs to the bus resource, per-device chip select, frequency,
-mode, and word size belong to the device configuration, and every transfer is
-one atomic transaction (lock, apply settings, assert chip select, move bytes,
-release, unlock), so devices with different settings share one controller.
-A fake bus exercises the contract in tests; the Linux spidev implementation
-lands with the first SPI-wired sensor.
+- A hardware-free resource producing raw encoder counts, accumulated gyro data,
+  optional attitude, and rendered AprilTag frames through named outputs.
+- Binds a field map and wheel geometry; configuration supplies the trajectory,
+  camera, gyro bias, timing, and optional landmark displacement.
+- The demo drives the same channel sensors, observation models, detector, and
+  association code used by other profiles. Its geometry and measurements are
+  synthetic, not calibration for a physical robot.
+- See the [demo robot fragment](../pi/navigatr/config/shared/robots/synthetic_rig.xml)
+  and [demo profiles](../pi/navigatr/config/demo/).

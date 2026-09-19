@@ -15,7 +15,7 @@
 // observations, so one unlucky first pairing cannot anchor it. A window
 // minimum can still revise downward as better pairings arrive; consumers
 // of mapped times that require monotonicity handle that revision
-// explicitly (pose history clamps to its newest entry).
+// explicitly (pose history rejects out-of-order timestamps).
 //
 // One mapper instance serves one device clock. A device reboot restarts its
 // clock; the owner must reset the mapper when it detects the discontinuity

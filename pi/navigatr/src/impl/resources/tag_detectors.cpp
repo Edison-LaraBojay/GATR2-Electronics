@@ -28,14 +28,6 @@ std::string supportedList() {
 
 } // namespace
 
-std::vector<std::string> AprilTagDetector::supportedFamilies() {
-    std::vector<std::string> out;
-    for (int i = 0; nav_apriltag_supported_family(i) != nullptr; ++i) {
-        out.emplace_back(nav_apriltag_supported_family(i));
-    }
-    return out;
-}
-
 bool AprilTagDetector::familyGeometry(const std::string& family, int& width_at_border,
                                       int& total_width, std::string& err) {
     if (nav_apriltag_family_geometry(family.c_str(), &width_at_border, &total_width) != 0) {

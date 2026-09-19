@@ -12,7 +12,7 @@
 //           <Encoder sensor_id="tracking_encoder_a"/>
 //           <Encoder sensor_id="tracking_encoder_b"/>
 //           <Gyro sensor_id="robot_imu"/>
-//           <BiasCal artifact_id="imu_orientation"/>
+//           <BiasCal function_id="tracking_motion"/>
 //       </Health>
 //       <FieldObject object_id="center_goal" wire_id="1"/>
 //       <Landmarks association_id="landmarks"/>   optional wire entries

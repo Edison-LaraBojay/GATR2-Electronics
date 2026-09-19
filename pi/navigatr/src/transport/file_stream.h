@@ -1,6 +1,5 @@
 // file_stream.h
-// Raw frame bytes to and from disk. The source replays a capture through the
-// real parsers; the sink records a live link for later replay.
+// Raw frame bytes from disk. Replays a capture through the real parsers.
 
 #pragma once
 #include <cstdio>
@@ -23,25 +22,9 @@ public:
     // serial-sized bites instead of one giant read.
     int read(uint8_t* dst, int cap) override;
 
-    void setChunk(int bytes) { chunk_ = bytes; }
-
 private:
     std::FILE* f_     = nullptr;
     int        chunk_ = 64;
-};
-
-class FileByteSink : public ByteSink
-{
-public:
-    ~FileByteSink() override;
-
-    bool open(const std::string& path, std::string& err);
-    bool isOpen() const { return f_ != nullptr; }
-
-    bool write(const uint8_t* src, int len) override;
-
-private:
-    std::FILE* f_ = nullptr;
 };
 
 } // namespace navigatr

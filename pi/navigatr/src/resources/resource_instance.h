@@ -55,8 +55,6 @@ public:
         return std::static_pointer_cast<Contract>(object_);
     }
 
-    const char* contractName() const { return contract_name_; }
-
     // Runtime half: declared outputs polled every cycle and the once-only
     // reset. Absent for configuration-only resources.
     void setExecutable(ResourceExecutable executable) {

@@ -3,10 +3,9 @@
 // counts from Pico boot, host time from process start; they drift and must
 // never be differenced against each other. Debug builds assert on it.
 //
-// Camera observations will be stamped on the Pi clock, so fusing them with
-// device-stamped wheel data requires an explicit conversion service between
-// domains. That service does not exist yet; nothing may quietly mix domains
-// in the meantime.
+// Camera observations use the host clock. Localization maps device-stamped
+// wheel measurements onto that clock through DeviceToHostClock before
+// publishing pose history for camera exposure-time lookups.
 
 #pragma once
 #include <cassert>

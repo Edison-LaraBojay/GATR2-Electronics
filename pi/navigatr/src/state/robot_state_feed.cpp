@@ -77,11 +77,6 @@ AttitudeLookupResult RobotStateFeed::attitudeAt(MonotonicTime t) const {
     return history_.attitudeAt(t);
 }
 
-std::vector<PoseHistoryEntry> RobotStateFeed::recentHistory(std::size_t max_entries) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return history_.recent(max_entries);
-}
-
 std::size_t RobotStateFeed::historySize() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return history_.size();

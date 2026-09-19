@@ -49,21 +49,6 @@ inline Transform2D inverse(const Transform2D& T_a_b) {
     return out;
 }
 
-// A point fixed in frame b, expressed in frame a.
-inline void transformPoint(const Transform2D& T_a_b, double x_b, double y_b, double& x_a,
-                           double& y_a) {
-    const double c = std::cos(T_a_b.heading_rad);
-    const double s = std::sin(T_a_b.heading_rad);
-    x_a            = T_a_b.x_m + c * x_b - s * y_b;
-    y_a            = T_a_b.y_m + s * x_b + c * y_b;
-}
-
-// A pose known in frame b, expressed in frame a. Same math as compose,
-// named for reading clarity at call sites.
-inline Pose2D transformPose(const Transform2D& T_a_b, const Pose2D& pose_b) {
-    return compose(T_a_b, pose_b);
-}
-
 // A pose plus the coordinate frame it lives in.
 struct FramedPose2D {
     FrameId       frame;

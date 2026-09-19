@@ -11,13 +11,12 @@ only attitude source in the repository today.
 
 ## What the live path has
 
-`common/frames.h` (shared wire contract, unchanged by this work) carries in the
-Pico telemetry frame:
+`common/frames.h` defines these optional Pico sensor-frame fields:
 
 | Field | Meaning | Used for |
 |---|---|---|
 | `gyro_z` | mdeg/s, raw, bias not removed | planar heading increment (`imu_heading_increment`, `HeadingConstraint`) |
-| `accel[2]` | mg, two axes | decoded by `pico_telemetry`, not exposed as an output |
+| `accel[2]` | mg, two axes | supported by the decoder, not emitted by current firmware or exposed as a Pi resource output |
 
 The Pico reads only the gyro Z axis of the ASM330LHHG1 (`pico/src/imu.cpp`;
 the accelerometer is switched off). A yaw-rate-only path cannot produce roll or
@@ -30,7 +29,7 @@ evidence.
 ## What is missing, precisely
 
 To get live tilt through the existing contracts, the firmware and the shared
-wire protocol would need, as a separate change outside this pass:
+wire protocol need:
 
 1. A new telemetry report (new frame type or new fields, versioned) carrying
    either the six raw axes at the sample rate (three gyro, three accel, with

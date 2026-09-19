@@ -7,8 +7,8 @@ sensor names its input as `<Source resource_id="..." output_id="..."/>`,
 binds it at build against the resource's declared outputs with the payload
 type it expects (a wrong resource, output, or payload fails the build), and
 at runtime reads that record out of the read-only `ResourceMap`. The sensor
-stage polls sensors and does the record bookkeeping itself: receivedAt,
-sequence, and epoch are assigned by the stage, a new publication replaces
+stage polls sensors and does the record bookkeeping itself: sequence and epoch
+are assigned by the stage, upstream receipt time is preserved, a publication replaces
 the stored latest sample, no publication and fault states never erase it.
 The registry and code are the source of truth; this file catalogs them.
 
@@ -40,7 +40,7 @@ The registry and code are the source of truth; this file catalogs them.
   instead of staying Valid forever. History is retained in both cases.
 - Calibration ownership: counts per revolution and electrical inversion live
   here. Wheel radius, mounting position, and measurement direction are
-  preprocessing configuration, never sensor configuration.
+  robot-observation configuration, never channel-sensor configuration.
 
 ## pico_imu_channel
 
@@ -62,8 +62,9 @@ The registry and code are the source of truth; this file catalogs them.
   resource's packet-by-packet accumulated angle is converted and forwarded
   as `accumulated_angle_rad` with its epoch, so batching loses no rotation.
 - Calibration ownership: electrical sign and wire-unit conversion here;
-  bias estimation belongs to `imu_normalization` or a HeadingConstraint,
-  which own their own `bias_samples` windows. Nothing is integrated twice.
+  bias estimation belongs to `imu_heading_increment` or the
+  `tracking_wheel_motion` HeadingConstraint, which own their `bias_samples`
+  windows. Nothing is integrated twice.
 
 ## camera_frame
 
@@ -90,6 +91,18 @@ The registry and code are the source of truth; this file catalogs them.
 - Calibration ownership: intrinsics and the extrinsic frame id live on
   the camera device resource; the mounting transform lives in the robot
   frame map under that frame id.
+
+## attitude_channel
+
+- Input/output: `AttitudeSample`, carrying an orientation quaternion, reference,
+  quality, and epoch. A Source binds a resource and named output as above.
+- Optional `<Mounting roll_deg="..." pitch_deg="..." yaw_deg="..."/>` describes
+  the sensor mounting; the processor converts orientation to the robot body.
+- Rejects nonfinite or zero-length quaternions, normalizes valid ones, and
+  preserves measurement and upstream receipt times. Optional Freshness uses
+  `stale_after_ms` (default 250; zero disables the timeout).
+- `attitude_reference` is the downstream localization observation. The synthetic
+  rig provides this payload; current Pico firmware has no attitude report.
 
 ## Adding a sensor type
 

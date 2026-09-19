@@ -30,7 +30,7 @@ public:
     const char* name() const;
 
     // XPath-like location for error messages, e.g.
-    // /System/Pipeline/Preprocessing/Preprocessor[@id='tracking_motion']
+    // /System/Pipeline/Localization/Observation[@id='tracking_motion']
     std::string path() const;
 
     bool        hasAttr(const char* key) const;

@@ -8,9 +8,9 @@
 //       <ConfigurationName>Override three-wheel diagnostic</ConfigurationName>
 //       <Loop rate_hz="100"/>
 //       <Inspection enabled="true" port="8765"/>          optional
-//       <Robot file="../../shared/robots/gatr2_as5047_bno08x.xml"/>
+//       <Robot file="../../shared/robots/gatr2_as5047_imu.xml"/>
 //       <Field file="../field.xml"/>
-//       <Pipeline file="../../shared/pipelines/three_wheel_bno08x_camera_diagnostic.xml"/>
+//       <Pipeline file="../../shared/pipelines/three_wheel_imu_camera_diagnostic.xml"/>
 //   </Configuration>
 //
 // Include positions: System/Robot Resources and Sensors; individual Resource

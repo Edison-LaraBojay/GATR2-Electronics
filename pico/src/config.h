@@ -11,13 +11,13 @@
 namespace cfg
 {
 
-// Encoder channels, A and B per ABI encoder.
+// Encoder channels, A and B quadrature inputs.
 // enc0 GP0/GP1 (pins 1/2), enc1 GP2/GP3 (pins 4/5), enc2 GP4/GP5 (pins 6/7).
 constexpr uint8_t kEncPinA[3] = {0, 2, 4};
 constexpr uint8_t kEncPinB[3] = {1, 3, 5};
 
 // IMU on SPI1. MISO GP8 (pin 11), CS GP9 (pin 12), SCK GP10 (pin 14),
-// MOSI GP11 (pin 15), INT GP22 (pin 29).
+// MOSI GP11 (pin 15), INT GP22 (pin 29, reserved; the driver polls status).
 constexpr uint8_t kImuMisoPin = 8;
 constexpr uint8_t kImuCsPin   = 9;
 constexpr uint8_t kImuSckPin  = 10;

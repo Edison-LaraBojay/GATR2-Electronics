@@ -1,7 +1,7 @@
 # Wire interface specification
 
 This is the datasheet for the byte-level contract between the three devices.
-It describes the framing, the two frame types, and the rules every encoder and
+It describes the framing, the three frame types, and the rules every encoder and
 parser must obey. The single source of truth in code is `common/frames.h`. When
 this document and the header disagree, the header wins and this document is the
 bug.
@@ -21,9 +21,10 @@ sensors --> Pico --> Pi --> brain --> motors
 ```
 
 Sensor frames travel Pico to Pi. Pose frames travel Pi to brain. Command frames
-travel brain to Pi. Every link is one way. A receiver never acknowledges, never
-requests retransmission, and never blocks waiting on its upstream. A command
-that is lost is simply resent by the brain on its own schedule.
+travel brain to Pi. The framing has no acknowledgment or retransmission message.
+The codec supports these directions, but the Pi HAT's configured RS-485 enable
+currently remains high: physical receive/turnaround is not implemented. See
+[hardware](hardware.md) for the distinction between framing and link operation.
 
 ## Global rules
 
@@ -50,7 +51,7 @@ low to high, then interprets the integer in the field's unit.
 | Heading, bearing | cdeg | centidegrees, 1/100 of a degree |
 | Angular rate (gyro) | mdeg/s | millidegrees per second |
 | Acceleration | mg | milli-g, 1/1000 of standard gravity |
-| Encoder count | counts | raw quadrature counts, 4000 per revolution |
+| Encoder count | counts | raw quadrature counts; counts per revolution is sensor calibration |
 
 ## Framing
 
@@ -128,10 +129,10 @@ this cycle appear in the payload.
 `seq` lets the receiver detect dropped frames (a gap in the count) and duplicates.
 It counts frames, not time.
 
-`stamp_ms` is the Pico clock, and the Pico clock is the single time reference for
-all fusion. The sample is timestamped when it is read, never on arrival at the Pi.
-Only the difference between two stamps matters, so the zero point (Pico boot) is
-irrelevant. The u32 field wraps after about 49.7 days, far beyond any match.
+`stamp_ms` is the Pico sample clock. The Pi separately records host receipt time
+and maps accepted localization intervals into the host clock for camera/history
+lookup. These time domains must not be compared directly. The u32 field wraps
+after about 49.7 days; device restarts also require source-epoch handling.
 
 ### Sensor mask and payload
 
@@ -143,9 +144,9 @@ and for each set bit copies that sensor's width from the width table.
 
 | Bit | Constant | Sensor | Width (bytes) | Type | Unit |
 |-----|----------|--------|---------------|------|------|
-| 0 | `kSensorEnc0` | Parallel tracking wheel | 4 | i32 | counts |
-| 1 | `kSensorEnc1` | Perpendicular tracking wheel | 4 | i32 | counts |
-| 2 | `kSensorEnc2` | Spare or second parallel wheel | 4 | i32 | counts |
+| 0 | `kSensorEnc0` | Encoder channel 0 | 4 | i32 | counts |
+| 1 | `kSensorEnc1` | Encoder channel 1 | 4 | i32 | counts |
+| 2 | `kSensorEnc2` | Encoder channel 2 | 4 | i32 | counts |
 | 3 | `kSensorGyroZ` | Yaw rate | 4 | i32 | mdeg/s |
 | 4 | `kSensorAccelXY` | Acceleration x and y (reserved) | 8 | 2 x i32 | mg |
 
@@ -154,12 +155,13 @@ needs; the parser walks the payload by width and never interprets sensor meaning
 `kSensorBitCount` (currently 5) equals the number of width entries, and a test
 guards that they stay in step.
 
-Gyro rate is raw, with bias not removed. Bias removal happens in fusion on the Pi,
-never on the Pico.
+Channel orientation and placement belong to the Pi's configured wheel geometry.
+Gyro rate is raw, with bias not removed. Bias removal happens in the Pi's
+localization observation model, not on the Pico.
 
-Adding a sensor is additive: define a new bit, add its width entry, and write the
-firmware that sets the bit and appends the bytes. Existing parsers keep working
-because they walk the mask by width and ignore bits they do not know.
+Adding a sensor bit requires updating the shared width table, encoder/decoder,
+firmware producer, and consumers together. The codec rejects unknown mask bits:
+an old parser cannot skip a payload whose width it does not know.
 
 ### Sensor frame example
 
@@ -184,9 +186,11 @@ The trailing `CD` is the XOR of the preceding 22 bytes.
 
 ## Pose frame (type 0x02)
 
-Pi to brain. Carries the fused pose, the absolute pose of the one world object
-the brain requested, and any live landmark observations. Pose is relative to
-the zero point. There is no z.
+Pi to brain. Carries the estimated robot field pose, one requested object/target
+pose, and optional landmark observations. There is no z. In the current publisher,
+a matching latched target supplies a desired robot field pose; otherwise a
+configured FieldObject supplies its retained physical pose. Both use full field
+heading. See [landmarks and targets](../pi/navigatr/docs/landmarks.md).
 
 ```
 +------+------+------+-----+----------+-------+-------+--------------+--------+
@@ -206,22 +210,23 @@ the zero point. There is no z.
 | 2 | type | u8 | 1 | `0x02` |
 | 3 | seq | u8 | 1 | Sequence counter, increments per frame, wraps 255 to 0 |
 | 4 | stamp_ms | u32 | 4 | Timestamp of the fused estimate |
-| 8 | x_mm | i32 | 4 | Position x, relative to the zero point |
-| 12 | y_mm | i32 | 4 | Position y, relative to the zero point |
+| 8 | x_mm | i32 | 4 | Robot origin x in the field frame |
+| 12 | y_mm | i32 | 4 | Robot origin y in the field frame |
 | 16 | heading_cdeg | i32 | 4 | Heading in centidegrees |
 | 20 | status | u16 | 2 | Health and validity bits, see the status table |
-| 22 | object_id | u8 | 1 | Id of the requested world object |
-| 23 | obj_x_mm | i32 | 4 | Object absolute x |
-| 27 | obj_y_mm | i32 | 4 | Object absolute y |
-| 31 | obj_heading_cdeg | i32 | 4 | Object absolute heading in centidegrees |
+| 22 | object_id | u8 | 1 | Requested wire ID, interpreted by configured target/object mappings |
+| 23 | obj_x_mm | i32 | 4 | Selected target/object absolute field x |
+| 27 | obj_y_mm | i32 | 4 | Selected target/object absolute field y |
+| 31 | obj_heading_cdeg | i32 | 4 | Selected target/object full field heading in centidegrees |
 | 35 | n_landmarks | u8 | 1 | Number of landmark entries that follow, 0 to 8 |
 | 36 | landmarks | varies | 8 each | `n_landmarks` entries, see the entry layout |
 | last | xor | u8 | 1 | Frame checksum |
 
 The object fields are always present so the frame layout is stable. The brain
-reads them only when `kStatusObjValid` is set. An object can be valid without
-being currently observed: a map or last-seen estimate keeps `kStatusObjValid`
-set while `kStatusObjObserved` is clear.
+reads them only when `kStatusObjValid` is set. A nominal or retained object can
+remain valid without a new observation. For field-object output, ObjObserved
+reflects the entry's latest field-invocation flag; for target output it marks a
+vision-locked target, including subsequent publications of that latched target.
 
 ### Status word
 
@@ -231,14 +236,14 @@ independent.
 | Bit | Constant | Set when |
 |-----|----------|----------|
 | 0 | `kStatusPoseValid` | The pose estimate is valid |
-| 1 | `kStatusEncHealthy` | Encoders are reporting and sane |
-| 2 | `kStatusGyroHealthy` | Gyro is reporting and sane |
-| 3 | `kStatusVisionAlive` | Vision is producing detections |
-| 4 | `kStatusBiasCal` | Init gyro bias calibration completed cleanly |
-| 5 | `kStatusLocInit` | Localization was initialized from a commanded pose |
+| 1 | `kStatusEncHealthy` | All configured encoder health sources are valid and fresh |
+| 2 | `kStatusGyroHealthy` | The configured gyro health source is valid and fresh |
+| 3 | `kStatusVisionAlive` | The current field snapshot's observation map is nonempty |
+| 4 | `kStatusBiasCal` | The configured bias-calibration observation function has reported ready |
+| 5 | `kStatusLocInit` | Localization has an initial field placement |
 | 6 | `kStatusObjRequested` | The brain has an active object request |
 | 7 | `kStatusObjValid` | Object fields hold a usable estimate |
-| 8 | `kStatusObjObserved` | The object was seen this cycle, not just mapped |
+| 8 | `kStatusObjObserved` | Output is a vision-locked target, or a field entry marked observed |
 
 ### Landmark entry
 
@@ -252,12 +257,12 @@ servoing directly onto a target. `n_landmarks` is capped at `kMaxLandmarks`
 | 1 | dx_mm | i16 | 2 | Relative x to the landmark |
 | 3 | dy_mm | i16 | 2 | Relative y to the landmark |
 | 5 | bearing_cdeg | i16 | 2 | Bearing to the landmark center |
-| 7 | quality | u8 | 1 | 0 to 255, derived from range and viewing angle |
+| 7 | quality | u8 | 1 | Producer quality scaled to 0 through 255 |
 
-Total entry size is 8 bytes. Bearing to the landmark center is more reliable than
-landmark orientation, because a planar tag pose is ambiguous. Consumers prefer
-bearing. `quality` maps to measurement noise inside fusion; it is not a hard
-threshold on the wire.
+Total entry size is 8 bytes. The codec does not define a probability or noise
+model for quality. The publisher needs a compatible `LandmarkAssociationSet`
+output to populate this list; the tag-mount association's object-pose evidence
+uses a different payload and does not populate it automatically.
 
 ### Pose frame example
 
@@ -310,7 +315,7 @@ command does not use are zero on the wire.
 | 5 | x_mm | i32 | 4 | Expected pose x, `kCmdInitPose` only |
 | 9 | y_mm | i32 | 4 | Expected pose y, `kCmdInitPose` only |
 | 13 | heading_cdeg | i32 | 4 | Expected heading, `kCmdInitPose` only |
-| 17 | mode | u8 | 1 | Localization configuration selector |
+| 17 | mode | u8 | 1 | Mode field carried by the protocol; current localization does not switch algorithms from it |
 | 18 | object_id | u8 | 1 | Requested world object, `kCmdSelectObject` only |
 | 19 | flags | u8 | 1 | Command flag bits |
 | 20 | xor | u8 | 1 | Frame checksum |
@@ -319,7 +324,7 @@ command does not use are zero on the wire.
 
 | Code | Constant | Meaning |
 |------|----------|---------|
-| 0x01 | `kCmdInitPose` | Reset localization to the given field pose |
+| 0x01 | `kCmdInitPose` | Re-anchor the robot at the given field pose, preserving local odometry |
 | 0x02 | `kCmdSelectObject` | Request `object_id`, or clear the request when the flag is off |
 | 0x03 | `kCmdSetStream` | Turn pose streaming on or off |
 
@@ -372,8 +377,6 @@ mismatches.
 
 ## Language parity
 
-All three devices are C++ and share `common/frames.h` and the codec directly,
-so there is one implementation of the wire format in production code. Python
-appears only in host-side tooling (bench scripts, log analysis); any Python
-that speaks frames is checked against the C++ codec with shared byte vectors,
-never trusted on its own.
+The Pico firmware and Pi runtime share `common/frames.h` and the C++ codec.
+The repository does not contain a production Brain consumer. The RS-485 bench
+programs exercise raw text transfer and are not implementations of these frames.

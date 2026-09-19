@@ -32,12 +32,13 @@ one program with independently scheduled localization and landmark-estimation
 pipelines, standard stage inputs and outputs, and timestamped pose history.
 Neither pipeline requires a particular sensor family or relative execution rate.
 
-Robot position and landmark position use configured field coordinates. The
-landmark report identifies one requested reference and its rotation away from
-nominal field orientation, accounting for declared object symmetry. Static field
-definitions remain separate from the recommended cache of accepted measured
-object estimates. Observations update that cache; reporting selects the requested
-reference, and selection prioritizes processing work.
+Robot position and field-object positions use configured field coordinates.
+Field estimation starts with nominal landmark poses and can update them from
+accepted observations. The publisher reports the requested configured object
+or a latched target from target resolution. Object headings on the wire are
+full field headings; the inspection viewer also displays their difference from
+nominal orientation. See the landmark documentation for selection and retention
+behavior.
 
 - [Architecture and scheduling](pi/navigatr/docs/architecture.md)
 - [Coordinates and heading](pi/navigatr/docs/coordinates.md)
@@ -54,7 +55,6 @@ has the run and SSH port-forward commands.
 - [`pcb/`](pcb/) - KiCad boards, symbols, footprints, and hardware revisions.
 - [`pico/`](pico/) - RP2040 acquisition firmware.
 - [`pi/navigatr/`](pi/navigatr/) - Pi sensing and estimation runtime.
-- [`brain/`](brain/) - V5-side integration surface.
 - [`common/`](common/) - shared framing and wire codecs.
 - [`bench/`](bench/) - host and hardware bring-up utilities.
 - [`docs/`](docs/) - supporting hardware, interface, and setup material.

@@ -16,8 +16,8 @@
 //   </Sensor>
 //
 // Ownership per the architecture: counts per revolution and electrical sign
-// are sensor calibration; wheel radius and geometry are preprocessing
-// concerns and do not appear here. The encoder publishes an accumulated
+// are sensor calibration; wheel radius and geometry belong to the tracking
+// motion observation model. The encoder publishes an accumulated
 // unwrapped shaft angle in radians. The IMU sensor converts wire units and
 // forwards the resource's accumulated angle; bias removal stays downstream.
 //

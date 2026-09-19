@@ -1,9 +1,9 @@
 // function_registry.h
 // The one registry of registered construction functions, across every
-// category: resources, sensors, preprocessors, pipeline slots. Keys are
-// opaque registered names (pico_encoder_channel, linux_serial_link, noop)
-// scoped by the exact function signature, so every category can register its
-// own noop while a duplicate within a category still fails, retrieval with
+// category: resources, sensors, robot observations, estimators, and pipeline
+// slots. Keys are opaque registered names (pico_encoder_channel,
+// linux_serial_link, noop) scoped by the exact function signature, so every
+// category can register its own noop while a duplicate within a category still fails, retrieval with
 // the wrong signature fails, and unknown keys fail.
 //
 // Registration happens through explicit register_* calls at startup; nothing
@@ -76,10 +76,6 @@ public:
             }
         }
         return false;
-    }
-
-    bool hasAnySignature(const FunctionKey& key) const {
-        return entries_.find(key.value) != entries_.end();
     }
 
     std::vector<std::string> keys() const {

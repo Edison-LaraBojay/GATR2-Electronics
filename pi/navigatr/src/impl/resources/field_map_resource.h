@@ -1,6 +1,6 @@
 // field_map_resource.h
 // Field landmark data as a typed shared resource. The core runtime never
-// reads it; world prediction, association, and target implementations
+// reads it; field estimation, association, and target implementations
 // reference it by resource_id.
 //
 //   <Resource id="game_field" type="field_map">

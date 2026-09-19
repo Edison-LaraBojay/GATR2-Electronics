@@ -79,8 +79,6 @@ public:
     static bool renderTag(const std::string& family, int id, std::vector<uint8_t>& cells,
                           int& total_width, std::string& err);
 
-    static std::vector<std::string> supportedFamilies();
-
 private:
     AprilTagDetector() = default;
 
