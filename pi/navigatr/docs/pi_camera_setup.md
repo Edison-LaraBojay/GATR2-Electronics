@@ -1,5 +1,10 @@
 # Raspberry Pi camera setup
 
+For the complete robot workflow, use [Set up and run Navigatr](setup.md).
+Its [camera calibration section](setup.md#bring-up-and-calibrate-the-camera)
+uses the included [OpenCV helper](../tools/calibrate_camera.py) to capture
+full-size images through inspection and export the camera XML calibration.
+
 How to build and run the `libcamera_camera` backend on the Pi, what it
 assumes about the camera stack, and what has not been checked on hardware.
 The backend lives in `src/impl/resources/libcamera_camera.cpp` and is

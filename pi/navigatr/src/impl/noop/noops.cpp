@@ -34,18 +34,6 @@ private:
     std::string type_ = "noop";
 };
 
-class NoopPerception : public Perception
-{
-public:
-    PerceptionOutput run(const PerceptionInput&) override { return PerceptionOutput{}; }
-};
-
-class NoopAssociation : public Association
-{
-public:
-    AssociationOutput run(const AssociationInput&) override { return AssociationOutput{}; }
-};
-
 class NoopFieldEstimation : public FieldEstimation
 {
 public:
@@ -81,16 +69,6 @@ std::unique_ptr<StateEstimator> makeNoopStateEstimator(const ConfigNode&,
                                                        StateEstimatorInitializationContext&,
                                                        std::string&) {
     return std::make_unique<NoopStateEstimator>();
-}
-
-std::unique_ptr<Perception> makeNoopPerception(const ConfigNode&,
-                                               SlotInitializationContext&, std::string&) {
-    return std::make_unique<NoopPerception>();
-}
-
-std::unique_ptr<Association> makeNoopAssociation(const ConfigNode&,
-                                                 SlotInitializationContext&, std::string&) {
-    return std::make_unique<NoopAssociation>();
 }
 
 std::unique_ptr<FieldEstimation> makeNoopFieldEstimation(const ConfigNode&,

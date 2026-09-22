@@ -288,15 +288,15 @@ std::string rigConfig(const RigOptions& options) {
             <History retention_s="5" capacity="1024" max_interpolation_gap_ms="100"/>
             <InitialPlacement x_m="1.2832" y_m="1.7832" heading_deg="0"/>
         </Localization>
-        <FieldEstimation type="landmark_field">
-            <FieldMap resource_id="field"/>
-            <Pipeline>
-                <ObservationExtraction type="apriltag_tag_observation">
+        <WorldEstimation>
+            <Estimator id="goals" type="apriltag">
+                <FieldMap resource_id="field"/>
+                <ObservationExtraction>
                     <Camera sensor_id="front_camera"/>
                     <Detector resource_id="tag_detector"/>
                     <Output observation_id="tag_observations"/>
                 </ObservationExtraction>
-                <Association type="tag_mount_association">
+                <Association>
                     <Observations observation_id="tag_observations"/>
                     <FieldMap resource_id="field"/>
                     <RobotFrames resource_id="robot_geometry"/>
@@ -308,9 +308,9 @@ std::string rigConfig(const RigOptions& options) {
                     <Output association_id="landmark_pose_observations"/>
                     <Trace association_id="tag_association_trace"/>
                 </Association>
-                <Estimator type="landmark_estimator" commit="always" blend="0.5"/>
-            </Pipeline>
-        </FieldEstimation>
+                <LandmarkEstimation commit="always" blend="0.5"/>
+            </Estimator>
+        </WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -591,7 +591,7 @@ TEST(Workers, StopAndResetWakeAWorkerWaitingForALongPeriod) {
             <Pipeline>
                 <CommandCollection type="noop"/>
                 <Localization><Estimator type="noop"/></Localization>
-                <FieldEstimation type="noop"/>
+                <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
                 <TargetResolution type="noop"/>
                 <Publishing type="noop"/>
             </Pipeline>
@@ -968,15 +968,15 @@ TEST(Workers, InlineStepStillSplitsDiagnosticsByWorker) {
     // estimation labels on one side, field estimation on the other
     EXPECT_EQ(s.diagnostics().functions.count("Localization/planar_motion_integrator"), 1u);
     EXPECT_EQ(s.diagnostics().functions.count("CommandCollection/noop"), 1u);
-    EXPECT_EQ(s.fieldDiagnostics().functions.count("FieldEstimation/landmark_field"), 1u);
+    EXPECT_EQ(s.fieldDiagnostics().functions.count("WorldEstimation/goals"), 1u);
     for (const auto& kv : s.diagnostics().functions) {
-        EXPECT_NE(kv.first.rfind("FieldEstimation/", 0), 0u) << kv.first;
+        EXPECT_NE(kv.first.rfind("WorldEstimation/", 0), 0u) << kv.first;
     }
     for (const auto& kv : s.fieldDiagnostics().functions) {
         EXPECT_NE(kv.first.rfind("Localization/", 0), 0u) << kv.first;
     }
     EXPECT_EQ(s.diagnostics().functions.at("Localization/planar_motion_integrator").runs, 30u);
-    EXPECT_EQ(s.fieldDiagnostics().functions.at("FieldEstimation/landmark_field").runs, 30u);
+    EXPECT_EQ(s.fieldDiagnostics().functions.at("WorldEstimation/goals").runs, 30u);
 
     // the published snapshots carry the same cycle
     EXPECT_EQ(s.fieldSnapshot()->invocation, 30u);

@@ -4,6 +4,7 @@
 #include "impl/localization/imu_heading_increment.h"
 #include "impl/localization/planar_motion_integrator.h"
 #include "impl/localization/tracking_wheel_motion.h"
+#include "impl/localization/weighted_planar_fusion.h"
 #include "impl/noop/noops.h"
 #include "runtime/register_all.h"
 
@@ -21,6 +22,8 @@ void register_localization(FunctionRegistry& functions) {
     registerOrDie<StateEstimatorMakeFunction>(functions, "noop", &makeNoopStateEstimator);
     registerOrDie<StateEstimatorMakeFunction>(functions, "planar_motion_integrator",
                                               &PlanarMotionIntegrator::create);
+    registerOrDie<StateEstimatorMakeFunction>(functions, "weighted_planar_fusion",
+                                              &WeightedPlanarFusion::create);
 }
 
 } // namespace navigatr

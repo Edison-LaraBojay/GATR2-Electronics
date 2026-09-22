@@ -48,100 +48,17 @@ PlanarMotionIntegrator::create(const ConfigNode& node, StateEstimatorInitializat
         }
     }
 
-    const ConfigNode attitude = node.child("Attitude");
-    if (attitude.valid()) {
-        estimator->attitude_ref_ = ObservationId{attitude.attr("observation_id")};
-        if (estimator->attitude_ref_.empty()) {
-            err = attitude.path() + ": Attitude needs observation_id";
-            return nullptr;
-        }
-        const std::type_index attitude_type(typeid(AttitudeObservation));
-        if (!context.requireObservation(estimator->attitude_ref_, &attitude_type,
-                                        attitude.path(), err)) {
-            return nullptr;
-        }
-        if (!attitude.getInt("max_age_ms", 200, estimator->attitude_max_age_ms_, err)) {
-            return nullptr;
-        }
-        if (estimator->attitude_max_age_ms_ <= 0) {
-            err = attitude.path() + ": max_age_ms must be positive";
-            return nullptr;
-        }
+    if (!estimator->attitude_.configure(node, context, err)) {
+        return nullptr;
     }
     return estimator;
 }
 
 void PlanarMotionIntegrator::reset() {
-    last_placement_origin_.clear();
-    last_placement_sequence_ = 0;
-    attitude_                = RetainedAttitude{};
+    placement_.reset();
+    attitude_.reset();
     clock_.reset();
     motion_clock_.clear();
-}
-
-void PlanarMotionIntegrator::applyAttitude(StateEstimatorOutput& out, const StateEstimatorInput& in,
-                                           bool clock_valid) {
-    RobotState& r = out.robot;
-    if (!attitude_ref_.empty()) {
-        const auto it = in.observations.find(attitude_ref_);
-        if (it != in.observations.end()) {
-            const AttitudeObservation* obs = it->second.payload.get<AttitudeObservation>();
-            if (obs != nullptr && isUnit(obs->q_reference_body, 1e-3) &&
-                std::isfinite(obs->quality) && obs->measuredAt.isSet()) {
-                out.accepted.push_back(attitude_ref_);
-                attitude_.valid       = true;
-                attitude_.observation = *obs;
-                attitude_.hostAt      = MonotonicTime{};
-                if (obs->measuredAt.domain == ClockDomain::kHost) {
-                    attitude_.hostAt = obs->measuredAt;
-                } else if (obs->measuredAt.domain == ClockDomain::kDevice && clock_valid &&
-                           !motion_clock_.empty() && obs->source.clock == motion_clock_) {
-                    attitude_.hostAt = clock_.toHost(obs->measuredAt);
-                }
-            } else {
-                attitude_ = RetainedAttitude{};
-                out.rejected.push_back(attitude_ref_);
-                out.diagnostic = "invalid attitude observation";
-            }
-        } else if (attitude_.valid && !attitude_.hostAt.isSet() &&
-                   attitude_.observation.measuredAt.domain == ClockDomain::kDevice &&
-                   !motion_clock_.empty() &&
-                   attitude_.observation.source.clock == motion_clock_ &&
-                   clock_valid) {
-            attitude_.hostAt = clock_.toHost(attitude_.observation.measuredAt);
-        }
-    }
-
-    const double heading = r.odom_pose.heading_rad;
-    if (attitude_.valid && attitude_.hostAt.isSet() && in.context.now.isSet() &&
-        sameDomain(in.context.now, attitude_.hostAt) &&
-        (in.context.now - attitude_.hostAt) >= 0 &&
-        (in.context.now - attitude_.hostAt) <= attitude_max_age_ms_) {
-        // measured tilt under the planar heading: the attitude source's own
-        // yaw is never applied on top of the localization heading
-        double     yaw = 0.0;
-        Quaternion tilt;
-        splitYawAndTilt(attitude_.observation.q_reference_body, yaw, tilt);
-        Attitude a;
-        a.valid            = true;
-        a.q_reference_body = multiply(yawQuaternion(heading), tilt);
-        a.reference        = "odometry";
-        a.measuredAt       = attitude_.hostAt;
-        a.measuredAtSource = attitude_.observation.measuredAt;
-        a.source           = attitude_.observation.source.source;
-        a.epoch            = attitude_.observation.source.epoch;
-        a.quality          = attitude_.observation.quality;
-        a.assumed_level    = false;
-        r.attitude         = a;
-    } else {
-        Attitude level = assumedLevelAttitude(heading);
-        if (attitude_.valid) {
-            level.source           = attitude_.observation.source.source;
-            level.measuredAt       = attitude_.hostAt;
-            level.measuredAtSource = attitude_.observation.measuredAt;
-        }
-        r.attitude = level;
-    }
 }
 
 StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) {
@@ -150,7 +67,7 @@ StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) 
     RobotState& r = out.robot;
     for (const auto& observation : in.observations) {
         if (observation.first != motion_ref_ && observation.first != heading_ref_ &&
-            observation.first != attitude_ref_) {
+            observation.first != attitude_.ref()) {
             out.rejected.push_back(observation.first);
             out.diagnostic = "observation not consumed by this estimator";
         }
@@ -159,30 +76,24 @@ StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) 
     // A placement request re-anchors the odometry frame in the field frame.
     // The continuous odometry pose is untouched, so anything latched in the
     // odometry frame keeps its physical meaning.
-    const PlacementRequest& placement = in.requests.placement;
-    if (placement.requested &&
-        (placement.origin != last_placement_origin_ ||
-         placement.sequence != last_placement_sequence_)) {
-        last_placement_origin_   = placement.origin;
-        last_placement_sequence_ = placement.sequence;
-        r.field_from_odom        = compose(placement.pose, inverse(r.odom_pose));
-        r.anchor_revision += 1;
-        r.valid       = true;
-        r.initialized = true;
-    }
+    placement_.apply(r, in.requests.placement);
+
+    const auto applyAttitude = [&](bool clock_valid) {
+        attitude_.apply(out, in, clock_, motion_clock_, clock_valid);
+    };
 
     const auto motion_it = in.observations.find(motion_ref_);
     if (motion_it == in.observations.end()) {
         out.status       = FunctionStatus::kNoData;   // pose and effective time hold
         out.clock_mapped = clock_.valid();
-        applyAttitude(out, in, clock_.valid());
+        applyAttitude(clock_.valid());
         return out;
     }
     const BodyMotionIncrement* motion = motion_it->second.payload.get<BodyMotionIncrement>();
     if (motion == nullptr) {
         out.rejected.push_back(motion_ref_);
         out.status = FunctionStatus::kFault;
-        applyAttitude(out, in, clock_.valid());
+        applyAttitude(clock_.valid());
         return out;
     }
 
@@ -198,12 +109,12 @@ StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) 
         out.rejected.push_back(motion_ref_);
         out.status     = FunctionStatus::kFault;
         out.diagnostic = "motion increment without a positive interval";
-        applyAttitude(out, in, clock_.valid());
+        applyAttitude(clock_.valid());
         return out;
     }
 
     // A device clock domain alone does not identify a clock. An attitude
-    // from another device must never borrow the wheel device's offset.
+    // from another device must never borrow the wheel device offset.
     std::string source_clock;
     for (const auto& source : motion->sources) {
         if (stamp.domain != ClockDomain::kDevice) break;
@@ -212,14 +123,14 @@ StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) 
             out.rejected.push_back(motion_ref_);
             out.status = FunctionStatus::kFault;
             out.diagnostic = "motion observation combines different source clocks";
-            applyAttitude(out, in, clock_.valid());
+            applyAttitude(clock_.valid());
             return out;
         }
         source_clock = source.clock;
     }
     if (stamp.domain == ClockDomain::kDevice && source_clock != motion_clock_) {
         clock_.reset();
-        attitude_ = RetainedAttitude{};
+        attitude_.forget();
         motion_clock_ = source_clock;
     }
 
@@ -231,7 +142,7 @@ StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) 
             if (heading == nullptr || !std::isfinite(heading->dtheta_rad)) {
                 out.rejected.push_back(heading_ref_);
                 out.status = FunctionStatus::kFault;
-                applyAttitude(out, in, clock_.valid());
+                applyAttitude(clock_.valid());
                 return out;
             }
             bool independent = true;
@@ -270,7 +181,7 @@ StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) 
     if (!have_rotation) {
         out.status     = FunctionStatus::kNoData;
         out.diagnostic = "motion increment without observed rotation and no aligned heading";
-        applyAttitude(out, in, clock_.valid());
+        applyAttitude(clock_.valid());
         return out;
     }
 
@@ -287,10 +198,10 @@ StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) 
         r.measuredAt     = stamp;
         r.measuredAtHost = MonotonicTime{};
         clock_.reset();   // the device clock restarted; old offsets are void
-        attitude_ = RetainedAttitude{};
+        attitude_.forget();
         out.status     = FunctionStatus::kFault;
         out.diagnostic = "source time regression; odometry epoch advanced";
-        applyAttitude(out, in, false);
+        applyAttitude(false);
         return out;
     }
 
@@ -300,7 +211,7 @@ StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) 
         if (heading_used) out.rejected.push_back(heading_ref_);
         out.status = FunctionStatus::kNoData;
         out.diagnostic = "motion effective time already consumed";
-        applyAttitude(out, in, clock_.valid());
+        applyAttitude(clock_.valid());
         return out;
     }
 
@@ -313,15 +224,8 @@ StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) 
         }
     }
 
-    // chord of the constant-curvature arc across this step
-    double lx = dx;
-    double ly = dy;
-    if (std::fabs(dtheta) > 1e-9) {
-        const double s = std::sin(dtheta) / dtheta;
-        const double c = (1.0 - std::cos(dtheta)) / dtheta;
-        lx             = dx * s - dy * c;
-        ly             = dx * c + dy * s;
-    }
+    double lx = 0.0, ly = 0.0;
+    chordOfArc(dx, dy, dtheta, lx, ly);
 
     const double h  = r.odom_pose.heading_rad;
     const double gx = lx * std::cos(h) - ly * std::sin(h);
@@ -349,7 +253,7 @@ StateEstimatorOutput PlanarMotionIntegrator::run(const StateEstimatorInput& in) 
     out.accepted.push_back(motion_ref_);
     if (heading_used) out.accepted.push_back(heading_ref_);
     out.clock_mapped = stamp.domain == ClockDomain::kHost || clock_.valid();
-    applyAttitude(out, in, clock_.valid());
+    applyAttitude(clock_.valid());
     return out;
 }
 

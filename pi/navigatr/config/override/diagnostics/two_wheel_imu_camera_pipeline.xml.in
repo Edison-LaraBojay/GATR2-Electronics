@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Complete the initial field placement below and save this file without .in.
+The matching camera profile references this local pipeline so placement,
+association gates, and publishing can be adjusted for this robot setup.
+See docs/setup.md.
+
+This profile uses planar_motion_integrator: the tracking-wheel observation
+already uses the IMU as its heading constraint. It does not add a second
+independent contribution from the same gyro.
+
+Vision updates the retained landmark estimates; it does not correct the
+robot pose. Association gate values are initial tuning values, not measured
+calibration. Publishing sends robot state to brain_uart. Requested-object
+mappings/targets are not configured here; the viewer shows all field objects.
+-->
+<Pipeline>
+
+    <CommandCollection type="noop"/>
+
+    <Localization>
+        <!-- Rough surveyed location of the ROBOT POSE ORIGIN on the field.
+             +x/+y follow field.xml; heading is CCW from field +x.
+             This is not the camera position. -->
+        <InitialPlacement calibration_status="UNCONFIGURED"
+                          x_m="@MEASURE_INITIAL_FIELD_X_M@"
+                          y_m="@MEASURE_INITIAL_FIELD_Y_M@"
+                          heading_deg="@MEASURE_INITIAL_FIELD_HEADING_DEG@"/>
+        <Observation id="tracking_motion" type="tracking_wheel_motion">
+            <Wheels resource_id="wheel_geometry">
+                <Use wheel_id="left_wheel"/>
+                <Use wheel_id="rear_wheel"/>
+            </Wheels>
+            <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
+                               max_calibration_travel_m="0.005"/>
+            <Output observation_id="tracking_motion"/>
+        </Observation>
+        <Estimator type="planar_motion_integrator">
+            <Motion observation_id="tracking_motion"/>
+        </Estimator>
+        <History retention_s="5" capacity="1024" max_interpolation_gap_ms="100"/>
+    </Localization>
+
+    <WorldEstimation>
+        <Estimator id="goals" type="apriltag">
+            <FieldMap resource_id="override_field"/>
+            <ObservationExtraction>
+                <Camera sensor_id="front_camera"/>
+                <Detector resource_id="tag_detector"/>
+                <Output observation_id="tag_observations"/>
+            </ObservationExtraction>
+            <Association>
+                <Observations observation_id="tag_observations"/>
+                <FieldMap resource_id="override_field"/>
+                <RobotFrames resource_id="robot_geometry"/>
+                <!-- Current Pico telemetry provides yaw rate, not measured
+                     roll/pitch. Missing tilt is explicitly assumed level. -->
+                <Attitude policy="assume_level"/>
+                <Gates max_translation_error_m="0.75" max_heading_error_deg="30"
+                       ambiguity_margin_m="0.15" max_range_m="3.0"
+                       min_decision_margin="10" max_hamming="0"
+                       min_facing_cos="0.1" min_projected_size_px="8"
+                       max_reprojection_error_px="0"
+                       max_alternate_pose_ambiguity="0"/>
+                <Output association_id="landmark_pose_observations"/>
+            </Association>
+            <LandmarkEstimation commit="always" blend="1.0"/>
+        </Estimator>
+    </WorldEstimation>
+
+    <TargetResolution type="noop"/>
+
+    <Publishing type="vex_brain">
+        <Serial resource_id="brain_uart"/>
+        <Health fresh_ms="150">
+            <Encoder sensor_id="tracking_encoder_a"/>
+            <Encoder sensor_id="tracking_encoder_c"/>
+            <Gyro sensor_id="robot_imu"/>
+        </Health>
+    </Publishing>
+
+</Pipeline>

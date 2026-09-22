@@ -8,11 +8,14 @@
 
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "common/frame_codec.h"
+#include "impl/resources/cameras.h"
 #include "impl/resources/serial_links.h"
 #include "math/angles.h"
+#include "resources/camera.h"
 #include "runtime/register_all.h"
 #include "runtime/system.h"
 
@@ -42,8 +45,16 @@ const char* kFullConfig = R"(
                              x_m="1.8" y_m="1.8" heading_deg="0"/>
             </Landmark>
         </Resource>
+        <Resource id="camera_device" type="idle_camera"/>
+        <Resource id="tag_detector" type="apriltag_detector">
+            <Family name="tag36h11" detection_size_m="0.06"/>
+            <Detector quad_decimate="1.0" nthreads="1"/>
+        </Resource>
     </Resources>
     <Sensors>
+        <Sensor id="front_camera" type="camera_frame">
+            <Source resource_id="camera_device" output_id="frame"/>
+        </Sensor>
         <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
             <Source resource_id="pico_telemetry" output_id="encoder_a"/>
             <Calibration counts_per_revolution="4000"/>
@@ -86,14 +97,17 @@ const char* kFullConfig = R"(
                 <Motion observation_id="tracking_motion"/>
             </Estimator>
         </Localization>
-        <FieldEstimation type="landmark_field">
-            <FieldMap resource_id="override_field"/>
-            <Pipeline>
-                <ObservationExtraction type="noop"/>
-                <Association type="noop"/>
-                <Estimator type="landmark_estimator" commit="never"/>
-            </Pipeline>
-        </FieldEstimation>
+        <WorldEstimation>
+            <Estimator id="goals" type="apriltag">
+                <FieldMap resource_id="override_field"/>
+                <ObservationExtraction>
+                    <Camera sensor_id="front_camera"/>
+                    <Detector resource_id="tag_detector"/>
+                    <Output observation_id="tag_observations"/>
+                </ObservationExtraction>
+                <LandmarkEstimation commit="never"/>
+            </Estimator>
+        </WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="vex_brain">
             <Serial resource_id="brain_uart"/>
@@ -133,6 +147,20 @@ std::vector<uint8_t> commandBytes(const gatr2::CommandFrame& c) {
     return buf;
 }
 
+// A camera that is alive but never delivers a frame: the world estimator
+// seeds the map and observes nothing, so the published object is valid
+// from the map and never observed.
+class IdleCamera : public CameraDevice
+{
+public:
+    bool                    alive() const override { return true; }
+    const CameraIntrinsics* intrinsics() const override { return nullptr; }
+    FrameId engineeringFrame() const override { return FrameId{"front_camera_engineering"}; }
+    std::optional<CameraFrameData> latestFrame(uint64_t, uint32_t) override {
+        return std::nullopt;
+    }
+};
+
 struct Rig {
     FunctionRegistry        functions;
     std::unique_ptr<System> system;
@@ -141,6 +169,12 @@ struct Rig {
 
     explicit Rig(const char* xml) {
         registerAll(functions);
+        functions.add(FunctionKey{"idle_camera"},
+                      ResourceMakeFunction([](const ConfigNode&, ResourceInitializationContext&,
+                                              std::string&) {
+                          return cameraResource(std::make_shared<IdleCamera>(),
+                                                OutputId{"frame"});
+                      }));
         std::string err;
         system = System::buildFromString(xml, functions, err);
         EXPECT_NE(system, nullptr) << err;
@@ -376,7 +410,7 @@ std::string fusedConfig(bool three_wheel) {
                 <Motion observation_id="tracking_motion"/>
             </Estimator>
         </Localization>
-        <FieldEstimation type="noop"/>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>

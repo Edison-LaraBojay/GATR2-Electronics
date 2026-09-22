@@ -19,18 +19,17 @@
         <Estimator type="noop"/>
     </Localization>
 
-    <FieldEstimation type="landmark_field">
-        <FieldMap resource_id="override_field"/>
-        <Pipeline>
-            <ObservationExtraction type="apriltag_tag_observation">
+    <WorldEstimation>
+        <Estimator id="goals" type="apriltag">
+            <FieldMap resource_id="override_field"/>
+            <ObservationExtraction>
                 <Camera sensor_id="front_camera"/>
                 <Detector resource_id="tag_detector"/>
                 <Output observation_id="tag_observations"/>
             </ObservationExtraction>
-            <Association type="noop"/>
-            <Estimator type="landmark_estimator" commit="never"/>
-        </Pipeline>
-    </FieldEstimation>
+            <LandmarkEstimation commit="never"/>
+        </Estimator>
+    </WorldEstimation>
 
     <TargetResolution type="noop"/>
 

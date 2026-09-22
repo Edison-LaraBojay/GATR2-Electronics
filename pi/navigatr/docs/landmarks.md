@@ -12,7 +12,8 @@ approach frames, and optional display geometry. The Override definition contains
 nine goals. Visual metadata such as boxes, colors, and wall dimensions is used by
 the viewer and does not enter localization or association.
 
-`landmark_field` maintains `FieldState.objects`, keyed by configured object ID.
+The `apriltag` world estimator maintains `FieldState.objects`, keyed by
+configured object ID.
 It seeds every mapped object from its nominal pose with source `field_map` and
 confidence 0.5. These entries are available before any camera observation, so
 `valid` alone does not mean an object has been seen.
@@ -33,15 +34,19 @@ Re-anchoring derives a new field representation from the retained odometry pose;
 it is not a new observation. An odometry epoch change resets observed entries to
 map nominal because their previous coordinate context no longer exists.
 
-## Field-estimation subpipeline
+## The apriltag estimator subpipeline
 
 ```text
 camera sensor
-  -> apriltag_tag_observation
-  -> tag_mount_association
-  -> landmark_estimator
+  -> ObservationExtraction (AprilTagObservationPerception)
+  -> Association (TagMountAssociation, optional)
+  -> LandmarkEstimation (LandmarkEstimator)
   -> FieldSnapshot
 ```
+
+The steps are fixed and private to the `apriltag` estimator; the coordinator
+sees only the `WorldEstimation` contract. Omitting `Association` publishes
+decodes without evidence, for camera inspection before calibration.
 
 The detector decodes tag family, ID, image corners, and quality. Decoding can run
 without calibration for camera inspection. Metric poses require camera intrinsics
@@ -62,14 +67,14 @@ competing mounts remain unassociated; no square-symmetry equivalence grouping is
 implemented. Optional trace output records candidate and rejection reasons for
 the viewer.
 
-`landmark_estimator` accepts one declared `FieldObjectPoseEvidenceSet` output.
+`LandmarkEstimation` folds the one declared `FieldObjectPoseEvidenceSet` output.
 Evidence from another odometry epoch or containing invalid numeric values is
 ignored. Accepted measurements of the same object in one invocation combine by
 confidence-weighted position and circular heading mean. `blend` in `[0, 1]`
 controls interpolation from the retained estimate; `commit="always"` applies
 updates and `commit="never"` publishes evidence without updating the objects.
 Confidence is an algorithm score, not a covariance or calibrated probability.
-A child fault leaves the previous field state intact.
+A step fault leaves the previous field state intact.
 
 The field worker runs regardless of target selection and can update several
 objects. It publishes FieldState plus observation and association maps. Seeing a

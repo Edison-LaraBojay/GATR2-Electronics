@@ -8,7 +8,7 @@ measurement.
 The Capture values are selections, not calibration. The intrinsic
 calibration must later be done at this same mode: the camera resource
 refuses a calibration whose resolution differs from the capture mode.
-Change them to a mode listed by rpicam-hello --list-cameras on the Pi
+Change them to a supported mode from the rpicam-hello camera listing on the Pi
 before calibrating. Without a Calibration element the frames carry null
 intrinsics, the detector decodes tags in 2D with has_pose false, and no
 metric tag pose or landmark evidence is ever produced from them; the

@@ -1,22 +1,23 @@
 // system.h
 // The coordinator. Owns the resource store, the captured stage executors
-// (resources, sensors, localization), and the pipeline slot executables,
-// and holds sole execution authority: downstream algorithms read the
-// standard result maps and snapshots, never each other's executables, and
-// registry lookup grants nothing at runtime.
+// (resources, sensors, localization, world estimation), and the pipeline
+// slot executables, and holds sole execution authority: downstream
+// algorithms read the standard result maps and snapshots, never each
+// other's executables, and registry lookup grants nothing at runtime.
 //
 // The semantic pipeline is fixed:
 //
 //   Resources -> Sensors -> Command Collection -> Localization
-//     -> Field Estimation -> Target Resolution -> Publishing
+//     -> World Estimation -> Target Resolution -> Publishing
 //
-// Resources, sensors and localization are aggregate stages built once by
-// make_resources, make_sensors and make_localization; each returned
-// executor captures its configured collection and owns iteration,
-// bookkeeping and map assembly. Construction is atomic: parse, register
-// (caller), build resources, build sensors, build localization, build
-// slots resolving every reference with payload compatibility, then freeze;
-// any failure destroys the candidate and nothing partial ever runs.
+// Resources, sensors, localization and world estimation are aggregate
+// stages built once by make_resources, make_sensors, make_localization and
+// make_world_estimation; each returned executor captures its configured
+// implementations and owns iteration, bookkeeping and map assembly.
+// Construction is atomic: parse, register (caller), build resources, build
+// sensors, build localization, build world estimation, build slots
+// resolving every reference with payload compatibility, then freeze; any
+// failure destroys the candidate and nothing partial ever runs.
 //
 // Two execution modes share the same stage functions:
 //
@@ -25,16 +26,17 @@
 //   start()/stop() two workers. The estimation worker runs resources,
 //                  sensors, commands, localization, then target resolution
 //                  and publishing against the newest field snapshot, at the
-//                  configured loop rate. The field worker runs field
-//                  estimation (perception, association, landmark estimate)
-//                  on the newest sensor snapshot handed to it, replacing a
-//                  pending snapshot it has not reached yet: camera work is
-//                  latest-frame, while every motion increment is consumed
-//                  by localization on the thread that acquired it.
+//                  configured loop rate. The field worker runs world
+//                  estimation (whatever subpipeline the selected estimator
+//                  owns) on the newest sensor snapshot handed to it,
+//                  replacing a pending snapshot it has not reached yet:
+//                  camera work is latest-frame, while every motion
+//                  increment is consumed by localization on the thread that
+//                  acquired it.
 //
 // One writer per mutable state: the estimation worker owns the executors
 // and their retained maps, command and target state; the field worker owns
-// field estimation and the field snapshot; localization's feed is the only
+// world estimation and the field snapshot; localization's feed is the only
 // history writer. Readers (the other worker, publishing, inspection) get
 // immutable shared snapshots or synchronized lookups; no reference into a
 // retained map crosses a thread. Shutdown stops the estimation worker
@@ -70,6 +72,7 @@
 #include "runtime/resource_stage.h"
 #include "runtime/sensor_catalog.h"
 #include "runtime/sensor_stage.h"
+#include "runtime/world_estimation_stage.h"
 #include "state/command_state.h"
 #include "state/field_state.h"
 #include "state/robot_state.h"
@@ -124,7 +127,7 @@ public:
     // localization. Used by the estimation worker and by step().
     void estimationCycle(MonotonicTime now);
 
-    // The field stage alone against a sensor snapshot; publishes a new
+    // World estimation alone against a sensor snapshot; publishes a new
     // field snapshot. Used by the field worker and by step().
     void fieldCycle(const SensorMap& sensors, MonotonicTime now);
 
@@ -173,6 +176,7 @@ public:
     // Thread-safe readers, for the other worker and inspection.
     std::shared_ptr<RobotStateFeed> robotFeed() const { return execute_localization_.feed(); }
     const LocalizationExecutor&     localization() const { return execute_localization_; }
+    const WorldEstimationExecutor&  worldEstimation() const { return execute_world_; }
     std::shared_ptr<const FieldSnapshot>       fieldSnapshot() const;
     std::shared_ptr<const ReportingSnapshot>   reportingSnapshot() const;
     std::shared_ptr<const SourceHealthSnapshot> sourceHealth() const;
@@ -208,30 +212,6 @@ private:
     void publishDetectionFrames(const SensorMap& sensors, const FieldSnapshot& snapshot,
                                 MonotonicTime now);
 
-    // Drops entries whose id was never declared or whose payload
-    // contradicts the declaration, noting a fault against the producer.
-    template <typename Map, typename Decls>
-    void enforceDeclared(Map& map, const Decls& decls, const std::string& label,
-                         Diagnostics& diagnostics) {
-        for (auto it = map.begin(); it != map.end();) {
-            const auto* decl = [&]() -> const typename Decls::value_type* {
-                for (const auto& d : decls) {
-                    if (d.id == it->first) {
-                        return &d;
-                    }
-                }
-                return nullptr;
-            }();
-            if (decl == nullptr || !decl->payload.matches(it->second.payload.cppType())) {
-                diagnostics.note(label + "/undeclared_output:" + it->first.value,
-                                 FunctionStatus::kFault);
-                it = map.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-
     double loop_rate_hz_ = 100.0;
 
     std::string configuration_id_     = "inline";
@@ -245,21 +225,15 @@ private:
     ResourceStore            resources_;
     std::vector<std::string> warnings_;
 
-    ResourceExecutor     execute_resources_;
-    SensorExecutor       execute_sensors_;
-    LocalizationExecutor execute_localization_;
-
-    // Declared outputs, kept for runtime enforcement: a producer cannot
-    // place an undeclared id or a payload contradicting its declaration
-    // into a standard map.
-    std::vector<ObservationOutputDecl> observation_decls_;
-    std::vector<AssociationOutputDecl> association_decls_;
+    ResourceExecutor        execute_resources_;
+    SensorExecutor          execute_sensors_;
+    LocalizationExecutor    execute_localization_;
+    WorldEstimationExecutor execute_world_;   // field worker only
 
     std::unique_ptr<Commands>         commands_;
-    std::unique_ptr<FieldEstimation>  field_estimation_;
     std::unique_ptr<TargetResolution> target_resolution_;
     std::unique_ptr<Publishing>       publishing_;
-    std::string                       slot_labels_[4];
+    std::string                       slot_labels_[3];   // commands, targets, publishing
 
     // estimation worker state
     std::atomic<uint64_t> cycle_{0};

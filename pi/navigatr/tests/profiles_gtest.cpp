@@ -77,7 +77,7 @@ const char* kPipelineFragment = R"(
       <Motion observation_id="motion"/>
     </Estimator>
   </Localization>
-  <FieldEstimation type="noop"/>
+  <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
   <TargetResolution type="noop"/>
   <Publishing type="noop"/>
 </Pipeline>
@@ -222,39 +222,40 @@ TEST(Profiles, PlainSystemSectionsAndIndividualEntriesResolveLikeInlineConfigura
     EXPECT_NE(resolved.digest, old_digest); // deepest dependency participates
 }
 
-TEST(Profiles, NestedStagePipelinesAndAbsoluteReferencesResolve) {
+TEST(Profiles, WorldEstimationReferencesAndAbsoluteReferencesResolve) {
+    // WorldEstimation and its Estimator are include positions; the
+    // Estimator's own children are implementation-owned and opaque.
     Workspace ws;
-    ws.write("stage/field.xml", R"(<FieldEstimation type="landmark_field">
-        <FieldMap resource_id="test_field"/><Pipeline file="inner/pipeline.xml"/>
-        </FieldEstimation>)");
-    ws.write("stage/inner/pipeline.xml", R"(<Pipeline>
-        <ObservationExtraction file="observation.xml"/>
-        <Association file="association.xml"/><Estimator file="estimator.xml"/>
-        </Pipeline>)");
-    ws.write("stage/inner/observation.xml", R"(<ObservationExtraction type="noop"/>)");
-    ws.write("stage/inner/association.xml", R"(<Association type="noop"/>)");
-    ws.write("stage/inner/estimator.xml", R"(<Estimator type="landmark_estimator" commit="never"/>)");
+    ws.write("stage/world.xml", R"(<WorldEstimation>
+        <Estimator file="inner/estimator.xml"/>
+        </WorldEstimation>)");
+    ws.write("stage/inner/estimator.xml", R"(<Estimator id="none" type="noop">
+        <Options file="not-an-include.raw"/></Estimator>)");
     tinyxml2::XMLDocument main;
     ASSERT_EQ(main.Parse(R"(<System><Resources><Resource file="field.xml"/></Resources>
         <Sensors/><Pipeline><CommandCollection type="noop"/>
         <Localization><Estimator type="noop"/></Localization>
-        <FieldEstimation/><TargetResolution type="noop"/><Publishing type="noop"/>
+        <WorldEstimation/><TargetResolution type="noop"/><Publishing type="noop"/>
         </Pipeline></System>)"), tinyxml2::XML_SUCCESS);
-    main.RootElement()->FirstChildElement("Pipeline")->FirstChildElement("FieldEstimation")
-        ->SetAttribute("file", ws.path("stage/field.xml").c_str());
+    main.RootElement()->FirstChildElement("Pipeline")->FirstChildElement("WorldEstimation")
+        ->SetAttribute("file", ws.path("stage/world.xml").c_str());
     ws.write("nested.xml", xmlOf(main.RootElement()));
     std::string err;
     ResolvedConfiguration resolved;
     ASSERT_TRUE(resolveConfiguration(ws.path("nested.xml"), resolved, err)) << err;
-    EXPECT_EQ(resolved.files.size(), 7u);
+    EXPECT_EQ(resolved.files.size(), 4u);
     tinyxml2::XMLDocument expanded;
     ASSERT_EQ(expanded.Parse(resolved.xml.c_str()), tinyxml2::XML_SUCCESS);
-    const auto* field = expanded.RootElement()->FirstChildElement("Pipeline")
-                           ->FirstChildElement("FieldEstimation");
-    ASSERT_NE(field, nullptr);
-    EXPECT_STREQ(field->Attribute("type"), "landmark_field");
-    EXPECT_STREQ(field->FirstChildElement("Pipeline")->FirstChildElement("Estimator")
-                     ->Attribute("commit"), "never");
+    const auto* world = expanded.RootElement()->FirstChildElement("Pipeline")
+                           ->FirstChildElement("WorldEstimation");
+    ASSERT_NE(world, nullptr);
+    const auto* estimator = world->FirstChildElement("Estimator");
+    ASSERT_NE(estimator, nullptr);
+    EXPECT_STREQ(estimator->Attribute("id"), "none");
+    EXPECT_STREQ(estimator->Attribute("type"), "noop");
+    // the opaque option kept its file attribute instead of being expanded
+    EXPECT_STREQ(estimator->FirstChildElement("Options")->Attribute("file"),
+                 "not-an-include.raw");
     FunctionRegistry functions;
     registerAll(functions);
     EXPECT_NE(System::buildFromFile(ws.path("nested.xml"), functions, err), nullptr) << err;
@@ -350,8 +351,8 @@ TEST(Profiles, StringConstructionRejectsUnresolvedSectionReferencesWithoutReadin
         R"(<System><Pipeline file="unknown.xml"/></System>)",
         R"(<System><Pipeline><Localization file="unknown.xml"/></Pipeline></System>)",
         R"(<System><Pipeline><Localization><Observation file="unknown.xml"/></Localization></Pipeline></System>)",
-        R"(<System><Pipeline><FieldEstimation type="landmark_field"><Pipeline>
-            <Association file="unknown.xml"/></Pipeline></FieldEstimation></Pipeline></System>)",
+        R"(<System><Pipeline><WorldEstimation file="unknown.xml"/></Pipeline></System>)",
+        R"(<System><Pipeline><WorldEstimation><Estimator file="unknown.xml"/></WorldEstimation></Pipeline></System>)",
     };
     for (const char* xml : unresolved) {
         EXPECT_EQ(System::buildFromString(xml, functions, err), nullptr);
@@ -363,7 +364,8 @@ TEST(Profiles, StringConstructionRejectsUnresolvedSectionReferencesWithoutReadin
             <Device file="implementation-owned.raw"/>
             <Options><Pipeline file="also-not-an-include.raw"/></Options>
         </Resource></Resources><Sensors/><Pipeline><CommandCollection type="noop"/>
-        <Localization><Estimator type="noop"/></Localization><FieldEstimation type="noop"/>
+        <Localization><Estimator type="noop"/></Localization>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/><Publishing type="noop"/></Pipeline></System>)",
         functions, err), nullptr) << err;
 }
@@ -512,7 +514,7 @@ TEST(Profiles, WheelGeometryReferenceFormMatchesInlineAndValidates) {
       </Observation>
       <Estimator type="noop"/>
     </Localization>
-    <FieldEstimation type="noop"/>
+    <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
     <TargetResolution type="noop"/>
     <Publishing type="noop"/>
   </Pipeline>
@@ -533,7 +535,7 @@ TEST(Profiles, WheelGeometryReferenceFormMatchesInlineAndValidates) {
   <Pipeline>
     <CommandCollection type="noop"/>
     <Localization><Estimator type="noop"/></Localization>
-    <FieldEstimation type="noop"/>
+    <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
     <TargetResolution type="noop"/>
     <Publishing type="noop"/>
   </Pipeline>

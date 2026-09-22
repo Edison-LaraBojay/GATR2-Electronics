@@ -2,10 +2,12 @@
 // What every pipeline slot factory receives at construction: the initialized
 // resources, the sensor catalog, the localization's declared observation
 // functions and outputs, and the typed declarations accumulated from
-// earlier slots. References resolve here, once, with payload compatibility
-// checked; runtime never reparses configuration or rediscovers
-// dependencies. Implementations receive only these views, never the
-// mutable System.
+// earlier slots. A world estimator factory receives the same view, with the
+// observation and association declarations empty (it is the producer) or
+// filled privately by a composite for its own internal steps. References
+// resolve here, once, with payload compatibility checked; runtime never
+// reparses configuration or rediscovers dependencies. Implementations
+// receive only these views, never the mutable System.
 
 #pragma once
 #include <string>
@@ -43,8 +45,8 @@ struct SlotInitializationContext {
     std::vector<std::string>                observation_functions;
     std::vector<RobotObservationOutputDecl> robot_observations;
 
-    std::vector<ObservationOutputDecl> observations;   // filled after Perception
-    std::vector<AssociationOutputDecl> associations;   // filled after Association
+    std::vector<ObservationOutputDecl> observations;   // filled after world estimation
+    std::vector<AssociationOutputDecl> associations;   // filled after world estimation
 
     std::vector<std::string>* warnings = nullptr;
 

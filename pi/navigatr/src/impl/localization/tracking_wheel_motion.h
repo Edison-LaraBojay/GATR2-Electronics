@@ -141,6 +141,12 @@ private:
     long interval_tolerance_ms_ = 20;
     long max_pending_ms_        = 500;
 
+    // d(dx, dy)/d(dtheta) from the wheel geometry, published with every
+    // increment
+    bool   has_coupling_ = false;
+    double coupling_x_   = 0.0;
+    double coupling_y_   = 0.0;
+
     bool          awaiting_baselines_ = false;
     MonotonicTime last_received_;   // host receipt of the newest consumed sample
     std::string   last_drop_reason_;

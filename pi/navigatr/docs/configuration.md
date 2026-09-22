@@ -98,17 +98,19 @@ The pattern also applies within pipelines:
 <Pipeline>
     <CommandCollection type="noop"/>
     <Localization file="./localization.xml"/>
-    <FieldEstimation file="./landmark_estimation.xml"/>
+    <WorldEstimation file="./world_estimation.xml"/>
     <TargetResolution type="noop"/>
     <Publishing type="noop"/>
 </Pipeline>
 ```
 
-`localization.xml` has a `<Localization>` root, and
-`landmark_estimation.xml` has a `<FieldEstimation>` root including its `type`
-and any nested `<Pipeline>`. A nested pipeline can itself be referenced.
-Individual resource/sensor declarations and localization observation/estimator
-nodes can also be extracted to files at their respective configuration slots.
+`localization.xml` has a `<Localization>` root, and `world_estimation.xml`
+has a `<WorldEstimation>` root holding its one `<Estimator>`. That Estimator
+can itself be a reference to a file whose root is `<Estimator>` with its `id`,
+`type`, and implementation-owned children. Individual resource/sensor
+declarations and localization observation/estimator nodes can also be extracted
+to files at their respective configuration slots; the children of any of these
+implementation nodes are opaque to the loader.
 
 Paths resolve **relative to the XML file containing the reference**, at every
 level. Absolute paths work too. Referenced roots must match their slots. A

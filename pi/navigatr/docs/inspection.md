@@ -134,7 +134,8 @@ explicitly (see `viewer/app.js`).
 type, contract, host_ms, session {id, reset_count}, cycle, running
 robot           valid, initialized, odometry_epoch, anchor_revision,
                 odom {x_m, y_m, heading_deg}, field {...}, field_from_odom {...},
-                vx_m_s, vy_m_s, yaw_rate_deg_s, confidence,
+                vx_m_s, vy_m_s, yaw_rate_deg_s, confidence, has_covariance,
+                odom_covariance {xx, xy, xh, yy, yh, hh}?   odometry frame, m and rad
                 measured_at {clock, ms}, measured_at_host_ms|null, age_ms|null,
                 attitude {valid, assumed_level, reference, source, epoch, quality,
                   measured_at_host_ms|null, measured_at_source {clock, ms}, age_ms|null,

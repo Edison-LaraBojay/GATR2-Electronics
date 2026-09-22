@@ -2,6 +2,9 @@
 
 ## Runtime and configuration
 
+- [Set up and run Navigatr](../pi/navigatr/docs/setup.md): complete Pi/Pico bring-up,
+  camera calibration, robot geometry, two- and three-wheel camera configurations,
+  and the live viewer.
 - [Navigatr](../pi/navigatr/README.md): build, run, demo, and implementation coverage.
 - [Configuration](../pi/navigatr/docs/configuration.md): default profile, command-line
   overrides, inline XML, and referenced fragments.

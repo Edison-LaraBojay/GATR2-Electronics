@@ -24,7 +24,7 @@ const char* kAllNoop = R"(
     <Pipeline>
         <CommandCollection type="noop"/>
         <Localization><Estimator type="noop"/></Localization>
-        <FieldEstimation type="noop"/>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -67,11 +67,11 @@ TEST(SystemBuild, AllNoopBuildsStepsAndPersistsCommandState) {
 
 TEST(SystemBuild, MissingSlotIsAnError) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<FieldEstimation type=\"noop\"/>", "")
+    EXPECT_EQ(tryBuild(withSlot("<WorldEstimation><Estimator id=\"none\" type=\"noop\"/></WorldEstimation>", "")
                            .c_str(),
                        err),
               nullptr);
-    EXPECT_NE(err.find("FieldEstimation"), std::string::npos);
+    EXPECT_NE(err.find("WorldEstimation"), std::string::npos);
     EXPECT_NE(err.find("noop"), std::string::npos);   // the message names the fix
 }
 
@@ -109,16 +109,16 @@ TEST(SystemBuild, WrongCategoryKeyCannotBeConstructed) {
 
 TEST(SystemBuild, DuplicateSlotAndUnknownChildrenRejected) {
     std::string err;
-    EXPECT_EQ(tryBuild(withSlot("<FieldEstimation type=\"noop\"/>",
-                                "<FieldEstimation type=\"noop\"/>"
-                                "<FieldEstimation type=\"noop\"/>")
+    EXPECT_EQ(tryBuild(withSlot("<WorldEstimation><Estimator id=\"none\" type=\"noop\"/></WorldEstimation>",
+                                "<WorldEstimation><Estimator id=\"none\" type=\"noop\"/></WorldEstimation>"
+                                "<WorldEstimation><Estimator id=\"none\" type=\"noop\"/></WorldEstimation>")
                            .c_str(),
                        err),
               nullptr);
-    EXPECT_NE(err.find("more than one FieldEstimation"), std::string::npos);
+    EXPECT_NE(err.find("more than one WorldEstimation"), std::string::npos);
 
-    EXPECT_EQ(tryBuild(withSlot("<FieldEstimation type=\"noop\"/>",
-                                "<FieldEstimation type=\"noop\"/>"
+    EXPECT_EQ(tryBuild(withSlot("<WorldEstimation><Estimator id=\"none\" type=\"noop\"/></WorldEstimation>",
+                                "<WorldEstimation><Estimator id=\"none\" type=\"noop\"/></WorldEstimation>"
                                 "<Perceptron type=\"noop\"/>")
                            .c_str(),
                        err),
@@ -164,7 +164,7 @@ TEST(SystemBuild, ErrorsCarryPathIdAndType) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Localization><Estimator type="noop"/></Localization>
-        <FieldEstimation type="noop"/>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -213,7 +213,7 @@ TEST(SystemBuild, DeclarationReorderingChangesNothing) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Localization><Estimator type="noop"/></Localization>
-        <FieldEstimation type="noop"/>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -303,7 +303,7 @@ TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Localization><Estimator type="noop"/></Localization>
-        <FieldEstimation type="liar_field"/>
+        <WorldEstimation><Estimator id="liar" type="liar_field"/></WorldEstimation>
         <TargetResolution type="capture"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -322,7 +322,7 @@ TEST(SystemBuild, UndeclaredOrMistypedOutputsNeverEnterStandardMaps) {
     // the undeclared observation was dropped before anyone downstream saw it
     EXPECT_EQ(*seen, 0u);
     EXPECT_EQ(system->fieldDiagnostics()
-                  .functions.count("FieldEstimation/liar_field/undeclared_output:ghost"),
+                  .functions.count("WorldEstimation/liar/undeclared_output:ghost"),
               1u);
 }
 
@@ -420,7 +420,7 @@ TEST(SystemBuild, ExecutionOrderMatchesTheFixedPipeline) {
         <Publishing type="probe"/>
         <TargetResolution type="probe"/>
         <CommandCollection type="probe"/>
-        <FieldEstimation type="probe"/>
+        <WorldEstimation><Estimator id="probe" type="probe"/></WorldEstimation>
         <Localization><Estimator type="probe"/></Localization>
     </Pipeline>
 </System>

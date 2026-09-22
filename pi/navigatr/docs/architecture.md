@@ -14,7 +14,7 @@ main XML -> resolve referenced fragments -> System
   make_sensors -> SensorExecutor
   CommandCollection factory
   make_localization -> LocalizationExecutor + RobotStateFeed
-  FieldEstimation factory
+  make_world_estimation -> WorldEstimationExecutor
   TargetResolution factory
   Publishing factory
 ```
@@ -31,9 +31,11 @@ those outputs. Static field definitions, robot frames, wheel geometry, target
 sets, and transport handles can be bound directly without emitting measurements.
 
 Every top-level Pipeline slot must be present: `CommandCollection`,
-`Localization`, `FieldEstimation`, `TargetResolution`, and `Publishing`.
+`Localization`, `WorldEstimation`, `TargetResolution`, and `Publishing`.
 Localization selects observation functions and an estimator inside its own
-subtree. The other slots select an explicit `type`, including `noop` when unused.
+subtree; WorldEstimation selects exactly one `Estimator` by `id` and `type`
+inside its subtree. The other slots select an explicit `type`, including `noop`
+when unused.
 Duplicate IDs, unresolved references, incompatible payloads, and invalid geometry
 fail construction. A partially built system is discarded.
 
@@ -114,6 +116,14 @@ and elapsed time. It holds pose when no usable motion arrives. It is not a
 multi-source statistical fusion filter and does not predict ahead using the
 previous velocity. Another algorithm can implement the `StateEstimator` contract.
 
+`weighted_planar_fusion` fills the same slot with an explicit uncertainty
+model: configured one-sigma noise for the wheel increment and the gyro, a
+precision-weighted rotation, translation re-solved through the wheel
+geometry coupling the wheel model publishes, and a pose covariance
+propagated with the heading-to-position coupling. Shared sources, interval
+mismatches, repeated stamps and resets follow the integrator rules. See
+[localization fusion](localization_fusion.md).
+
 `RobotState` contains continuous odometry pose, a field anchor, velocity, yaw rate,
 validity, effective measurement time, and separately timestamped attitude. Field
 placement changes the anchor while preserving odometry. A hard reset changes the
@@ -124,27 +134,52 @@ and quaternion interpolation, with explicit age and gap failure results. Epoch
 changes clear history, and association checks the returned odometry epoch.
 See [coordinates](coordinates.md) for the transform and timing conventions.
 
-## Field estimation
-
-The `landmark_field` composite owns a serial subpipeline:
+## World estimation
 
 ```text
-SensorMap -> ObservationExtraction -> ObservationMap
-          -> Association -> AssociationMap
-          -> landmark_estimator -> FieldState
+<WorldEstimation><Estimator id="goals" type="apriltag">...</Estimator></WorldEstimation>
+  make_world_estimation -> WorldEstimationExecutor (one captured estimator)
+  field_out = execute_world_({sensors, robot, history, previous_field, context})
 ```
 
-`apriltag_tag_observation` extracts tag detections from new camera frames.
-`tag_mount_association` uses the exposure-time robot pose and attitude, camera
-mount, configured tag mounts, and geometric gates to generate
-`FieldObjectPoseEvidenceSet`. An optional trace retains candidate decisions for
-inspection. These types are checked when the composite is built.
+The coordinator drives the selected estimator through one contract.
+`FieldEstimationInput` carries the entire read-only `SensorMap`, the latest
+`RobotState`, pose-history lookups, the previous `FieldState`, and the execution
+context (host clock, invocation, diagnostics). `FieldEstimationOutput` carries
+the updated `FieldState`, the observation and association maps the estimator
+publishes, a status, and a diagnostic. The executor drops any observation or
+association id the estimator never declared (or whose payload contradicts the
+declaration) and records the run under `WorldEstimation/<id>` in the field
+diagnostics. It never learns what steps run inside the estimator.
 
-The estimator seeds all configured landmarks from the nominal field map. With
-`commit="always"`, accepted evidence updates those objects; `commit="never"`
+Exactly one `Estimator` is configured. `register_world_estimation` registers
+`noop` (previous field carried forward, nothing published) and `apriltag`;
+another selectable implementation needs its class, a registration line, and a
+build entry, not a coordinator change.
+
+The `apriltag` estimator privately owns a fixed serial subpipeline over one
+camera, built from the field references it reads at construction:
+
+```text
+SensorMap -> ObservationExtraction (AprilTagObservationPerception) -> ObservationMap
+          -> Association (TagMountAssociation, optional)          -> AssociationMap
+          -> LandmarkEstimation (LandmarkEstimator)                -> FieldState
+```
+
+Observation extraction runs the detector over each new frame of the configured
+camera. Association uses the exposure-time robot pose and attitude, camera
+mount, configured tag mounts, and geometric gates to generate
+`FieldObjectPoseEvidenceSet`; an optional trace retains candidate decisions for
+inspection. Without an `Association` the decodes still publish (camera
+inspection before the camera has a mount frame) and the landmark estimation
+must be `commit="never"`. Payload types are checked when the estimator is
+built; a step fault leaves the previous field untouched and publishes nothing.
+
+Landmark estimation seeds all configured landmarks from the nominal field map.
+With `commit="always"`, accepted evidence updates those objects; `commit="never"`
 retains nominal/previous state while still publishing detections and associations.
 The `blend` parameter controls interpolation from the previous estimate.
-Observing a goal changes its estimate, not robot localization. Field estimation
+Observing a goal changes its estimate, not robot localization. World estimation
 runs independently of whether a navigation target is requested.
 
 `FieldSnapshot` contains FieldState, published observations/associations, timing,
@@ -180,8 +215,8 @@ Default execution uses two workers:
    localization, and runs target resolution/publishing against the newest field
    snapshot. It hands a copied SensorMap to the field worker through a bounded,
    latest-wins mailbox.
-2. The field worker runs the field-estimation subpipeline on the latest available
-   sensor snapshot and publishes its result. Slow detection can skip intermediate
+2. The field worker runs world estimation on the latest available sensor
+   snapshot and publishes its result. Slow detection can skip intermediate
    snapshots without blocking the estimation worker.
 
 Resource acquisition is still invoked from the estimation worker. The libcamera
@@ -207,6 +242,8 @@ synchronized copies; inspection never calls mutable estimator implementations.
 | Resource/sensor executors | [resource_stage.cpp](../src/runtime/resource_stage.cpp), [sensor_stage.cpp](../src/runtime/sensor_stage.cpp) |
 | Localization executor | [localization_stage.cpp](../src/runtime/localization_stage.cpp) |
 | Localization contracts and payloads | [localization.h](../src/contracts/localization.h), [robot_observations.h](../src/payloads/robot_observations.h) |
-| Field composite | [landmark_field.cpp](../src/impl/field_estimation/landmark_field.cpp) |
+| State estimators | [planar_motion_integrator.cpp](../src/impl/localization/planar_motion_integrator.cpp), [weighted_planar_fusion.cpp](../src/impl/localization/weighted_planar_fusion.cpp) |
+| World estimation executor | [world_estimation_stage.cpp](../src/runtime/world_estimation_stage.cpp) |
+| AprilTag world estimator | [apriltag_world_estimator.cpp](../src/impl/world_estimation/apriltag_world_estimator.cpp) |
 | Target lifecycle | [configured_targets.cpp](../src/impl/target_resolution/configured_targets.cpp) |
 | Brain output | [vex_brain.cpp](../src/impl/publishing/vex_brain.cpp) |

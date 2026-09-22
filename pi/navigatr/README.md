@@ -13,6 +13,10 @@ and gives a matching latched target precedence over a mapped field-object pose.
 
 ## Runtime design
 
+**First setup:** [Set up and run Navigatr](docs/setup.md) covers Pi/Pico provisioning,
+build commands, camera calibration software, robot and camera geometry, complete
+two- and three-wheel IMU + camera templates, launch commands, and output locations.
+
 These documents describe the implemented runtime and data contracts. Hardware
 integration still needs the checks recorded in the deployment documents.
 
@@ -23,6 +27,7 @@ integration still needs the checks recorded in the deployment documents.
 | [Coordinates](docs/coordinates.md) | Field and robot axes, heading, camera mounting, attitude, and measurement-time transforms. |
 | [Landmarks](docs/landmarks.md) | Nominal and observed field state, association, target resolution, and Brain output. |
 | [Inspection](docs/inspection.md) | The versioned inspection contract, the service, and the browser viewer. |
+| [Localization fusion](docs/localization_fusion.md) | Noise units, the weighted step, covariance propagation, and what the fusion estimator does not model. |
 | [Field assets](docs/field_assets.md) | Official Override CAD source, revision, units, axis conversion, and what the field file was checked against. |
 | [Calibration inventory](docs/calibration_inventory.md) | Every remaining measurement, where it goes, and what it gates. |
 | [Pi camera setup](docs/pi_camera_setup.md) | libcamera stack, build flag, capture mode, exposure timing convention, hardware checks still to run. |
@@ -35,14 +40,14 @@ optional inspection service:
 
 ```text
 construction   parse -> make_resources -> make_sensors -> make_localization
-               -> field estimation, target resolution, publishing slots
+               -> make_world_estimation -> target resolution, publishing slots
                -> freeze (any failure destroys the candidate)
 
 estimation     resources -> sensors -> commands -> localization
 worker         -> target resolution + publishing against the newest field snapshot
 (loop rate)    -> hands the sensor snapshot to the field worker (latest wins)
 
-field worker   perception (AprilTag) -> association -> landmark estimate
+field worker   world estimation (apriltag: extraction -> association -> landmarks)
 (event driven) -> publishes an immutable FieldSnapshot and the detection frame
                bound to its exact image identity
 
@@ -53,7 +58,8 @@ service        at its own rate; a slow browser is skipped, never waited for
 Localization is a self-contained component: configured robot-observation
 functions grouped by measurement model (`tracking_wheel_motion`,
 `imu_heading_increment`, `attitude_reference`), one state estimator
-(`planar_motion_integrator`), and a history ring of recent poses that only
+(`planar_motion_integrator`, or `weighted_planar_fusion` with an explicit
+uncertainty model and a pose covariance), and a history ring of recent poses that only
 localization writes. Readers get copied snapshots or synchronized timestamped
 lookups (`RobotStateFeed`). Every mutable state has one writer; `reset()` stops
 both workers, resets every stage once, and restarts them.
@@ -62,13 +68,17 @@ both workers, resets every stage once, and restarts them.
 
 Implemented and covered by host tests:
 
-- Aggregate stages `make_resources`, `make_sensors`, `make_localization` with
-  captured executors; typed result maps with receipt, provenance, sequence and
+- Aggregate stages `make_resources`, `make_sensors`, `make_localization`,
+  `make_world_estimation` with captured executors; typed result maps with receipt, provenance, sequence and
   epoch preserved through derived records.
 - Tracking-wheel odometry with gyro heading, per-source interval alignment,
   encoder rebase on a source restart, rejection of nonpositive intervals, no
   endpoint bridging of invalid spans; optional attitude (quaternion) reconciled
   with the planar heading, aged separately, level fallback labeled assumed.
+- Covariance-weighted fusion (`weighted_planar_fusion`): three wheels plus an
+  independent gyro blended by configured noise, translation re-solved through
+  the wheel geometry, pose covariance propagated; the checked-in
+  `config/demo/synthetic_fusion_demo.xml` runs it against the rig.
 - Pose history ring (binary search, shortest-arc yaw interpolation, attitude
   slerp, gap and epoch gates, explicit lookup statuses).
 - Real AprilTag detection (vendored AprilRobotics detector, `tagCircle21h7` and
@@ -181,6 +191,7 @@ Hardware-free demo with the viewer:
 ```text
 ./build/navigatr
 ./build/navigatr --config_file="config/demo/synthetic_field_demo_no_attitude.xml"
+./build/navigatr --config_file="config/demo/synthetic_fusion_demo.xml"
 ```
 
 Live camera inspection before metric calibration (Pi, libcamera build):

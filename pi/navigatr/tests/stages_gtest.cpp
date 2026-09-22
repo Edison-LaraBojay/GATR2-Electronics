@@ -33,7 +33,7 @@ const char* kNoopPipeline = R"(
     <Pipeline>
         <CommandCollection type="noop"/>
         <Localization><Estimator type="noop"/></Localization>
-        <FieldEstimation type="noop"/>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>)";
@@ -702,7 +702,7 @@ TEST(Stages, DownstreamConsumersReadTheSensorMap) {
             </Observation>
             <Estimator type="noop"/>
         </Localization>
-        <FieldEstimation type="noop"/>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>)"),

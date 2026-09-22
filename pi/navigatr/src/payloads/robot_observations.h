@@ -42,6 +42,15 @@ struct BodyMotionIncrement {
 
     std::vector<Provenance> sources;   // consumed samples, one per sensor
     double                  quality = 1.0;
+
+    // Geometric coupling of the solved translation to the solved rotation,
+    // d(dx, dy)/d(dtheta) in m/rad, fixed by the producing model's
+    // geometry. An estimator that revises dtheta with independent evidence
+    // re-solves the translation through it. false when no linear relation
+    // exists.
+    bool   has_rotation_coupling = false;
+    double dx_per_dtheta_m_rad   = 0.0;
+    double dy_per_dtheta_m_rad   = 0.0;
 };
 
 // Heading change over [startAt, endAt] from a rate source with its bias

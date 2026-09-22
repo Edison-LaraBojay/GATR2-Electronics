@@ -15,10 +15,11 @@
 //
 // Include positions: System/Robot Resources and Sensors; individual Resource
 // and Sensor entries; Pipeline and its stage children; Localization and its
-// Observation/Estimator/History/InitialPlacement children; a stage's nested
-// Pipeline; System/Configuration Loop and Inspection; Configuration Robot,
-// Field and Pipeline. Resource/sensor implementation options are opaque, so
-// Device file="..." remains a device filename rather than an XML include.
+// Observation/Estimator/History/InitialPlacement children; WorldEstimation
+// and its Estimator; System/Configuration Loop and Inspection; Configuration
+// Robot, Field and Pipeline. Implementation options (the children of a
+// resource, sensor, observation function or estimator) are opaque, so Device
+// file="..." remains a device filename rather than an XML include.
 //
 // A reference contains only file, comments, and optionally an uninterpreted
 // calibration_status annotation. Configuration attrs/options belong in the

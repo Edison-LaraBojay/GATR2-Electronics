@@ -96,15 +96,16 @@ set(NAVIGATR_SOURCES
     src/impl/localization/tracking_wheel_motion.cpp
     src/impl/localization/imu_heading_increment.cpp
     src/impl/localization/attitude_reference.cpp
+    src/impl/localization/motion_step.cpp
     src/impl/localization/planar_motion_integrator.cpp
+    src/impl/localization/weighted_planar_fusion.cpp
     src/impl/localization/register_localization.cpp
-    src/impl/perception/apriltag_tag_observation.cpp
-    src/impl/perception/register_perception.cpp
-    src/impl/association/tag_mount_association.cpp
-    src/impl/association/register_association.cpp
-    src/impl/field_estimation/landmark_field.cpp
+    src/impl/world_estimation/apriltag_tag_observation.cpp
+    src/impl/world_estimation/tag_mount_association.cpp
+    src/impl/world_estimation/landmark_estimator.cpp
+    src/impl/world_estimation/apriltag_world_estimator.cpp
+    src/impl/world_estimation/register_world_estimation.cpp
     src/impl/target_resolution/configured_targets.cpp
-    src/impl/field_estimation/register_field_estimation.cpp
     src/impl/target_resolution/register_target_resolution.cpp
     src/impl/publishing/vex_brain.cpp
     src/impl/publishing/register_publishers.cpp
@@ -114,6 +115,7 @@ set(NAVIGATR_SOURCES
     src/runtime/register_all.cpp
     src/runtime/resource_stage.cpp
     src/runtime/sensor_stage.cpp
+    src/runtime/world_estimation_stage.cpp
     src/runtime/system.cpp
     src/inspection/inspection_document.cpp
     src/inspection/inspection_service.cpp

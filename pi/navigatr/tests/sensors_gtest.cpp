@@ -47,7 +47,7 @@ const char* kConfig = R"(
     <Pipeline>
         <CommandCollection type="noop"/>
         <Localization><Estimator type="noop"/></Localization>
-        <FieldEstimation type="noop"/>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -248,7 +248,7 @@ TEST(Sensors, SilentOpenLinkGoesUnavailableNotValidForever) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Localization><Estimator type="noop"/></Localization>
-        <FieldEstimation type="noop"/>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -336,7 +336,7 @@ TEST(Sensors, FaultRetainsHistoricalSample) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Localization><Estimator type="noop"/></Localization>
-        <FieldEstimation type="noop"/>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>
@@ -378,7 +378,7 @@ TEST(Sensors, BuilderOwnsRoutingFactoryOwnsTheRest) {
     <Pipeline>
         <CommandCollection type="noop"/>
         <Localization><Estimator type="noop"/></Localization>
-        <FieldEstimation type="noop"/>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
         <TargetResolution type="noop"/>
         <Publishing type="noop"/>
     </Pipeline>

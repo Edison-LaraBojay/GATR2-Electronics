@@ -152,7 +152,7 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
         return false;
     }
     if (!checkChildren(pipeline,
-                       {"CommandCollection", "Localization", "FieldEstimation",
+                       {"CommandCollection", "Localization", "WorldEstimation",
                         "TargetResolution", "Publishing"},
                        {}, err)) {
         return false;
@@ -227,24 +227,31 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     }
     slot_context.robot_observations = execute_localization_.observationOutputs();
 
-    if (!buildSlot("FieldEstimation", field_estimation_,
-                   Tag<FieldEstimationMakeFunction>{}, slot_context, slot_labels_[1])) {
+    // World estimation is an aggregate stage too: the estimator is selected
+    // inside it and owns whatever subpipeline it runs.
+    const ConfigNode world_node = pipeline.child("WorldEstimation");
+    if (!world_node.valid()) {
+        err = pipeline.path() + " is missing WorldEstimation; configure one Estimator, an "
+              "implementation or the noop";
         return false;
     }
-    // Later slots reference only what field estimation declares it
-    // publishes across the boundary, never a composite implementation
-    // detail.
-    slot_context.observations = field_estimation_->producesObservations();
-    slot_context.associations = field_estimation_->producesAssociations();
-    observation_decls_        = slot_context.observations;
-    association_decls_        = slot_context.associations;
+    std::optional<WorldEstimationExecutor> world = make_world_estimation(
+        world_node, functions, execute_sensors_.outputs(), resources_, &warnings_, err);
+    if (!world.has_value()) {
+        return false;
+    }
+    execute_world_ = std::move(*world);
+    // Later slots reference only what the estimator declares it publishes
+    // across the boundary, never an implementation detail.
+    slot_context.observations = execute_world_.observationOutputs();
+    slot_context.associations = execute_world_.associationOutputs();
 
     if (!buildSlot("TargetResolution", target_resolution_,
-                   Tag<TargetResolutionMakeFunction>{}, slot_context, slot_labels_[2])) {
+                   Tag<TargetResolutionMakeFunction>{}, slot_context, slot_labels_[1])) {
         return false;
     }
     if (!buildSlot("Publishing", publishing_, Tag<PublishingMakeFunction>{}, slot_context,
-                   slot_labels_[3])) {
+                   slot_labels_[2])) {
         return false;
     }
 
@@ -325,12 +332,12 @@ void System::reportingCycle(MonotonicTime now) {
         {command_, robot_, *execute_localization_.feed(), field->field, field->observations,
          field->associations, target_, now});
     target_ = target_out.target;
-    diagnostics_.note(slot_labels_[2], target_out.status);
+    diagnostics_.note(slot_labels_[1], target_out.status);
 
     PublishingOutput pub_out = publishing_->run(
         {execute_sensors_.retained(), field->observations, field->associations, robot_,
          status, field->field, command_, target_, now});
-    diagnostics_.note(slot_labels_[3], pub_out.status);
+    diagnostics_.note(slot_labels_[2], pub_out.status);
 
     auto reporting     = std::make_shared<ReportingSnapshot>();
     reporting->command = command_;
@@ -354,20 +361,20 @@ void System::fieldCycle(const SensorMap& sensors, MonotonicTime now) {
     auto                                 next     = std::make_shared<FieldSnapshot>();
     const RobotState                     robot    = execute_localization_.feed()->latest();
     ++field_diagnostics_.cycles;
+    const uint64_t         invocation = ++field_invocations_;
+    const ExecutionContext context{now, invocation, &field_diagnostics_};
 
-    FieldEstimationOutput field_out = field_estimation_->run(
-        {sensors, robot, *execute_localization_.feed(), previous->field, now});
-    enforceDeclared(field_out.observations, observation_decls_, slot_labels_[1],
-                    field_diagnostics_);
-    enforceDeclared(field_out.associations, association_decls_, slot_labels_[1],
-                    field_diagnostics_);
-    field_diagnostics_.note(slot_labels_[1], field_out.status);
+    // One standard call: the whole sensor snapshot, the latest robot state,
+    // history lookups, the previous field and the context; the executor
+    // owns declared-output enforcement and diagnostics.
+    FieldEstimationOutput field_out = execute_world_(
+        {sensors, robot, *execute_localization_.feed(), previous->field, context});
 
     next->field        = std::move(field_out.field);
     next->observations = std::move(field_out.observations);
     next->associations = std::move(field_out.associations);
     next->at           = now;
-    next->invocation   = ++field_invocations_;
+    next->invocation   = invocation;
     next->status       = field_out.status;
     next->diagnostic   = field_out.diagnostic;
 
@@ -518,8 +525,8 @@ void System::resetStages() {
     execute_resources_.reset();   // shared resources reset once, not per consumer
     execute_sensors_.reset();
     execute_localization_.reset();
+    execute_world_.reset();
     commands_->reset();
-    field_estimation_->reset();
     target_resolution_->reset();
     publishing_->reset();
 

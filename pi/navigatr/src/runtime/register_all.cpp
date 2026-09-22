@@ -11,9 +11,7 @@ void registerAll(FunctionRegistry& functions) {
     register_sensors(functions);
     register_commands(functions);
     register_localization(functions);
-    register_perception(functions);
-    register_association(functions);
-    register_field_estimation(functions);
+    register_world_estimation(functions);
     register_target_resolution(functions);
     register_publishers(functions);
 }

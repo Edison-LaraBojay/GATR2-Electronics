@@ -293,15 +293,15 @@ std::string configXml(double camera_yaw_deg, double ambiguity_margin_m) {
   <Pipeline>
     <CommandCollection type="scripted_commands"/>
     <Localization><Estimator type="scripted_localization"/></Localization>
-    <FieldEstimation type="landmark_field">
+    <WorldEstimation>
+        <Estimator id="goals" type="apriltag">
       <FieldMap resource_id="game_field"/>
-      <Pipeline>
-        <ObservationExtraction type="apriltag_tag_observation">
+        <ObservationExtraction>
           <Camera sensor_id="front_camera"/>
           <Detector resource_id="detector"/>
           <Output observation_id="tag_observations"/>
         </ObservationExtraction>
-        <Association type="tag_mount_association">
+        <Association>
           <Observations observation_id="tag_observations"/>
           <FieldMap resource_id="game_field"/>
           <RobotFrames resource_id="robot_geometry"/>
@@ -311,9 +311,9 @@ std::string configXml(double camera_yaw_deg, double ambiguity_margin_m) {
           <Output association_id="landmark_pose_observations"/>
           <Trace association_id="association_trace"/>
         </Association>
-        <Estimator type="landmark_estimator" commit="always"/>
-      </Pipeline>
-    </FieldEstimation>
+        <LandmarkEstimation commit="always"/>
+        </Estimator>
+    </WorldEstimation>
     <TargetResolution type="configured_targets">
       <Targets resource_id="targets"/>
       <FieldMap resource_id="game_field"/>

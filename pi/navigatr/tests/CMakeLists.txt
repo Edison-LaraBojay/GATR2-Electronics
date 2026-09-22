@@ -32,8 +32,9 @@ set(TEST_SOURCES
     attitude_gtest.cpp
     localization_models_gtest.cpp
     localization_gtest.cpp
+    localization_fusion_gtest.cpp
     brain_io_gtest.cpp
-    field_estimation_gtest.cpp
+    world_estimation_gtest.cpp
     vision_targets_gtest.cpp
     system_build_gtest.cpp
     profiles_gtest.cpp

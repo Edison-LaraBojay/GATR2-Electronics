@@ -1,19 +1,23 @@
 // field_estimation.h
-// Field Estimation: external-state estimation, nothing else. The selected
-// implementation may be a leaf, an explicit noop, or a composite that
-// privately owns observation extraction, association, and one or more
-// estimators; the runtime interacts with all three forms through this one
-// contract and never learns how many internal children exist.
+// World estimation: external-state estimation, nothing else. This is the
+// one input/output contract through which the coordinator drives the
+// selected estimator, whatever it is inside. An implementation may be a
+// leaf, the explicit noop, or a composite that privately owns a subpipeline
+// (observation extraction, association, one or more landmark estimators);
+// the runtime interacts with every form through this contract and never
+// learns how many internal steps exist.
 //
-// The input is a sensor snapshot plus read access to localization: the
-// latest robot state and timestamped history lookups. The output carries
-// the field estimate plus the standard evidence maps the composite chose
-// to publish. Observations and associations cross this boundary because
+// The input is the entire sensor snapshot read-only, the latest robot state,
+// timestamped pose and attitude lookups into localization history, the
+// previous field state, and the execution context (host clock, invocation,
+// diagnostics). The output carries the field estimate plus the standard
+// evidence maps the implementation chose to publish, with status and a
+// diagnostic. Observations and associations cross this boundary because
 // target resolution, publishing and inspection genuinely consume them;
-// everything else a composite computes stays private to it.
+// everything else an implementation computes stays private to it.
 //
-// Field estimation runs every invocation on whatever evidence its children
-// accept, whether or not any navigation target exists; TargetState belongs
+// Estimation runs every invocation on whatever evidence the implementation
+// accepts, whether or not any navigation target exists; TargetState belongs
 // to Target Resolution. It may run on its own worker: nothing here may
 // reach back into the coordinator.
 
@@ -25,6 +29,7 @@
 
 #include "config/config_node.h"
 #include "contracts/slot_init.h"
+#include "core/execution_context.h"
 #include "core/function_status.h"
 #include "core/records.h"
 #include "state/field_state.h"
@@ -35,11 +40,11 @@ namespace navigatr
 {
 
 struct FieldEstimationInput {
-    const SensorMap&  sensors;
-    const RobotState& robot;     // latest snapshot
-    const PoseLookup& history;   // pose at measurement time
-    const FieldState& previousField;
-    MonotonicTime     now;   // host clock
+    const SensorMap&        sensors;         // the whole map, read-only
+    const RobotState&       robot;           // latest snapshot
+    const PoseLookup&       history;         // pose and attitude at measurement time
+    const FieldState&       previousField;
+    const ExecutionContext& context;         // host clock, invocation, diagnostics
 };
 
 struct FieldEstimationOutput {
@@ -58,14 +63,16 @@ public:
     virtual FieldEstimationOutput run(const FieldEstimationInput& in) = 0;
 
     // Declared published outputs, for build-time reference checks by later
-    // slots. A composite reports what its children publish across the
-    // boundary, never their private intermediates.
+    // slots and runtime enforcement by the stage. A composite reports what
+    // crosses the boundary, never its private intermediates.
     virtual std::vector<ObservationOutputDecl> producesObservations() const { return {}; }
     virtual std::vector<AssociationOutputDecl> producesAssociations() const { return {}; }
 
     virtual void reset() {}
 };
 
+// Signature stored in the FunctionRegistry under the Estimator type; the
+// factory resolves its references once and captures everything it keeps.
 using FieldEstimationMakeFunction = std::function<std::unique_ptr<FieldEstimation>(
     const ConfigNode&, SlotInitializationContext&, std::string& err)>;
 

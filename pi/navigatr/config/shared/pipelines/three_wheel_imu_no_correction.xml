@@ -26,7 +26,9 @@
         <History retention_s="5" capacity="1024" max_interpolation_gap_ms="100"/>
     </Localization>
 
-    <FieldEstimation type="noop"/>
+    <WorldEstimation>
+        <Estimator id="none" type="noop"/>
+    </WorldEstimation>
 
     <TargetResolution type="noop"/>
 

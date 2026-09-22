@@ -3,7 +3,8 @@
 // odometry-frame pose using the constant-curvature chord, maps source
 // stamps onto the host clock, applies placement requests as field
 // re-anchors, and folds an optional heading increment and an optional
-// attitude observation.
+// attitude observation. No uncertainty model; weighted_planar_fusion is
+// the estimator that carries one.
 //
 //   <Estimator type="planar_motion_integrator">
 //       <Motion observation_id="tracking_motion"/>
@@ -39,6 +40,7 @@
 
 #include "contracts/localization.h"
 #include "core/clock_sync.h"
+#include "impl/localization/motion_step.h"
 #include "payloads/robot_observations.h"
 
 namespace navigatr
@@ -58,32 +60,19 @@ public:
     void reset() override;
 
 private:
-    struct RetainedAttitude {
-        bool                valid = false;
-        AttitudeObservation observation;
-        MonotonicTime       hostAt;   // set once the source time maps
-    };
-
-    void applyAttitude(StateEstimatorOutput& out, const StateEstimatorInput& in,
-                       bool clock_valid);
-
     std::string   type_ = "planar_motion_integrator";
     ObservationId motion_ref_;
-    ObservationId heading_ref_;    // empty when not configured
-    ObservationId attitude_ref_;   // empty when not configured
+    ObservationId heading_ref_;   // empty when not configured
     long          heading_tolerance_ms_ = 20;
-    long          attitude_max_age_ms_  = 200;
 
-    std::string last_placement_origin_;
-    uint64_t    last_placement_sequence_ = 0;
-
-    RetainedAttitude attitude_;
+    PlacementEdge placement_;
+    AttitudeFold  attitude_;
 
     // Maps the motion source's device stamps onto the host clock so pose
     // history carries the time the pose was physically true, not the loop
     // time it was computed at.
     DeviceToHostClock clock_;
-    std::string motion_clock_;
+    std::string       motion_clock_;
 };
 
 } // namespace navigatr

@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fusion demo pipeline over the synthetic rig. Three tracking wheels
+     solve planar motion on their own (no HeadingConstraint), the gyro is
+     a separate heading contributor, and weighted_planar_fusion blends the
+     two rotations by their configured variances and re-solves the
+     translation through the wheel geometry. Attitude is folded as tilt
+     only. The AprilTag world estimator runs beside it, exactly as in
+     synthetic_field_demo.xml.
+
+     Every Noise value below is a PLACEHOLDER: an assumption in the stated
+     units, not a measurement of any sensor on the robot. Replace them from
+     stationary and known-path recordings before trusting the covariance. -->
+<Pipeline>
+
+    <CommandCollection type="noop"/>
+
+    <Localization>
+        <Observation id="tracking_motion" type="tracking_wheel_motion">
+            <Wheels resource_id="wheel_geometry">
+                <Use wheel_id="left_wheel"/>
+                <Use wheel_id="right_wheel"/>
+                <Use wheel_id="rear_wheel"/>
+            </Wheels>
+            <!-- no HeadingConstraint: the gyro enters below as its own
+                 observation so the estimator can weigh it -->
+            <Output observation_id="tracking_motion"/>
+        </Observation>
+        <Observation id="imu_heading" type="imu_heading_increment">
+            <Input sensor_id="robot_imu"/>
+            <Calibration bias_samples="60" max_gap_ms="250"/>
+            <Output observation_id="imu_heading"/>
+        </Observation>
+        <Observation id="attitude" type="attitude_reference">
+            <Input sensor_id="robot_attitude"/>
+            <Freshness max_age_ms="150"/>
+            <Output observation_id="attitude"/>
+        </Observation>
+        <Estimator type="weighted_planar_fusion">
+            <Motion observation_id="tracking_motion">
+                <!-- PLACEHOLDER one-sigma wheel odometry noise per step -->
+                <Noise translation_floor_m="0.0005" translation_per_m="0.02"
+                       rotation_floor_rad="0.001" rotation_per_rad="0.02"
+                       rotation_per_m="0.01"/>
+            </Motion>
+            <Heading observation_id="imu_heading" interval_tolerance_ms="20">
+                <!-- PLACEHOLDER gyro angle random walk and residual bias -->
+                <Noise angle_random_walk_rad_per_sqrt_s="0.002" bias_rad_per_s="0.0005"/>
+            </Heading>
+            <Attitude observation_id="attitude" max_age_ms="250"/>
+        </Estimator>
+        <History retention_s="5" capacity="1024" max_interpolation_gap_ms="100"/>
+        <!-- the rig starts on the circle west of the center goal, facing it -->
+        <InitialPlacement x_m="1.0332" y_m="1.7832" heading_deg="0"/>
+    </Localization>
+
+    <WorldEstimation>
+        <Estimator id="goals" type="apriltag">
+            <FieldMap resource_id="override_field"/>
+            <ObservationExtraction>
+                <Camera sensor_id="front_camera"/>
+                <Detector resource_id="tag_detector"/>
+                <Output observation_id="tag_observations"/>
+            </ObservationExtraction>
+            <Association>
+                <Observations observation_id="tag_observations"/>
+                <FieldMap resource_id="override_field"/>
+                <RobotFrames resource_id="robot_geometry"/>
+                <Attitude policy="assume_level"/>
+                <Gates max_translation_error_m="0.5" max_heading_error_deg="30"
+                       ambiguity_margin_m="0.15" max_range_m="3.0"
+                       min_decision_margin="10" max_hamming="0"
+                       min_facing_cos="0.1" min_projected_size_px="8"
+                       max_reprojection_error_px="0"
+                       max_alternate_pose_ambiguity="0"/>
+                <Output association_id="landmark_pose_observations"/>
+                <Trace association_id="tag_association_trace"/>
+            </Association>
+            <LandmarkEstimation commit="always" blend="0.5"/>
+        </Estimator>
+    </WorldEstimation>
+
+    <TargetResolution type="noop"/>
+
+    <Publishing type="noop"/>
+
+</Pipeline>

@@ -285,6 +285,15 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
                 return nullptr;
             }
         }
+        // translation sensitivity to rotation: d = (U'U)^-1 U' (m - k dtheta)
+        {
+            std::vector<double> negk;
+            for (double ki : k) {
+                negk.push_back(-ki);
+            }
+            model->has_coupling_ =
+                solvePlanar(ux, uy, negk, model->coupling_x_, model->coupling_y_);
+        }
     }
 
     const ConfigNode output = node.child("Output");
@@ -672,6 +681,9 @@ FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
     if (heading_.configured) {
         increment.sources.push_back(heading_.provenance);
     }
+    increment.has_rotation_coupling = has_coupling_;
+    increment.dx_per_dtheta_m_rad   = coupling_x_;
+    increment.dy_per_dtheta_m_rad   = coupling_y_;
 
     if (!solved) {
         dropWindow("wheel solve failed");

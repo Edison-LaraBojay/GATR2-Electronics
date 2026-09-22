@@ -1,5 +1,8 @@
 # Calibration inventory
 
+For commands, calibration software, and complete two- or three-wheel camera
+profiles, start with [Set up and run Navigatr](setup.md).
+
 Every measurement the runtime still needs, where it goes, how to get it,
 and what depends on it. Status words in this inventory and XML
 `calibration_status` attributes are notes for the reader only. The runtime
@@ -15,11 +18,19 @@ Which profile uses which file:
 | Profile | Robot fragments | Field | Pipeline |
 |---|---|---|---|
 | `override/diagnostics/two_wheel_imu.xml.in`, `three_wheel_imu.xml.in` | `gatr2_as5047_imu.xml` | none | `*_no_correction.xml` |
-| `override/diagnostics/two_wheel_imu_camera.xml.in`, `three_wheel_imu_camera.xml.in` | `gatr2_as5047_imu.xml` + `gatr2_front_camera.xml` | `override/field.xml` | `*_camera_diagnostic.xml` |
+| `override/diagnostics/three_wheel_imu_camera.xml.in` | `gatr2_as5047_imu.xml` + `gatr2_front_camera.xml` | `override/field.xml` | local `three_wheel_imu_camera_pipeline.xml`, completed from `.xml.in` |
+| `override/diagnostics/two_wheel_imu_camera.xml.in` | `gatr2_two_wheel_as5047_imu.xml` + `gatr2_front_camera.xml` | `override/field.xml` | local `two_wheel_imu_camera_pipeline.xml`, completed from `.xml.in` |
 | `override/diagnostics/live_camera_inspection.xml` | `gatr2_front_camera_uncalibrated.xml` | `override/field.xml` | `camera_inspection_only.xml` |
 | `demo/synthetic_field_demo*.xml` | `synthetic_rig*.xml` (nothing measured) | `override/field.xml` | `synthetic_field_demo.xml` |
+| `demo/synthetic_fusion_demo.xml` | `synthetic_rig.xml` (nothing measured) | `override/field.xml` | `synthetic_fusion_demo.xml` |
 
 ## Inventory
+
+The dedicated two-wheel camera robot template uses the same calibration
+attributes as the three-wheel template, with only `left_wheel`/encoder A and
+`rear_wheel`/encoder C. Its unused encoder B/right-wheel values are absent.
+Each camera main profile also has `Inspection/RobotBody` display dimensions and
+body-center offsets relative to the robot origin; these do not affect estimates.
 
 | Item | Where it goes | How to obtain | Status | Gates |
 |---|---|---|---|---|
@@ -37,10 +48,11 @@ Which profile uses which file:
 | Camera mount pose | same file, `Resource[robot_geometry]/Frame[front_camera_engineering]/PoseOfChildInParent` `x_m`, `y_m`, `z_m`, `roll_deg`, `pitch_deg`, `yaw_deg` (`@MEASURE_CAMERA_*@`), `calibration_status` | Measure from the robot origin to the optical center (+x forward, +y left, +z up; positive pitch looks down, positive yaw looks left); check by observing a tag at a taped field pose and comparing the implied landmark pose in the viewer | placeholder (the uncalibrated fragment declares no frame) | `tag_mount_association` needs the camera frame in the robot frame map; the camera diagnostic profiles |
 | Detector corner size | same file, `Resource[tag_detector]/Family` `detection_size_m` (`@MEASURE_DETECTOR_CORNER_EDGE_SIZE_M@`); also every `TagMount` in `override/field.xml` | Measure the printed pattern side on a physical goal; the corner square is 5/9 of it for tagCircle21h7 | provisional (0.01761272 inferred from the CAD, see [field assets](field_assets.md)) | range scale of every metric tag pose; change the field file and the detector together |
 | Tag family | same `Family` `name`; every `TagMount` `family` | Run `live_camera_inspection.xml` at a goal and see whether ids 0-4 decode as tagCircle21h7 | provisional (inferred; the manual never names it) | any decode at all |
-| Initial robot placement | `Localization/InitialPlacement` in a pipeline fragment, or the brain init command over `brain_uart` (`CommandFrame` init pose) | Tape the starting pose on the field, enter it in field coordinates (x, y, heading counterclockwise from +x) | per run; the diagnostic pipelines carry none, the synthetic demo carries one | field poses and association priors: without a placement localization stays odometry-only and no landmark evidence is accepted |
+| Initial robot placement | `Localization/InitialPlacement` in the local `override/diagnostics/*_imu_camera_pipeline.xml.in` templates; configured command sources can also provide placement | Tape the starting pose on the field, enter the robot origin's field coordinates (x, y, heading counterclockwise from +x) | per run; camera pipeline templates have required placement tokens, synthetic demos supply their own placement | field poses and association priors: without placement localization stays odometry-only and no landmark evidence is accepted |
 | Field map geometry | `override/field.xml`, nine `NominalPose` and 36 `TagMount` elements | Nominal CAD positions are sufficient for association; optional physical checks can improve nominal accuracy. Competition displacement is estimated rather than configured in advance | provisional reader annotation | nominal association priors; the association translation gate (0.5-0.75 m) tolerates placement differences |
 | Attitude source | would be a `Sensor type="attitude_channel"` bound to a resource output, an `Observation type="attitude_reference"` and an `Estimator/Attitude` reference (see `synthetic_rig.xml` and `synthetic_field_demo.xml`) | None exists in firmware: the Pico `SensorSample` carries `enc[3]`, `gyro_z` and `accel[2]` only (`common/frames.h`); the ASM330LHHG1 is six-axis but `pico/src/imu.cpp` reads gyro Z alone and there is no attitude report. Live tilt needs a new Pico report (out of scope, see [attitude follow-up](attitude_firmware_followup.md)). The runtime path is exercised by the synthetic rig | absent | measured tilt in association (`Attitude policy="assume_level"` otherwise) and the viewer's attitude badge; nothing else |
 | Camera exposure timestamps | no configured value; `CameraFrameData.exposureAt`, `exposure_uncertainty_ms`, `exposure_time_reliable` from the libcamera backend | On the Pi, compare the reported exposure time with the host monotonic clock and a known event (a flashed LED), confirm the uncertainty bound and the latency; see [Pi camera setup](pi_camera_setup.md) | untested on hardware | pose-at-exposure lookups (`History max_interpolation_gap_ms`) and every association decision |
+| Odometry and gyro noise | `Localization/Estimator[weighted_planar_fusion]/Motion/Noise` and `Heading/Noise` in a pipeline fragment (`synthetic_fusion_demo.xml` carries placeholders); units in [localization fusion](localization_fusion.md) | Wheel translation and rotation error per meter and per radian from repeated known-path drives against tape; gyro angle random walk and residual bias from a long stationary recording after `bias_samples` calibration | placeholder | the fusion weights and the reported `odom_covariance`; the pose itself still follows the wheels and gyro |
 | Pi link parameters | `gatr2_as5047_imu.xml.in`, `Resource[pico_uart]`, `Resource[brain_uart]` | Already known: `/dev/ttyAMA0` 115200, `/dev/ttyAMA5` 115200 with RS-485 enable GPIO 6 (`docs/hardware.md`) | verified | serial transport |
 
 Not in the table because nothing in the runtime consumes them yet: the

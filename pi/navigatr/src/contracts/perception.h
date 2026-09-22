@@ -1,13 +1,14 @@
 // perception.h
-// Perception: sensor results in, observations of external things out.
-// Detectors produce generic observation records; nothing downstream
-// depends on how an observation was made. Cameras and other heavyweight
-// sources are resources captured at initialization. A detector failure is
-// a fault carried through diagnostics, never an empty result.
+// Perception: sensor results in, observations of external things out. An
+// internal step contract of a world estimator's subpipeline, never a
+// coordinator slot: the estimator that owns a perception step decides when
+// it runs and what it publishes across the boundary. Detectors produce
+// generic observation records; nothing downstream depends on how an
+// observation was made. Cameras and other heavyweight sources are
+// resources captured at initialization. A detector failure is a fault
+// carried through diagnostics, never an empty result.
 
 #pragma once
-#include <functional>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,8 +43,5 @@ public:
 
     virtual void reset() {}
 };
-
-using PerceptionMakeFunction = std::function<std::unique_ptr<Perception>(
-    const ConfigNode&, SlotInitializationContext&, std::string& err)>;
 
 } // namespace navigatr

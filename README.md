@@ -26,6 +26,10 @@ and KiCad project files.
 
 ## Pi runtime
 
+Start with [Set up and run Navigatr](pi/navigatr/docs/setup.md) for Pi/Pico setup,
+building, camera calibration, mounting measurements, two- and three-wheel IMU +
+camera configurations, and the live field viewer.
+
 The [Navigatr overview](pi/navigatr/README.md) is the entry point for the Pi
 runtime design, implementation coverage, and build commands. Its design uses
 one program with independently scheduled localization and landmark-estimation

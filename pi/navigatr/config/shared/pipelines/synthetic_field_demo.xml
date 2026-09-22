@@ -34,15 +34,15 @@
         <InitialPlacement x_m="1.0332" y_m="1.7832" heading_deg="0"/>
     </Localization>
 
-    <FieldEstimation type="landmark_field">
-        <FieldMap resource_id="override_field"/>
-        <Pipeline>
-            <ObservationExtraction type="apriltag_tag_observation">
+    <WorldEstimation>
+        <Estimator id="goals" type="apriltag">
+            <FieldMap resource_id="override_field"/>
+            <ObservationExtraction>
                 <Camera sensor_id="front_camera"/>
                 <Detector resource_id="tag_detector"/>
                 <Output observation_id="tag_observations"/>
             </ObservationExtraction>
-            <Association type="tag_mount_association">
+            <Association>
                 <Observations observation_id="tag_observations"/>
                 <FieldMap resource_id="override_field"/>
                 <RobotFrames resource_id="robot_geometry"/>
@@ -56,9 +56,9 @@
                 <Output association_id="landmark_pose_observations"/>
                 <Trace association_id="tag_association_trace"/>
             </Association>
-            <Estimator type="landmark_estimator" commit="always" blend="0.5"/>
-        </Pipeline>
-    </FieldEstimation>
+            <LandmarkEstimation commit="always" blend="0.5"/>
+        </Estimator>
+    </WorldEstimation>
 
     <TargetResolution type="noop"/>
 

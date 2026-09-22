@@ -1,13 +1,13 @@
 // association.h
 // Association: decides what each observation most likely is, using the
 // robot pose at the observation's measurement time (from localization
-// history, never the latest state) and the previous field estimate.
-// Ambiguity the evidence cannot resolve stays ambiguous; pretending an id
-// solved it is an implementation bug, not a framework guarantee.
+// history, never the latest state) and the previous field estimate. An
+// internal step contract of a world estimator's subpipeline, never a
+// coordinator slot. Ambiguity the evidence cannot resolve stays ambiguous;
+// pretending an id solved it is an implementation bug, not a framework
+// guarantee.
 
 #pragma once
-#include <functional>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -48,8 +48,5 @@ public:
 
     virtual void reset() {}
 };
-
-using AssociationMakeFunction = std::function<std::unique_ptr<Association>(
-    const ConfigNode&, SlotInitializationContext&, std::string& err)>;
 
 } // namespace navigatr

@@ -611,6 +611,20 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
     w.field("vy_m_s", robot.vy_m_s);
     w.field("yaw_rate_deg_s", radToDeg(robot.yaw_rate_rad_s));
     w.field("confidence", robot.confidence);
+    w.field("has_covariance", robot.has_covariance);
+    if (robot.has_covariance) {
+        // odometry frame, m^2, m rad, rad^2
+        const PoseCovariance& c = robot.odom_covariance;
+        w.key("odom_covariance");
+        w.beginObject();
+        w.field("xx", c.xx);
+        w.field("xy", c.xy);
+        w.field("xh", c.xh);
+        w.field("yy", c.yy);
+        w.field("yh", c.yh);
+        w.field("hh", c.hh);
+        w.endObject();
+    }
     stamp(w, "measured_at", robot.measuredAt);
     hostMs(w, "measured_at_host_ms", robot.measuredAtHost);
     ageMs(w, "age_ms", robot.measuredAtHost, now);

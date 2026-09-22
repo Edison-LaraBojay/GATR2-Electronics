@@ -1,7 +1,9 @@
 <Pipeline>
     <CommandCollection type="noop"/>
     <Localization file="./localization.xml"/>
-    <FieldEstimation type="noop"/>
+    <WorldEstimation>
+        <Estimator id="none" type="noop"/>
+    </WorldEstimation>
     <TargetResolution type="noop"/>
     <Publishing type="noop"/>
 </Pipeline>

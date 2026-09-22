@@ -51,7 +51,7 @@ std::string chainText(const std::vector<std::string>& chain) {
 // are opaque: their file attributes retain their implementation meaning.
 enum class Section {
     kOpaque, kSystem, kConfiguration, kRobot, kField, kResources, kSensors,
-    kPipeline, kLocalization, kStage,
+    kPipeline, kLocalization, kWorldEstimation,
 };
 
 struct ChildSection {
@@ -85,15 +85,17 @@ ChildSection childSection(Section parent, const std::string& name) {
         if (name == "Sensor") return {true, Section::kOpaque};
         break;
     case Section::kPipeline:
-        // The slot builder validates names/types. This boundary also works
-        // for implementation-selected subpipelines and their registered slots.
-        return {true, name == "Localization" ? Section::kLocalization : Section::kStage};
+        // The slot builder validates names/types. A slot's own children are
+        // implementation-owned and opaque.
+        if (name == "Localization") return {true, Section::kLocalization};
+        if (name == "WorldEstimation") return {true, Section::kWorldEstimation};
+        return {true, Section::kOpaque};
     case Section::kLocalization:
-        if (name == "Observation" || name == "Estimator") return {true, Section::kStage};
+        if (name == "Observation" || name == "Estimator") return {true, Section::kOpaque};
         if (name == "History" || name == "InitialPlacement") return {true, Section::kOpaque};
         break;
-    case Section::kStage:
-        if (name == "Pipeline") return {true, Section::kPipeline};
+    case Section::kWorldEstimation:
+        if (name == "Estimator") return {true, Section::kOpaque};
         break;
     case Section::kOpaque:
         break;

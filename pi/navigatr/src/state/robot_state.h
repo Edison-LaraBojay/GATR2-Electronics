@@ -31,6 +31,15 @@
 namespace navigatr
 {
 
+// Symmetric 3x3 covariance of a planar pose (x_m, y_m, heading_rad); the
+// upper triangle stored. Zero is a pose known exactly, which is what the
+// odometry origin is by definition.
+struct PoseCovariance {
+    double xx = 0.0, xy = 0.0, xh = 0.0;
+    double yy = 0.0, yh = 0.0;
+    double hh = 0.0;
+};
+
 struct RobotState {
     Pose2D odom_pose;        // T_odom_robot
     Pose2D field_from_odom;  // T_field_odom, identity until re-anchored
@@ -42,7 +51,7 @@ struct RobotState {
     double vy_m_s         = 0.0;
     double yaw_rate_rad_s = 0.0;
 
-    double confidence  = 0.0;
+    double confidence  = 0.0;   // producer score, not a covariance
     bool   valid       = false;   // an estimator has produced a pose
     bool   initialized = false;   // field anchor was set from a request
 
@@ -56,6 +65,11 @@ struct RobotState {
     // Measured tilt (odometry reference, yaw equal to odom_pose.heading)
     // with its own validity and age; assumed level when no source exists.
     Attitude attitude;
+
+    // Uncertainty of odom_pose, odometry frame, m and rad, from an estimator
+    // that models it. has_covariance false means unknown, never exact.
+    PoseCovariance odom_covariance;
+    bool           has_covariance = false;
 
     Pose2D fieldPose() const { return compose(field_from_odom, odom_pose); }
 
