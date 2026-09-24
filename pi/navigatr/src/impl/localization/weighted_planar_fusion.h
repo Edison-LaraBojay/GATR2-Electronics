@@ -1,10 +1,10 @@
 // weighted_planar_fusion.h
 // State estimator: covariance-weighted fusion of the supported robot
 // observations into the odometry pose, with the pose covariance carried
-// through every step. Same contract, placement, clock and disposition
-// rules as planar_motion_integrator; the difference is that every
-// measurement enters with an explicit variance and the estimate reports
-// one.
+// through every step. Same contract, placement, clock, alignment and
+// disposition rules as planar_motion_integrator (motion_step); the
+// difference is that every measurement enters with an explicit variance
+// and the estimate reports one.
 //
 //   <Estimator type="weighted_planar_fusion">
 //       <Motion observation_id="tracking_motion">
@@ -12,7 +12,7 @@
 //                  rotation_floor_rad="0.0005" rotation_per_rad="0.02"
 //                  rotation_per_m="0.005"/>
 //       </Motion>
-//       <Heading observation_id="imu_heading" interval_tolerance_ms="20">   optional
+//       <Heading observation_id="imu_heading" max_wait_ms="100">          optional
 //           <Noise angle_random_walk_rad_per_sqrt_s="0.002"
 //                  bias_rad_per_s="0.0005"/>
 //       </Heading>
@@ -20,7 +20,9 @@
 //   </Estimator>
 //
 // Supported observations: one BodyMotionIncrement (required), one
-// HeadingIncrement over the same interval (optional), one
+// HeadingIncrement whose support equals the motion window on the same
+// named clock (optional; partial support from the window start
+// accumulates while the motion waits, up to max_wait_ms), one
 // AttitudeObservation (optional, tilt only, never yaw). Nothing else is a
 // robot observation here: landmark evidence is derived through this pose
 // and never feeds back into it.
@@ -49,10 +51,11 @@
 //                 P' = F P F' + G Q G' with F carrying the heading to
 //                 position coupling (-g_y, g_x)
 //
-// A heading that shares a source with the motion is not independent and
-// is rejected, never counted twice (a wheel model with a HeadingConstraint
-// already folded that gyro). Covariance starts at zero at the odometry
-// origin, which is exact by definition, and restarts there on reset.
+// A heading that shares a measurement with the motion is not independent
+// and is rejected, never counted twice (a wheel model with a
+// HeadingConstraint already folded that gyro, under any sensor id).
+// Covariance starts at zero at the odometry origin, which is exact by
+// definition, and restarts there on reset.
 
 #pragma once
 #include <cstdint>
@@ -60,7 +63,6 @@
 #include <string>
 
 #include "contracts/localization.h"
-#include "core/clock_sync.h"
 #include "impl/localization/motion_step.h"
 #include "payloads/robot_observations.h"
 
@@ -78,7 +80,7 @@ public:
 
     const std::string& type() const override { return type_; }
 
-    void reset() override;
+    void reset() override { state_.reset(); }
 
 private:
     struct MotionNoise {
@@ -94,18 +96,13 @@ private:
         double bias_rad_per_s                   = 0.0;
     };
 
-    std::string   type_ = "weighted_planar_fusion";
-    ObservationId motion_ref_;
-    ObservationId heading_ref_;   // empty when not configured
-    long          heading_tolerance_ms_ = 20;
-    MotionNoise   motion_noise_;
-    HeadingNoise  heading_noise_;
-
-    PlacementEdge placement_;
-    AttitudeFold  attitude_;
-
-    DeviceToHostClock clock_;
-    std::string       motion_clock_;
+    std::string     type_ = "weighted_planar_fusion";
+    ObservationId   motion_ref_;
+    ObservationId   heading_ref_;   // empty when not configured
+    long            max_wait_ms_ = 100;
+    MotionNoise     motion_noise_;
+    HeadingNoise    heading_noise_;
+    PlanarStepState state_;
 };
 
 } // namespace navigatr

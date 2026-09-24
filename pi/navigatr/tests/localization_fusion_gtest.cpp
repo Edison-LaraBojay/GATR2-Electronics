@@ -35,7 +35,7 @@ const char* kDefaultXml = R"(
         <Noise translation_floor_m="0.001" translation_per_m="0"
                rotation_floor_rad="0.02" rotation_per_rad="0" rotation_per_m="0"/>
     </Motion>
-    <Heading observation_id="heading" interval_tolerance_ms="5">
+    <Heading observation_id="heading" max_wait_ms="50">
         <Noise angle_random_walk_rad_per_sqrt_s="0.01" bias_rad_per_s="0"/>
     </Heading>
     <Attitude observation_id="attitude" max_age_ms="50"/>
@@ -92,7 +92,8 @@ struct Fixture {
 
     void putMotion(double dx, double dy, double dtheta, int64_t start_ms = 0,
                    int64_t end_ms = 1000, const char* source = "enc", bool rotation = true,
-                   bool coupling = false, double jx = 0.0, double jy = 0.0) {
+                   bool coupling = false, double jx = 0.0, double jy = 0.0,
+                   const char* clock = "pico") {
         BodyMotionIncrement m;
         m.dx_m                  = dx;
         m.dy_m                  = dy;
@@ -106,6 +107,7 @@ struct Fixture {
         m.dy_per_dtheta_m_rad   = jy;
         Provenance p;
         p.source = source;
+        p.clock  = clock;
         m.sources.push_back(p);
         RobotObservationRecord record;
         record.measuredAt = m.endAt;
@@ -115,7 +117,8 @@ struct Fixture {
     }
 
     void putHeading(double dtheta, int64_t start_ms = 0, int64_t end_ms = 1000,
-                    const char* source = "imu") {
+                    const char* source = "imu", const char* clock = "pico",
+                    uint64_t epoch = 0) {
         HeadingIncrement h;
         h.dtheta_rad = dtheta;
         h.startAt    = deviceTime(start_ms);
@@ -123,6 +126,8 @@ struct Fixture {
         h.dt_s       = (end_ms - start_ms) / 1000.0;
         Provenance p;
         p.source = source;
+        p.clock  = clock;
+        p.epoch  = epoch;
         h.sources.push_back(p);
         RobotObservationRecord record;
         record.measuredAt = h.endAt;
@@ -456,19 +461,20 @@ TEST(WeightedPlanarFusion, SharedSourceIsNeverCountedTwice) {
 TEST(WeightedPlanarFusion, MismatchedIntervalsAreNotFused) {
     Fixture f;
     f.putMotion(0.0, 0.0, 0.5);
-    f.putHeading(0.25, 60, 65);   // ends before the motion: discarded
+    f.putHeading(0.25, 60, 65);   // does not start the motion window: discarded
     StateEstimatorOutput out = f.run();
     EXPECT_TRUE(out.advanced);
     EXPECT_TRUE(contains(out.rejected, "heading"));
-    EXPECT_NE(out.diagnostic.find("interval"), std::string::npos);
+    EXPECT_NE(out.diagnostic.find("does not continue"), std::string::npos);
     EXPECT_NEAR(out.robot.odom_pose.heading_rad, 0.5, 1e-12);
     EXPECT_NEAR(out.robot.odom_covariance.hh, kVarW, 1e-15);
 
     f.putMotion(0.0, 0.0, 0.5, 1000, 2000);
-    f.putHeading(0.25, 1000, 2500);   // ends later: stays pending for a later motion
+    f.putHeading(0.25, 1000, 2500);   // overruns the window: can never align
     out = f.run();
     EXPECT_TRUE(out.advanced);
-    EXPECT_FALSE(contains(out.rejected, "heading"));
+    EXPECT_TRUE(contains(out.rejected, "heading"));
+    EXPECT_NE(out.diagnostic.find("overruns"), std::string::npos);
     EXPECT_FALSE(contains(out.accepted, "heading"));
     EXPECT_NEAR(out.robot.odom_pose.heading_rad, 1.0, 1e-12);
 }
@@ -654,7 +660,8 @@ struct StageFixture {
                                  nullptr, err);
     }
 
-    void put(const char* id, TypedPayload payload, int64_t stamp_ms, uint64_t sequence) {
+    void put(const char* id, TypedPayload payload, int64_t stamp_ms, uint64_t sequence,
+             const char* measurement = "") {
         MeasurementRecord record;
         record.state = SourceState::kValid;
         StoredSample stored;
@@ -663,6 +670,7 @@ struct StageFixture {
         stored.sequence        = sequence;
         stored.upstream.clock  = "pico";
         stored.upstream.source = id;
+        stored.upstream.measurement = measurement;
         stored.payload         = std::move(payload);
         record.latest          = std::move(stored);
         sensors[SensorId{id}]  = std::move(record);
@@ -716,7 +724,7 @@ const char* kThreeWheelPlusGyro = R"(
             <Noise translation_floor_m="0.001" translation_per_m="0"
                    rotation_floor_rad="0.02" rotation_per_rad="0" rotation_per_m="0"/>
         </Motion>
-        <Heading observation_id="heading" interval_tolerance_ms="5">
+        <Heading observation_id="heading" max_wait_ms="50">
             <Noise angle_random_walk_rad_per_sqrt_s="0.01" bias_rad_per_s="0"/>
         </Heading>
     </Estimator>
@@ -746,7 +754,7 @@ const char* kTwoWheelConstrainedPlusSameGyro = R"(
             <Noise translation_floor_m="0.001" translation_per_m="0"
                    rotation_floor_rad="0.02" rotation_per_rad="0" rotation_per_m="0"/>
         </Motion>
-        <Heading observation_id="heading" interval_tolerance_ms="5">
+        <Heading observation_id="heading" max_wait_ms="50">
             <Noise angle_random_walk_rad_per_sqrt_s="0.01" bias_rad_per_s="0"/>
         </Heading>
     </Estimator>
@@ -869,4 +877,219 @@ TEST(LocalizationFusion, CheckedInSyntheticFusionDemoBuildsAndTracksTheRig) {
     EXPECT_NEAR(wrapAngle(pose.heading_rad - truth.pose.heading_rad), 0.0, degToRad(3.0));
     EXPECT_EQ(system->diagnostics().functions.count("Localization/weighted_planar_fusion"),
               1u);
+}
+
+// ---- interval support, clock identity, lineage ---------------------------
+
+TEST(WeightedPlanarFusion, DifferentDurationsInsideTheOldToleranceAccumulateInstead) {
+    // a 20 ms wheel window and a 10 ms gyro window were within the old
+    // tolerance; they are different motion windows and never blend as is
+    Fixture f;
+    f.putMotion(0.0, 0.0, 0.2, 0, 20);
+    f.putHeading(0.05, 0, 10);   // fast start
+    StateEstimatorOutput out = f.run();
+    EXPECT_EQ(out.status, FunctionStatus::kNoData);
+    EXPECT_FALSE(out.advanced);
+    EXPECT_TRUE(contains(out.accepted, "heading"));    // stashed, consumed once
+    EXPECT_FALSE(contains(out.accepted, "motion"));    // held
+    EXPECT_FALSE(contains(out.rejected, "motion"));
+    EXPECT_NE(out.diagnostic.find("covers part"), std::string::npos) << out.diagnostic;
+
+    f.putMotion(0.0, 0.0, 0.2, 0, 20);   // the same window, offered again
+    f.putHeading(0.15, 10, 20);          // the rate changed inside the window
+    out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_TRUE(contains(out.accepted, "motion"));
+    EXPECT_TRUE(contains(out.accepted, "heading"));
+    // summed support 0.05 + 0.15 = 0.20 over exactly 0..20, no duration scaling
+    EXPECT_NEAR(out.robot.odom_pose.heading_rad, 0.2, 1e-12);
+    EXPECT_NEAR(out.robot.yaw_rate_rad_s, 10.0, 1e-9);
+    const double var_g = 0.01 * 0.01 * 0.02;
+    EXPECT_NEAR(out.robot.odom_covariance.hh, kVarW * var_g / (kVarW + var_g), 1e-18);
+}
+
+TEST(WeightedPlanarFusion, NonOverlappingWindowsInsideTheOldToleranceAreRejected) {
+    Fixture f;
+    f.putMotion(0.0, 0.0, 0.2, 0, 10);
+    f.putHeading(0.2, 10, 20);   // a later window, 10 ms off: not this motion
+    const StateEstimatorOutput out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_TRUE(contains(out.rejected, "heading"));
+    EXPECT_NE(out.diagnostic.find("does not continue"), std::string::npos);
+    EXPECT_NEAR(out.robot.odom_covariance.hh, kVarW, 1e-18);   // wheel rotation alone
+}
+
+TEST(WeightedPlanarFusion, BatchedWindowsFuseAndALateHeadingNeverBlocks) {
+    Fixture f;
+    // both models saw one batched packet run: identical 0..30 support
+    f.putMotion(0.1, 0.0, 0.3, 0, 30);
+    f.putHeading(0.3, 0, 30);
+    StateEstimatorOutput out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_TRUE(contains(out.accepted, "heading"));
+    EXPECT_NE(out.diagnostic.find("fused heading"), std::string::npos);
+
+    // a heading arriving a cycle after its motion was already integrated
+    f.putHeading(0.1, 30, 40);
+    out = f.run();   // no motion: nothing to align to, the heading stays pending
+    EXPECT_EQ(out.status, FunctionStatus::kNoData);
+    EXPECT_FALSE(contains(out.accepted, "heading"));
+    EXPECT_FALSE(contains(out.rejected, "heading"));
+
+    f.putMotion(0.1, 0.0, 0.1, 30, 40);   // its motion arrives: they align
+    f.putHeading(0.1, 30, 40);
+    out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_TRUE(contains(out.accepted, "heading"));
+
+    f.putHeading(0.1, 40, 50);
+    f.run();
+    f.putMotion(0.1, 0.0, 0.1, 50, 60);   // the motion moved on: the stale heading goes
+    f.putHeading(0.1, 40, 50);
+    out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_TRUE(contains(out.rejected, "heading"));
+    EXPECT_NEAR(out.robot.odom_covariance.hh > 0.0, true, 0);
+}
+
+TEST(WeightedPlanarFusion, PartialSupportTimesOutAndReleasesTheMotion) {
+    Fixture f(R"(
+<Estimator type="weighted_planar_fusion">
+    <Motion observation_id="motion">
+        <Noise translation_floor_m="0.001" translation_per_m="0"
+               rotation_floor_rad="0.02" rotation_per_rad="0" rotation_per_m="0"/>
+    </Motion>
+    <Heading observation_id="heading" max_wait_ms="30">
+        <Noise angle_random_walk_rad_per_sqrt_s="0.01" bias_rad_per_s="0"/>
+    </Heading>
+</Estimator>)");
+    f.putMotion(0.0, 0.0, 0.2, 0, 20);
+    f.putHeading(0.05, 0, 10);
+    StateEstimatorOutput out = f.run();
+    EXPECT_FALSE(out.advanced);
+    f.putMotion(0.0, 0.0, 0.2, 0, 20);
+    out = f.run();   // still waiting, inside max_wait_ms
+    EXPECT_FALSE(out.advanced);
+    EXPECT_NE(out.diagnostic.find("holding"), std::string::npos);
+    f.now_ms += 50;
+    f.putMotion(0.0, 0.0, 0.2, 0, 20);
+    out = f.run();   // gave up: the wheels carry the step alone
+    EXPECT_TRUE(out.advanced);
+    EXPECT_TRUE(contains(out.accepted, "motion"));
+    EXPECT_NE(out.diagnostic.find("never completed"), std::string::npos) << out.diagnostic;
+    EXPECT_NEAR(out.robot.odom_pose.heading_rad, 0.2, 1e-12);
+    EXPECT_NEAR(out.robot.odom_covariance.hh, kVarW, 1e-18);
+
+    // without observed rotation the window can never be completed: it is
+    // rejected rather than held forever
+    f.putMotion(0.1, 0.0, 0.0, 20, 40, "enc", false);
+    f.putHeading(0.05, 20, 30);
+    out = f.run();
+    EXPECT_FALSE(out.advanced);
+    f.now_ms += 50;
+    f.putMotion(0.1, 0.0, 0.0, 20, 40, "enc", false);
+    out = f.run();
+    EXPECT_FALSE(out.advanced);
+    EXPECT_TRUE(contains(out.rejected, "motion"));
+
+    // recovery: the next aligned pair fuses normally
+    f.putMotion(0.0, 0.0, 0.1, 40, 60);
+    f.putHeading(0.1, 40, 60);
+    out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_NE(out.diagnostic.find("fused heading"), std::string::npos);
+}
+
+TEST(WeightedPlanarFusion, IdenticalStampsOnDifferentNamedClocksNeverCombine) {
+    Fixture f;
+    f.putMotion(0.0, 0.0, 0.5, 0, 1000, "enc", true, false, 0.0, 0.0, "pico_a");
+    f.putHeading(0.25, 0, 1000, "imu", "pico_b");   // same numbers, unrelated boot
+    const StateEstimatorOutput out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_TRUE(contains(out.rejected, "heading"));
+    EXPECT_NE(out.diagnostic.find("different clocks pico_a and pico_b"), std::string::npos)
+        << out.diagnostic;
+    EXPECT_NEAR(out.robot.odom_pose.heading_rad, 0.5, 1e-12);
+    EXPECT_NEAR(out.robot.odom_covariance.hh, kVarW, 1e-18);
+}
+
+TEST(WeightedPlanarFusion, UnnamedDeviceClockIsInsufficientToCombine) {
+    Fixture f;
+    f.putMotion(0.0, 0.0, 0.5);
+    f.putHeading(0.25, 0, 1000, "imu", "");   // device stamps with no clock identity
+    StateEstimatorOutput out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_TRUE(contains(out.rejected, "heading"));
+    EXPECT_NE(out.diagnostic.find("insufficient clock identity"), std::string::npos)
+        << out.diagnostic;
+
+    // a motion whose own sources disagree about their clock is a fault
+    f.putMotion(0.0, 0.0, 0.5, 1000, 2000);
+    auto& record = f.observations[ObservationId{"motion"}];
+    auto  motion = *record.payload.get<BodyMotionIncrement>();
+    Provenance other;
+    other.source = "enc_b";
+    other.clock  = "pico_other";
+    motion.sources.push_back(other);
+    record.payload = TypedPayload::store(motion, payload_names::kBodyMotionIncrement);
+    out            = f.run();
+    EXPECT_EQ(out.status, FunctionStatus::kFault);
+    EXPECT_TRUE(contains(out.rejected, "motion"));
+    EXPECT_NE(out.diagnostic.find("different clocks"), std::string::npos);
+}
+
+TEST(WeightedPlanarFusion, HeadingSourceRestartDiscardsPartialSupport) {
+    Fixture f;
+    f.putMotion(0.0, 0.0, 0.2, 0, 20);
+    f.putHeading(0.05, 0, 10, "imu", "pico", 0);
+    StateEstimatorOutput out = f.run();
+    EXPECT_FALSE(out.advanced);
+    f.putMotion(0.0, 0.0, 0.2, 0, 20);
+    f.putHeading(0.15, 10, 20, "imu", "pico", 1);   // the gyro restarted in between
+    out = f.run();
+    EXPECT_TRUE(contains(out.rejected, "heading"));
+    EXPECT_NE(out.diagnostic.find("restarted"), std::string::npos) << out.diagnostic;
+    EXPECT_TRUE(out.advanced);   // nothing left to wait for: wheels alone
+    EXPECT_NEAR(out.robot.odom_covariance.hh, kVarW, 1e-18);
+}
+
+TEST(WeightedPlanarFusion, MotionClockChangeIsADiscontinuity) {
+    Fixture f;
+    f.putMotion(0.1, 0.0, 0.0, 0, 1000);
+    f.run();
+    const uint64_t epoch = f.previous.odometry_epoch;
+    f.putMotion(0.1, 0.0, 0.0, 1000, 2000, "enc", true, false, 0.0, 0.0, "pico_other");
+    StateEstimatorOutput out = f.run();
+    EXPECT_EQ(out.status, FunctionStatus::kFault);
+    EXPECT_TRUE(contains(out.rejected, "motion"));
+    EXPECT_EQ(out.robot.odometry_epoch, epoch + 1);
+    EXPECT_NE(out.diagnostic.find("clock changed"), std::string::npos);
+    EXPECT_NEAR(out.robot.odom_pose.x_m, 0.1, 1e-12);   // the step was not integrated
+
+    // on the new clock the stream continues; a heading on the old clock cannot join
+    f.putMotion(0.1, 0.0, 0.0, 2000, 3000, "enc", true, false, 0.0, 0.0, "pico_other");
+    f.putHeading(0.0, 2000, 3000, "imu", "pico");
+    out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_TRUE(contains(out.rejected, "heading"));
+}
+
+TEST(WeightedPlanarFusion, RepeatedWindowRejectsItsHeadingToo) {
+    Fixture f;
+    f.putMotion(0.1, 0.0, 0.2);
+    f.putHeading(0.2);
+    f.run();
+    f.putMotion(0.1, 0.0, 0.2);
+    f.putHeading(0.2);
+    StateEstimatorOutput out = f.run();
+    EXPECT_FALSE(out.advanced);
+    EXPECT_TRUE(contains(out.rejected, "motion"));
+    EXPECT_TRUE(contains(out.rejected, "heading"));
+    // a heading for another window offered beside a repeat stays pending
+    f.putMotion(0.1, 0.0, 0.2);
+    f.putHeading(0.2, 1000, 2000);
+    out = f.run();
+    EXPECT_TRUE(contains(out.rejected, "motion"));
+    EXPECT_FALSE(contains(out.rejected, "heading"));
+    EXPECT_FALSE(contains(out.accepted, "heading"));
 }

@@ -77,6 +77,8 @@ bool solveFull(const std::vector<double>& ux, const std::vector<double>& uy,
 Provenance provenanceOf(const SensorId& id, const StoredSample& stored) {
     Provenance p;
     p.source   = id.value;
+    p.measurement = stored.upstream.measurement.empty() ? stored.upstream.source
+                                                          : stored.upstream.measurement;
     p.clock    = stored.upstream.clock;
     p.sequence = stored.sequence;
     p.epoch    = stored.epoch;

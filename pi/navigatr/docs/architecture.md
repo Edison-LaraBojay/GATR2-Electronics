@@ -100,7 +100,9 @@ Three suitably placed tracking wheels can solve planar motion. Two wheels need
 a heading constraint. The model validates the geometry, aligns intervals, handles
 source restarts, and does not bridge invalid spans. Gyro bias calibration belongs
 to these observation models. Configuring the same gyro independently twice does
-not create independent information.
+not create independent information: every sample carries the acquisition output
+it came from (`Provenance.measurement`), and the estimators use that lineage,
+not the configured sensor id, to detect overlapping contributors.
 
 Observations remain pending until the estimator explicitly accepts or rejects
 them. Functions receive the disposition through `settle`; this prevents a quiet
@@ -108,11 +110,15 @@ poll or retried observation from integrating the same movement twice. Payloads
 are typed contracts, not arbitrary metadata that the estimator must interpret.
 
 The implemented `planar_motion_integrator` selects one `BodyMotionIncrement`, an
-optional `HeadingIncrement`, and an optional `AttitudeObservation`. An aligned
-heading input supplies the rotation used for integration. The estimator checks
-source overlap, interval consistency, and clock/epoch continuity, integrates body
-motion into the previous odometry pose, and derives velocity from displacement
-and elapsed time. It holds pose when no usable motion arrives. It is not a
+optional `HeadingIncrement`, and an optional `AttitudeObservation`. A heading
+supplies the rotation used for integration only when its support equals the
+motion window exactly on one named clock; partial support from the window start
+accumulates while the motion waits, bounded by `max_wait_ms`, and anything else
+is rejected with the reason. The estimator checks measurement lineage overlap,
+clock identity by name (a device domain alone identifies nothing), and
+epoch continuity, integrates body motion into the previous odometry pose, and
+derives velocity from displacement and elapsed time. These rules live in
+`motion_step` and are shared with `weighted_planar_fusion`. It holds pose when no usable motion arrives. It is not a
 multi-source statistical fusion filter and does not predict ahead using the
 previous velocity. Another algorithm can implement the `StateEstimator` contract.
 

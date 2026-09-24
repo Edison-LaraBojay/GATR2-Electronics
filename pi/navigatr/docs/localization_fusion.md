@@ -25,7 +25,7 @@ SensorMap
                rotation_floor_rad="0.001" rotation_per_rad="0.02"
                rotation_per_m="0.01"/>
     </Motion>
-    <Heading observation_id="imu_heading" interval_tolerance_ms="20">       optional
+    <Heading observation_id="imu_heading" max_wait_ms="100">                optional
         <Noise angle_random_walk_rad_per_sqrt_s="0.002" bias_rad_per_s="0.0005"/>
     </Heading>
     <Attitude observation_id="attitude" max_age_ms="250"/>                  optional
@@ -109,22 +109,41 @@ Cases:
 
 ## Rules preserved from the integrator
 
-- One source clock per motion; device stamps map to the host clock through
-  the receipt-based `DeviceToHostClock`; an attitude on another device never
-  borrows the wheel clock offset.
-- A heading is fused only when its `[startAt, endAt]` matches the motion's
-  within `interval_tolerance_ms`. A mismatched heading that ends at or before
-  the motion is rejected; one that ends later stays pending for a later
-  motion, so a gyro increment that spans two wheel intervals is never
-  applied to the first.
-- A heading that shares a source with the motion is rejected with a
-  diagnostic and never counted twice. A wheel profile with a
-  `HeadingConstraint` already folds that gyro; configuring the same gyro as
-  a `Heading` on top does nothing but log the rejection, and the two-wheel
-  profiles keep working unchanged.
+- Clock identity is a name, never a domain. A device stamp lives on the
+  clock its provenance names (the acquiring link, `pico_uart`); a host stamp
+  lives on the host clock. Two stamps compare only on one verified clock: a
+  motion whose sources name different clocks is a fault, a heading on a
+  different or unnamed clock is rejected with the clocks in the diagnostic,
+  and a motion whose clock identity changes is a discontinuity handled like
+  a source reboot (epoch advanced, step not integrated). Device stamps map
+  to the host clock through the receipt-based `DeviceToHostClock`; an
+  attitude on another device never borrows the wheel clock offset.
+- Heading support must equal the motion window exactly on that clock.
+  Angles are summed, never scaled by duration: a rate that changes inside
+  a window makes a scaled aggregate wrong even when the durations match.
+  Headings that start at the motion start and continue contiguously
+  accumulate inside the estimator (each accepted as it arrives) until the
+  support reaches the motion end; the motion stays pending meanwhile,
+  which the wheel model tolerates by retaining later travel. A heading
+  that starts elsewhere or overruns the window is rejected with the
+  reason. If the support never completes within `max_wait_ms` (host
+  clock), the partial support is dropped and the motion goes on with the
+  wheel rotation alone, or is rejected when it has none; nothing blocks
+  the pipeline. The old `interval_tolerance_ms` is refused at build.
+- Independence is decided by measurement lineage, not by sensor id.
+  `Provenance.measurement` names the acquisition output
+  (`pico_telemetry.imu`) and is carried through every derived record; two
+  sensors configured on the same output are one measurement, while the
+  encoders and the gyro of one Pico stay distinct. A heading that shares a
+  measurement with the motion is rejected and never counted twice. A wheel
+  profile with a `HeadingConstraint` already folds that gyro under
+  whatever id it was configured, so a `Heading` from the same output does
+  nothing but log the rejection, and the two-wheel profiles keep working
+  unchanged. Sensor ids stay in `Provenance.source` for diagnostics.
 - Source time regression bumps the odometry epoch and integrates nothing.
-  A repeated effective time is rejected as already consumed. Every offered
-  observation is accepted or rejected exactly once through `settle`.
+  A repeated effective time is rejected as already consumed, together with
+  a heading offered for that same window. Every offered observation is
+  accepted or rejected exactly once through `settle`.
 - The attitude is tilt only. Its yaw is discarded; the planar heading comes
   from wheels and gyro. It ages on its own host time and falls back to an
   explicitly assumed level attitude.

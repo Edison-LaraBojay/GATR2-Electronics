@@ -114,6 +114,9 @@ struct ChannelInput {
         p.measuredAt        = stored.measuredAt;
         p.receivedAt        = stored.receivedAt;
         p.upstream.source   = binding.resource.value + "." + binding.output.value;
+        p.upstream.measurement = stored.upstream.measurement.empty()
+                                     ? p.upstream.source
+                                     : stored.upstream.measurement;
         p.upstream.clock    = stored.upstream.clock;
         p.upstream.sequence = stored.sequence;
         p.upstream.epoch    = stored.epoch + stored.upstream.epoch;

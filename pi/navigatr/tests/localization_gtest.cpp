@@ -66,6 +66,7 @@ struct EstimatorFixture {
         m.dt_s         = (end_ms - start_ms) / 1000.0;
         Provenance p;
         p.source = source;
+        p.clock  = "pico";
         m.sources.push_back(p);
         RobotObservationRecord record;
         record.measuredAt = m.endAt;
@@ -83,6 +84,7 @@ struct EstimatorFixture {
         h.dt_s       = (end_ms - start_ms) / 1000.0;
         Provenance p;
         p.source = source;
+        p.clock  = "pico";
         h.sources.push_back(p);
         RobotObservationRecord record;
         record.measuredAt = h.endAt;
@@ -276,7 +278,7 @@ TEST(PlanarMotionIntegrator, HeadingReplacesRotationOnlyWhenAlignedAndIndependen
     EstimatorFixture f(R"(
         <Estimator type="planar_motion_integrator">
             <Motion observation_id="motion"/>
-            <Heading observation_id="heading" interval_tolerance_ms="5"/>
+            <Heading observation_id="heading" max_wait_ms="50"/>
         </Estimator>)");
 
     f.putMotion(0.0, 0.0, 0.5);   // wheels say half a radian
@@ -288,13 +290,13 @@ TEST(PlanarMotionIntegrator, HeadingReplacesRotationOnlyWhenAlignedAndIndependen
     f.putHeading(0.25, 60, 65);   // an unrelated interval is not synchronization
     StateEstimatorOutput out = f.run();
     EXPECT_NEAR(f.previous.odom_pose.heading_rad, 0.75, 1e-12);
-    EXPECT_NE(out.diagnostic.find("interval"), std::string::npos);
+    EXPECT_NE(out.diagnostic.find("does not continue"), std::string::npos);
 
     f.putMotion(0.0, 0.0, 0.5, 105, 110, "imu");   // the motion already folded this imu
     f.putHeading(0.25, 105, 110, "imu");
     out = f.run();
     EXPECT_NEAR(f.previous.odom_pose.heading_rad, 1.25, 1e-12);
-    EXPECT_NE(out.diagnostic.find("shares a source"), std::string::npos);
+    EXPECT_NE(out.diagnostic.find("shares a measurement"), std::string::npos);
 }
 
 TEST(PlanarMotionIntegrator, UnobservedRotationIsNeverFabricated) {
@@ -731,4 +733,56 @@ TEST(PlanarMotionIntegrator, AttitudeCannotBorrowAnUnrelatedDeviceClockMapping) 
     }
     EXPECT_TRUE(out.clock_mapped);
     EXPECT_EQ(out.robot.attitude.measuredAt.ms, 195);
+}
+
+TEST(PlanarMotionIntegrator, HeadingSupportMustEqualTheMotionWindowExactly) {
+    EstimatorFixture f(R"(
+        <Estimator type="planar_motion_integrator">
+            <Motion observation_id="motion"/>
+            <Heading observation_id="heading" max_wait_ms="50"/>
+        </Estimator>)");
+    // a 10 ms heading inside a 20 ms motion window: accumulated, not blended
+    f.putMotion(0.0, 0.0, 0.2, 100, 120);
+    f.putHeading(0.05, 100, 110);
+    StateEstimatorOutput out = f.run();
+    EXPECT_FALSE(out.advanced);
+    EXPECT_EQ(out.accepted.size(), 1u);   // the heading, stashed
+    EXPECT_TRUE(out.rejected.empty());
+    f.putMotion(0.0, 0.0, 0.2, 100, 120);
+    f.putHeading(0.25, 110, 120);
+    out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_NEAR(f.previous.odom_pose.heading_rad, 0.3, 1e-12);   // 0.05 + 0.25 replaces 0.2
+
+    // identical numbers on another named clock never combine
+    f.putMotion(0.0, 0.0, 0.2, 120, 130);
+    f.putHeading(0.1, 120, 130);
+    auto& record  = f.observations[ObservationId{"heading"}];
+    auto  heading = *record.payload.get<HeadingIncrement>();
+    heading.sources.front().clock = "another_pico";
+    record.payload = TypedPayload::store(heading, payload_names::kHeadingIncrement);
+    out            = f.run();
+    EXPECT_TRUE(out.advanced);
+    ASSERT_EQ(out.rejected.size(), 1u);
+    EXPECT_NE(out.diagnostic.find("different clocks"), std::string::npos);
+    EXPECT_NEAR(f.previous.odom_pose.heading_rad, 0.5, 1e-12);
+
+    // the retired attribute is refused, not ignored
+    tinyxml2::XMLDocument doc;
+    ASSERT_EQ(doc.Parse(R"(<Estimator type="planar_motion_integrator">
+        <Motion observation_id="motion"/>
+        <Heading observation_id="heading" interval_tolerance_ms="20"/></Estimator>)"),
+              tinyxml2::XML_SUCCESS);
+    StateEstimatorInitializationContext context;
+    context.observations = {
+        RobotObservationOutputDecl{ObservationId{"motion"},
+                                   PayloadDescriptor::of<BodyMotionIncrement>(
+                                       payload_names::kBodyMotionIncrement)},
+        RobotObservationOutputDecl{ObservationId{"heading"},
+                                   PayloadDescriptor::of<HeadingIncrement>(
+                                       payload_names::kHeadingIncrement)}};
+    std::string err;
+    EXPECT_EQ(PlanarMotionIntegrator::create(ConfigNode{doc.RootElement()}, context, err),
+              nullptr);
+    EXPECT_NE(err.find("interval_tolerance_ms"), std::string::npos);
 }

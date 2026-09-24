@@ -125,8 +125,11 @@ localization.
 ## Clocks, history, and attitude
 
 Resource samples distinguish source measurement time from host receipt time.
-Pico samples carry a device clock; localization maps accepted motion endpoints to
-the host monotonic clock using upstream receipt information. A polling timestamp
+Pico samples carry a device clock named after the acquiring link
+(`Provenance.clock`); two device stamps are comparable only when they name the
+same clock, never because both are device stamps, since two devices boot at
+unrelated times. Localization maps accepted motion endpoints to the host
+monotonic clock using upstream receipt information. A polling timestamp
 cannot substitute for when the data arrived. Camera frames carry host exposure
 time from the capture backend; see [camera setup](pi_camera_setup.md) for its
 mapping and exposure-midpoint convention.

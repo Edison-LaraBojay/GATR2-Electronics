@@ -86,6 +86,9 @@ FunctionStatus AttitudeReference::run(const RobotObservationInput& in,
     obs.measuredAt       = stored->measuredAt;
     obs.quality          = sample->quality;
     obs.source.source    = binding_.id.value;
+    obs.source.measurement = stored->upstream.measurement.empty()
+                                 ? stored->upstream.source
+                                 : stored->upstream.measurement;
     obs.source.clock     = stored->upstream.clock;
     obs.source.sequence  = stored->sequence;
     obs.source.epoch     = stored->epoch + sample->epoch;

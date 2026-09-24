@@ -8,23 +8,25 @@
 //
 //   <Estimator type="planar_motion_integrator">
 //       <Motion observation_id="tracking_motion"/>
-//       <Heading observation_id="imu_heading" interval_tolerance_ms="20"/>   optional
-//       <Attitude observation_id="attitude" max_age_ms="200"/>             optional
+//       <Heading observation_id="imu_heading" max_wait_ms="100"/>   optional
+//       <Attitude observation_id="attitude" max_age_ms="200"/>     optional
 //   </Estimator>
 //
-// Rules:
+// Rules (shared with weighted_planar_fusion through motion_step):
 //   placement    edge triggered per (origin, sequence); re-anchors the field
 //                frame around the untouched odometry pose, bumps
 //                anchor_revision
-//   motion       integrated only over a positive interval on the same source
-//                clock; device time running backwards means the source
-//                rebooted, so the odometry epoch moves on and the step is
-//                not integrated
-//   heading      replaces the motion's rotation only when its interval
-//                matches the motion interval within the tolerance and it
-//                shares no source with the motion observation (an IMU already
-//                folded by the wheel model is not independent); otherwise
-//                the motion's own rotation stands and the mismatch is noted
+//   motion       integrated only over a positive interval on one named
+//                source clock; device time running backwards, or a change
+//                of clock identity, means the source is discontinuous: the
+//                odometry epoch moves on and the step is not integrated
+//   heading      replaces the motion's rotation only when its support
+//                equals the motion window exactly on the same clock and it
+//                shares no measurement with the motion (an IMU already
+//                folded by the wheel model is not independent, whatever
+//                sensor id it was configured under); partial support from
+//                the window start accumulates while the motion waits, up
+//                to max_wait_ms; anything else is rejected with the reason
 //   partial      a motion increment without observed rotation is refused
 //                unless an aligned heading supplies it; nothing is fabricated
 //   attitude     the newest observation, aged against its own host time; when
@@ -39,7 +41,6 @@
 #include <string>
 
 #include "contracts/localization.h"
-#include "core/clock_sync.h"
 #include "impl/localization/motion_step.h"
 #include "payloads/robot_observations.h"
 
@@ -57,22 +58,14 @@ public:
 
     const std::string& type() const override { return type_; }
 
-    void reset() override;
+    void reset() override { state_.reset(); }
 
 private:
-    std::string   type_ = "planar_motion_integrator";
-    ObservationId motion_ref_;
-    ObservationId heading_ref_;   // empty when not configured
-    long          heading_tolerance_ms_ = 20;
-
-    PlacementEdge placement_;
-    AttitudeFold  attitude_;
-
-    // Maps the motion source's device stamps onto the host clock so pose
-    // history carries the time the pose was physically true, not the loop
-    // time it was computed at.
-    DeviceToHostClock clock_;
-    std::string       motion_clock_;
+    std::string     type_ = "planar_motion_integrator";
+    ObservationId   motion_ref_;
+    ObservationId   heading_ref_;   // empty when not configured
+    long            max_wait_ms_ = 100;
+    PlanarStepState state_;
 };
 
 } // namespace navigatr

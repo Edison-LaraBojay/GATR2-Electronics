@@ -42,7 +42,7 @@
                        rotation_floor_rad="0.001" rotation_per_rad="0.02"
                        rotation_per_m="0.01"/>
             </Motion>
-            <Heading observation_id="imu_heading" interval_tolerance_ms="20">
+            <Heading observation_id="imu_heading" max_wait_ms="100">
                 <!-- PLACEHOLDER gyro angle random walk and residual bias -->
                 <Noise angle_random_walk_rad_per_sqrt_s="0.002" bias_rad_per_s="0.0005"/>
             </Heading>

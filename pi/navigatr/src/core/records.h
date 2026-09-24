@@ -51,11 +51,17 @@ inline const char* sourceStateName(SourceState s) {
     return "unknown";
 }
 
-// Where a sample came from: the producing output or sensor, the clock its
-// measuredAt is on, and the producer's own sequence and restart epoch.
+// Where a sample came from: the producing output or sensor, the physical
+// measurement behind it, the clock its measuredAt is on, and the
+// producer's own sequence and restart epoch. source names the layer that
+// published this record (a sensor id, an output); measurement names the
+// acquisition output it was derived from and is carried unchanged through
+// every derived record, so two sensors reading one Pico output share a
+// measurement while two outputs of one Pico do not.
 struct Provenance {
-    std::string source;   // "pico_telemetry.imu", "robot_imu", ...
-    std::string clock;    // "pico_uart" device clock, "host", ...
+    std::string source;        // "robot_imu", "pico_telemetry.imu", ...
+    std::string measurement;   // "pico_telemetry.imu"; empty when unknown
+    std::string clock;         // "pico_uart" device clock, "host", ...
     uint64_t    sequence = 0;
     uint64_t    epoch    = 0;   // bumps on a source restart or discontinuity
 };
