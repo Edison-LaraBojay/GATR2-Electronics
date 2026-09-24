@@ -126,10 +126,14 @@ Cases:
   support reaches the motion end; the motion stays pending meanwhile,
   which the wheel model tolerates by retaining later travel. A heading
   that starts elsewhere or overruns the window is rejected with the
-  reason. If the support never completes within `max_wait_ms` (host
-  clock), the partial support is dropped and the motion goes on with the
-  wheel rotation alone, or is rejected when it has none; nothing blocks
-  the pipeline. The old `interval_tolerance_ms` is refused at build.
+  reason. Every held motion window has a deadline of `max_wait_ms` (host
+  clock) from the invocation that first saw it, checked on every
+  invocation whether or not headings keep arriving: past it, any partial
+  support is dropped and the motion goes on with the wheel rotation alone,
+  or is rejected when it has none. This covers a stream of headings that
+  never continue the window, an oversized heading offered every cycle,
+  and no heading at all; nothing blocks the pipeline. The old
+  `interval_tolerance_ms` is refused at build.
 - Independence is decided by measurement lineage, not by sensor id.
   `Provenance.measurement` names the acquisition output
   (`pico_telemetry.imu`) and is carried through every derived record; two

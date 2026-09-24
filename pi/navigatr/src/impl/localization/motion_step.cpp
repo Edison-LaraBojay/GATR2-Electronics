@@ -185,6 +185,40 @@ HeadingAligner::Result HeadingAligner::align(const HeadingIncrement*    heading,
                                              const BodyMotionIncrement& motion,
                                              const std::string& motion_clock, MonotonicTime now,
                                              long max_wait_ms) {
+    // the deadline belongs to the motion window, from its first sighting
+    if (!window_.tracked || window_.start.ms != motion.startAt.ms ||
+        window_.end.ms != motion.endAt.ms) {
+        window_.tracked = true;
+        window_.start   = motion.startAt;
+        window_.end     = motion.endAt;
+        window_.since   = now;
+    }
+    const bool expired = now.isSet() && window_.since.isSet() &&
+                         sameDomain(now, window_.since) && (now - window_.since) > max_wait_ms;
+
+    Result result  = alignWindow(heading, motion, motion_clock);
+    result.expired = expired;
+    if (result.outcome == Outcome::kWaiting && expired) {
+        result.outcome  = Outcome::kNone;
+        result.released = true;
+        result.diagnostic += "; heading support " + window(stash_.motion_start, stash_.end) +
+                             " never completed motion window " +
+                             window(motion.startAt, motion.endAt) +
+                             " within max_wait_ms; released without it";
+        stash_ = Stash{};
+    }
+    // kNone may still be held by a caller without rotation, so the deadline
+    // stays until the window is fused, released, or expired; a new window
+    // replaces it anyway
+    if (result.outcome == Outcome::kFused || result.released || expired) {
+        window_ = Window{};
+    }
+    return result;
+}
+
+HeadingAligner::Result HeadingAligner::alignWindow(const HeadingIncrement*    heading,
+                                                   const BodyMotionIncrement& motion,
+                                                   const std::string&         motion_clock) {
     Result result;
 
     // a stash covers exactly one motion window; anything else is stale
@@ -197,18 +231,6 @@ HeadingAligner::Result HeadingAligner::align(const HeadingIncrement*    heading,
     if (heading == nullptr) {
         if (!stash_.active) {
             result.outcome = Outcome::kNone;
-            return result;
-        }
-        if (now.isSet() && stash_.waiting_since.isSet() &&
-            (now - stash_.waiting_since) > max_wait_ms) {
-            result.outcome  = Outcome::kNone;
-            result.released = true;
-            result.diagnostic += "heading support " +
-                                 window(stash_.motion_start, stash_.end) +
-                                 " never completed motion window " +
-                                 window(stash_.motion_start, stash_.motion_end) +
-                                 " within max_wait_ms; released without it";
-            stash_ = Stash{};
             return result;
         }
         result.outcome = Outcome::kWaiting;
@@ -278,7 +300,6 @@ HeadingAligner::Result HeadingAligner::align(const HeadingIncrement*    heading,
         stash_.motion_end    = motion.endAt;
         stash_.clock         = heading_clock;
         stash_.epoch         = epoch;
-        stash_.waiting_since = now;
     }
     stash_.end = heading->endAt;
     stash_.dtheta += heading->dtheta_rad;
@@ -500,10 +521,10 @@ bool prepareStep(PlanarStepState& state, const StateEstimatorInput& in,
     step.heading_released   = aligned.released;
 
     if (!motion->has_rotation && !step.heading_used) {
-        if (aligned.released) {
-            // nothing can ever complete this window; do not block on it
+        if (aligned.released || aligned.expired) {
+            // nothing completed this window in time; do not block on it
             out.rejected.push_back(motion_ref);
-            out.diagnostic += "; motion without observed rotation rejected";
+            out.diagnostic += "; motion without observed rotation rejected after max_wait_ms";
         } else {
             out.diagnostic =
                 "motion increment without observed rotation and no aligned heading";

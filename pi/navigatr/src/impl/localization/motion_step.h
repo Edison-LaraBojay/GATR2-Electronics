@@ -20,10 +20,12 @@
 // equals the motion window exactly on the common clock. Headings that
 // cover the window from its start contiguously accumulate here, each
 // accepted as it arrives, until the support reaches the motion end; the
-// motion stays pending meanwhile and is released after max_wait_ms. A
-// heading that starts elsewhere, overruns the window, or arrives on
-// another clock is rejected with the reason. Angles are summed, never
-// scaled by duration.
+// motion stays pending meanwhile. A heading that starts elsewhere,
+// overruns the window, or arrives on another clock is rejected with the
+// reason. Angles are summed, never scaled by duration. Every held motion
+// window has a deadline from the call that first saw it, checked on every
+// call whether headings keep arriving or not: past max_wait_ms a window
+// with rotation goes on without the gyro and one without is rejected.
 
 #pragma once
 #include <cstdint>
@@ -122,17 +124,35 @@ public:
         double      dt_s           = 0.0;
         bool        accept_heading = false;   // the offered heading was consumed
         bool        reject_heading = false;
-        bool        released       = false;   // a partial stash was given up
+        bool        released       = false;   // partial support was given up
+        bool        expired        = false;   // this window has waited past max_wait_ms
         std::string diagnostic;
     };
 
+    // Every motion window gets a deadline from the first call that sees
+    // it, checked on every call whether or not a heading is offered: once
+    // past it, a waiting window is released and a caller holding for a
+    // missing rotation is told to give the motion up.
     Result align(const HeadingIncrement* heading, const BodyMotionIncrement& motion,
                  const std::string& motion_clock, MonotonicTime now, long max_wait_ms);
 
     bool active() const { return stash_.active; }
-    void reset() { stash_ = Stash{}; }
+    void reset() {
+        stash_  = Stash{};
+        window_ = Window{};
+    }
 
 private:
+    Result alignWindow(const HeadingIncrement* heading, const BodyMotionIncrement& motion,
+                       const std::string& motion_clock);
+
+    // the motion window currently being served and when it was first seen
+    struct Window {
+        bool          tracked = false;
+        MonotonicTime start, end;
+        MonotonicTime since;   // host clock
+    };
+    Window window_;
     struct Stash {
         bool          active = false;
         MonotonicTime motion_start, motion_end;   // the window being covered
@@ -141,7 +161,6 @@ private:
         double        dt     = 0.0;
         std::string   clock;
         uint64_t      epoch = 0;
-        MonotonicTime waiting_since;   // host clock
     };
     Stash stash_;
 };

@@ -9,8 +9,10 @@
 #include <memory>
 #include <string>
 
+#include "common/frame_codec.h"
 #include "core/diagnostics.h"
 #include "impl/localization/weighted_planar_fusion.h"
+#include "impl/resources/serial_links.h"
 #include "impl/resources/synthetic_rig.h"
 #include "math/angles.h"
 #include "payloads/field_object_evidence.h"
@@ -1092,4 +1094,266 @@ TEST(WeightedPlanarFusion, RepeatedWindowRejectsItsHeadingToo) {
     EXPECT_TRUE(contains(out.rejected, "motion"));
     EXPECT_FALSE(contains(out.rejected, "heading"));
     EXPECT_FALSE(contains(out.accepted, "heading"));
+}
+
+TEST(WeightedPlanarFusion, ContinuousMismatchedHeadingsStillHitTheDeadline) {
+    Fixture f(R"(
+<Estimator type="weighted_planar_fusion">
+    <Motion observation_id="motion">
+        <Noise translation_floor_m="0.001" translation_per_m="0"
+               rotation_floor_rad="0.02" rotation_per_rad="0" rotation_per_m="0"/>
+    </Motion>
+    <Heading observation_id="heading" max_wait_ms="30">
+        <Noise angle_random_walk_rad_per_sqrt_s="0.01" bias_rad_per_s="0"/>
+    </Heading>
+</Estimator>)");
+    f.putMotion(0.0, 0.0, 0.2, 0, 20);
+    f.putHeading(0.05, 0, 10);   // starts the stash
+    StateEstimatorOutput out = f.run();
+    EXPECT_FALSE(out.advanced);
+    // headings keep arriving but never continue at 10: each is rejected,
+    // and the deadline still runs
+    for (int i = 0; i < 6; ++i) {
+        f.now_ms += 10;
+        f.putMotion(0.0, 0.0, 0.2, 0, 20);
+        f.putHeading(0.02, 15 + i, 25 + i);
+        out = f.run();
+        EXPECT_TRUE(contains(out.rejected, "heading")) << i;
+        if (out.advanced) {
+            break;
+        }
+    }
+    EXPECT_TRUE(out.advanced);
+    EXPECT_TRUE(contains(out.accepted, "motion"));
+    EXPECT_NE(out.diagnostic.find("never completed"), std::string::npos) << out.diagnostic;
+    EXPECT_NEAR(out.robot.odom_pose.heading_rad, 0.2, 1e-12);
+    EXPECT_NEAR(out.robot.odom_covariance.hh, kVarW, 1e-18);
+}
+
+TEST(WeightedPlanarFusion, MotionWithoutRotationHasADeadlineEvenWithoutAnyStash) {
+    Fixture f(R"(
+<Estimator type="weighted_planar_fusion">
+    <Motion observation_id="motion">
+        <Noise translation_floor_m="0.001" translation_per_m="0"
+               rotation_floor_rad="0.02" rotation_per_rad="0" rotation_per_m="0"/>
+    </Motion>
+    <Heading observation_id="heading" max_wait_ms="30">
+        <Noise angle_random_walk_rad_per_sqrt_s="0.01" bias_rad_per_s="0"/>
+    </Heading>
+</Estimator>)");
+    // no heading at all
+    f.putMotion(0.1, 0.0, 0.0, 0, 20, "enc", false);
+    StateEstimatorOutput out = f.run();
+    EXPECT_FALSE(out.advanced);
+    EXPECT_TRUE(out.rejected.empty());   // still inside the deadline: pending
+    f.now_ms += 50;
+    f.putMotion(0.1, 0.0, 0.0, 0, 20, "enc", false);
+    out = f.run();
+    EXPECT_FALSE(out.advanced);
+    EXPECT_TRUE(contains(out.rejected, "motion"));
+    EXPECT_NE(out.diagnostic.find("max_wait_ms"), std::string::npos) << out.diagnostic;
+
+    // an oversized heading that can never fit, offered every cycle
+    f.putMotion(0.1, 0.0, 0.0, 20, 40, "enc", false);
+    f.putHeading(0.3, 20, 60);
+    out = f.run();
+    EXPECT_TRUE(contains(out.rejected, "heading"));
+    EXPECT_FALSE(contains(out.rejected, "motion"));   // first sighting: pending
+    f.now_ms += 50;
+    f.putMotion(0.1, 0.0, 0.0, 20, 40, "enc", false);
+    f.putHeading(0.3, 20, 60);
+    out = f.run();
+    EXPECT_TRUE(contains(out.rejected, "motion"));
+
+    // the next window starts a fresh deadline and fuses normally
+    f.putMotion(0.1, 0.0, 0.0, 40, 60, "enc", false);
+    f.putHeading(0.1, 40, 60);
+    out = f.run();
+    EXPECT_TRUE(out.advanced);
+    EXPECT_NEAR(out.robot.odom_pose.heading_rad, 0.1, 1e-12);
+}
+
+// ---- lineage --------------------------------------------------------------
+
+namespace
+{
+
+// two wheels constrained by imu_a, a separate heading from imu_b
+const char* kTwoWheelsTwoImuIds = R"(
+<Localization>
+    <Observation id="wheels" type="tracking_wheel_motion">
+        <TrackingWheel sensor_id="enc_a" radius_m="0.0254" position_x_m="0"
+                       position_y_m="0" measurement_angle_deg="0" direction="positive"/>
+        <TrackingWheel sensor_id="enc_c" radius_m="0.0254" position_x_m="0"
+                       position_y_m="0" measurement_angle_deg="90" direction="positive"/>
+        <HeadingConstraint sensor_id="imu_a" bias_samples="0"/>
+        <Output observation_id="motion"/>
+    </Observation>
+    <Observation id="gyro" type="imu_heading_increment">
+        <Input sensor_id="imu_b"/>
+        <Calibration bias_samples="0"/>
+        <Output observation_id="heading"/>
+    </Observation>
+    <Estimator type="weighted_planar_fusion">
+        <Motion observation_id="motion">
+            <Noise translation_floor_m="0.001" translation_per_m="0"
+                   rotation_floor_rad="0.02" rotation_per_rad="0" rotation_per_m="0"/>
+        </Motion>
+        <Heading observation_id="heading" max_wait_ms="50">
+            <Noise angle_random_walk_rad_per_sqrt_s="0.01" bias_rad_per_s="0"/>
+        </Heading>
+    </Estimator>
+</Localization>)";
+
+std::vector<uint8_t> sensorPacket(uint8_t seq, uint32_t stamp_ms, int32_t enc0, int32_t enc1,
+                                  int32_t gyro_mdps) {
+    gatr2::SensorSample s{};
+    s.seq      = seq;
+    s.stamp_ms = stamp_ms;
+    s.mask     = gatr2::kSensorEnc0 | gatr2::kSensorEnc1 | gatr2::kSensorGyroZ;
+    s.enc[0]   = enc0;
+    s.enc[1]   = enc1;
+    s.gyro_z   = gyro_mdps;
+    std::vector<uint8_t> buf(gatr2::kMaxFrameLen);
+    buf.resize(gatr2::encodeSensorFrame(s, buf.data(), gatr2::kMaxFrameLen));
+    return buf;
+}
+
+} // namespace
+
+TEST(LocalizationFusion, TwoSensorIdsOnOneImuOutputAreOneMeasurement) {
+    StageFixture f;
+    f.catalog.add(SensorId{"imu_a"},
+                  PayloadDescriptor::of<ImuSample>(payload_names::kImuSample));
+    f.catalog.add(SensorId{"imu_b"},
+                  PayloadDescriptor::of<ImuSample>(payload_names::kImuSample));
+    std::string err;
+    auto        exec = f.make(kTwoWheelsTwoImuIds, err);
+    ASSERT_TRUE(exec.has_value()) << err;
+    const auto putBoth = [&](double rate, int64_t stamp, uint64_t sequence) {
+        ImuSample s;
+        s.yaw_rate_rad_s = rate;
+        f.put("imu_a", TypedPayload::store(s, payload_names::kImuSample), stamp, sequence,
+              "pico_telemetry.imu");
+        f.put("imu_b", TypedPayload::store(s, payload_names::kImuSample), stamp, sequence,
+              "pico_telemetry.imu");
+    };
+    EncoderSample a, c;
+    f.put("enc_a", TypedPayload::store(a, payload_names::kEncoderSample), 1000, 1,
+          "pico_telemetry.encoder_a");
+    f.put("enc_c", TypedPayload::store(c, payload_names::kEncoderSample), 1000, 1,
+          "pico_telemetry.encoder_c");
+    putBoth(20.0, 1000, 1);
+    f.step(*exec);
+    a.angle_rad = 0.05 / 0.0254;
+    f.put("enc_a", TypedPayload::store(a, payload_names::kEncoderSample), 1005, 2,
+          "pico_telemetry.encoder_a");
+    f.put("enc_c", TypedPayload::store(c, payload_names::kEncoderSample), 1005, 2,
+          "pico_telemetry.encoder_c");
+    putBoth(20.0, 1005, 2);
+    const RobotState r = f.step(*exec);
+    ASSERT_TRUE(r.valid);
+    EXPECT_NEAR(r.odom_pose.heading_rad, 0.1, 1e-9);
+    // the alias did not shrink the rotation variance: one gyro, counted once
+    EXPECT_NEAR(r.odom_covariance.hh, 4e-4, 1e-15);
+    EXPECT_EQ(exec->lastObservations().count(ObservationId{"heading"}), 1u);
+    f.step(*exec);
+    EXPECT_TRUE(exec->lastObservations().empty());   // rejected once, not stuck
+}
+
+TEST(LocalizationFusion, DistinctOutputsOfOnePicoStayIndependent) {
+    // three wheels and the gyro all arrive on one Pico and one clock; they
+    // are different measurements and do fuse
+    StageFixture f;
+    std::string  err;
+    auto         exec = f.make(kThreeWheelPlusGyro, err);
+    ASSERT_TRUE(exec.has_value()) << err;
+    const auto putAll = [&](double dx, double dtheta, double rate, int64_t stamp,
+                            uint64_t sequence) {
+        const double k_a = -0.13, k_b = 0.13, k_c = -0.12, r = 0.0254;
+        EncoderSample a, b, c;
+        a.angle_rad = (dx + k_a * dtheta) / r;
+        b.angle_rad = (dx + k_b * dtheta) / r;
+        c.angle_rad = (k_c * dtheta) / r;
+        f.put("enc_a", TypedPayload::store(a, payload_names::kEncoderSample), stamp, sequence,
+              "pico_telemetry.encoder_a");
+        f.put("enc_b", TypedPayload::store(b, payload_names::kEncoderSample), stamp, sequence,
+              "pico_telemetry.encoder_b");
+        f.put("enc_c", TypedPayload::store(c, payload_names::kEncoderSample), stamp, sequence,
+              "pico_telemetry.encoder_c");
+        ImuSample s;
+        s.yaw_rate_rad_s = rate;
+        f.put("imu", TypedPayload::store(s, payload_names::kImuSample), stamp, sequence,
+              "pico_telemetry.imu");
+    };
+    putAll(0.0, 0.0, 20.0, 1000, 1);
+    f.step(*exec);
+    putAll(0.05, 0.1, 20.0, 1005, 2);
+    const RobotState r = f.step(*exec);
+    ASSERT_TRUE(r.valid);
+    const double var_g = 0.01 * 0.01 * 0.005;
+    EXPECT_NEAR(r.odom_covariance.hh, 4e-4 * var_g / (4e-4 + var_g), 1e-15);
+    EXPECT_LT(r.odom_covariance.hh, 4e-4);
+}
+
+TEST(LocalizationFusion, AliasedImuSensorsThroughTheRealPicoPathCountOnce) {
+    FunctionRegistry functions;
+    registerAll(functions);
+    const std::string xml = std::string(R"(
+<System>
+    <Resources>
+        <Resource id="pico_uart" type="memory_link"/>
+        <Resource id="pico_telemetry" type="pico_telemetry">
+            <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="imu" channel="imu"/>
+        </Resource>
+    </Resources>
+    <Sensors>
+        <Sensor id="enc_a" type="pico_encoder_channel">
+            <Source resource_id="pico_telemetry" output_id="encoder_a"/>
+            <Calibration counts_per_revolution="4000"/>
+        </Sensor>
+        <Sensor id="enc_c" type="pico_encoder_channel">
+            <Source resource_id="pico_telemetry" output_id="encoder_b"/>
+            <Calibration counts_per_revolution="4000"/>
+        </Sensor>
+        <Sensor id="imu_a" type="pico_imu_channel">
+            <Source resource_id="pico_telemetry" output_id="imu"/>
+        </Sensor>
+        <Sensor id="imu_b" type="pico_imu_channel">
+            <Source resource_id="pico_telemetry" output_id="imu"/>
+        </Sensor>
+    </Sensors>
+    <Pipeline>
+        <CommandCollection type="noop"/>)") +
+                            kTwoWheelsTwoImuIds + R"(
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
+        <TargetResolution type="noop"/>
+        <Publishing type="noop"/>
+    </Pipeline>
+</System>)";
+    std::string err;
+    auto        system = System::buildFromString(xml.c_str(), functions, err);
+    ASSERT_NE(system, nullptr) << err;
+    auto  link = system->resources().require<SerialLink>(ResourceId{"pico_uart"}, err);
+    auto* uart = dynamic_cast<MemoryLink*>(link.get());
+    ASSERT_NE(uart, nullptr);
+
+    uart->input().feed(sensorPacket(1, 1000, 0, 0, 0));
+    system->step(hostTime(1));
+    uart->input().feed(sensorPacket(2, 1005, 400, 0, 0));   // 0.1 turn forward, no rotation
+    system->step(hostTime(2));
+    const RobotState r = system->robot();
+    ASSERT_TRUE(r.valid);
+    ASSERT_TRUE(r.has_covariance);
+    EXPECT_NEAR(r.odom_pose.heading_rad, 0.0, 1e-9);
+    EXPECT_GT(r.odom_pose.x_m, 0.0);
+    EXPECT_NEAR(r.odom_covariance.hh, 4e-4, 1e-15);   // imu_b is imu_a: not counted twice
+    EXPECT_EQ(system->diagnostics().functions.at("Localization/weighted_planar_fusion").runs,
+              2u);
+    // every offered observation was settled; nothing is stuck pending
+    system->step(hostTime(3));
+    EXPECT_TRUE(system->localization().lastObservations().empty());
 }
