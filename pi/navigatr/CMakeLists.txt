@@ -73,6 +73,7 @@ set(NAVIGATR_SOURCES
     src/config/field_map.cpp
     src/config/composition.cpp
     src/transport/file_stream.cpp
+    src/transport/half_duplex.cpp
     src/transport/serial_port.cpp
     src/resources/resource_store.cpp
     src/impl/resources/serial_links.cpp

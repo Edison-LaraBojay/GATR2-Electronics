@@ -23,6 +23,7 @@ set(TEST_SOURCES
     transforms_gtest.cpp
     se3_gtest.cpp
     resources_gtest.cpp
+    half_duplex_gtest.cpp
     geometry_resources_gtest.cpp
     sensors_gtest.cpp
     stages_gtest.cpp

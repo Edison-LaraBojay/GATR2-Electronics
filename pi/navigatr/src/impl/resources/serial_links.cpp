@@ -2,54 +2,32 @@
 
 #include "impl/resources/serial_links.h"
 
-#include <cstdio>
-
 namespace navigatr
 {
 
 namespace
 {
 
-// sysfs GPIO write; simple and dependency free, good enough for one static
-// enable line.
-bool writeSysfs(const std::string& path, const std::string& value) {
-    std::FILE* f = std::fopen(path.c_str(), "w");
-    if (f == nullptr) {
-        return false;
-    }
-    const bool ok = std::fwrite(value.c_str(), 1, value.size(), f) == value.size();
-    std::fclose(f);
-    return ok;
+SerialWriteResult windowMissed() {
+    SerialWriteResult result;
+    result.expired = true;
+    result.error   = "transmit window missed";
+    return result;
 }
 
-bool setGpio(int gpio, bool high, std::string& err) {
-    const std::string base = "/sys/class/gpio/gpio" + std::to_string(gpio);
-    // export is allowed to fail when the pin is already exported
-    writeSysfs("/sys/class/gpio/export", std::to_string(gpio));
-    if (!writeSysfs(base + "/direction", "out") ||
-        !writeSysfs(base + "/value", high ? "1" : "0")) {
-        err = "cannot drive gpio " + std::to_string(gpio) + " via sysfs";
-        return false;
-    }
-    return true;
+SerialWriteResult writeFailed(const char* why) {
+    SerialWriteResult result;
+    result.error = why;
+    return result;
 }
 
 } // namespace
 
-LinuxSerialLink::~LinuxSerialLink() {
-    if (driver_enable_gpio_ >= 0) {
-        // release the bus; the pulldown keeps it idle when nobody drives it
-        std::string ignored;
-        setGpio(driver_enable_gpio_, false, ignored);
-    }
-}
-
-bool LinuxSerialLink::enableDriver(int gpio, std::string& err) {
-    if (!setGpio(gpio, true, err)) {
-        return false;
-    }
-    driver_enable_gpio_ = gpio;
-    return true;
+bool LinuxSerialLink::enableHalfDuplex(int gpio, const HalfDuplexTiming& timing,
+                                       std::string& err) {
+    half_duplex_ = true;
+    timing_      = timing;
+    return port_.openDriverEnable(gpio, err);
 }
 
 SerialReadResult LinuxSerialLink::readAvailable(MutableByteSpan destination) {
@@ -61,7 +39,26 @@ SerialReadResult LinuxSerialLink::readAvailable(MutableByteSpan destination) {
 }
 
 SerialWriteResult LinuxSerialLink::write(ByteSpan source) {
-    return SerialWriteResult{port_.write(source.data, static_cast<int>(source.size))};
+    return write(source, TransmitWindow{});
+}
+
+SerialWriteResult LinuxSerialLink::write(ByteSpan source, const TransmitWindow& window) {
+    if (!port_.isOpen()) {
+        return writeFailed("serial port not open");
+    }
+    if (half_duplex_) {
+        if (!port_.driverEnableOpen()) {
+            return writeFailed("driver enable gpio unavailable");
+        }
+        return transmitHalfDuplex(port_, source, window, timing_);
+    }
+    if (!waitForWindow(port_, window)) {
+        return windowMissed();
+    }
+    if (!port_.write(source.data, static_cast<int>(source.size))) {
+        return writeFailed("write failed");
+    }
+    return SerialWriteResult{true};
 }
 
 SerialReadResult MemoryLink::readAvailable(MutableByteSpan destination) {
@@ -71,6 +68,19 @@ SerialReadResult MemoryLink::readAvailable(MutableByteSpan destination) {
 
 SerialWriteResult MemoryLink::write(ByteSpan source) {
     return SerialWriteResult{output_.write(source.data, static_cast<int>(source.size))};
+}
+
+SerialWriteResult MemoryLink::write(ByteSpan source, const TransmitWindow& window) {
+    if (window.missed(nowUs())) {
+        return windowMissed();
+    }
+    if (inputPending()) {
+        SerialWriteResult result;
+        result.input_pending = true;
+        result.error         = "input pending";
+        return result;
+    }
+    return write(source);
 }
 
 SerialReadResult FileReplayLink::readAvailable(MutableByteSpan destination) {
@@ -114,10 +124,30 @@ ResourceInstance make_linux_serial_link(const ConfigNode& node,
             err = driver_enable.path() + ": DriverEnable needs gpio";
             return ResourceInstance{};
         }
+        if (baud <= 0) {
+            err = node.path() + ": half duplex needs a positive Baud";
+            return ResourceInstance{};
+        }
+        HalfDuplexTiming timing;
+        timing.baud = static_cast<int>(baud);
+        long guard  = static_cast<long>(2 * characterTimeUs(timing.baud));
+        long margin = static_cast<long>(timing.margin_us);
+        if (!driver_enable.getInt("post_guard_us", guard, guard, err) ||
+            !driver_enable.getInt("tx_margin_us", margin, margin, err)) {
+            return ResourceInstance{};
+        }
+        if (guard < 0 || margin < 0) {
+            err = driver_enable.path() + ": post_guard_us and tx_margin_us must be >= 0";
+            return ResourceInstance{};
+        }
+        timing.post_guard_us = guard;
+        timing.margin_us     = margin;
+
         std::string gpio_err;
-        if (!link->enableDriver(static_cast<int>(gpio), gpio_err) &&
+        if (!link->enableHalfDuplex(static_cast<int>(gpio), timing, gpio_err) &&
             context.warnings != nullptr) {
-            context.warnings->push_back(node.path() + ": " + gpio_err);
+            context.warnings->push_back(node.path() + ": " + gpio_err +
+                                        "; half-duplex writes will fail");
         }
     }
     return ResourceInstance::asContract<SerialLink>(std::move(link));

@@ -18,10 +18,11 @@ constexpr uint8_t kSync1 = 0x55;
 // Bounded so every parser can use a static buffer.
 constexpr uint16_t kMaxFrameLen = 128;
 
+// 0x02 and 0x03 are retired (pose and command frames of the one-way link).
 enum FrameType : uint8_t {
-    kFrameSensor  = 0x01,  // Pico  -> Pi
-    kFramePose    = 0x02,  // Pi    -> brain
-    kFrameCommand = 0x03,  // brain -> Pi
+    kFrameSensor       = 0x01, // Pico  -> Pi
+    kFrameBrainRequest = 0x10, // brain -> Pi
+    kFrameBrainReply   = 0x11, // Pi    -> brain
 };
 
 // ---------------------------------------------------------------------------
@@ -62,101 +63,125 @@ struct SensorSample {
 };
 
 // ---------------------------------------------------------------------------
-// Pose frame (Pi -> brain)
+// Brain link v3 (brain request, Pi reply)
 //
-//   sync0 sync1 | type | seq u8 | stamp_ms u32
-//   | x_mm i32 | y_mm i32 | heading_cdeg i32
-//   | status u16
-//   | object_id u8 | obj_x_mm i32 | obj_y_mm i32 | obj_heading_cdeg i32
-//   | n_landmarks u8
-//   | n x { id u8, dx_mm i16, dy_mm i16, bearing_cdeg i16, quality u8 }
-//   | xor u8
+//   sync0 sync1 | type | len u8 | payload[len] | crc u16
 //
-// The Pi publisher uses field coordinates for the robot pose. For the requested
-// object_id, a latched target supplies the desired robot pose when available;
-// otherwise a configured field-object mapping supplies the object pose.
-// obj_heading_cdeg is a full field heading in both cases. kStatusObjValid marks
-// usable object fields. Landmark entries contain robot-relative observations
-// from the latest association snapshot, which may predate the published pose.
+// crc is CRC-16/CCITT-FALSE over type, len and payload. The brain is the only
+// initiator and has at most one request outstanding.
+//
+// Request payload:  version u8 | op u8 | session u32 | request_id u16 | body
+// Reply payload:    version u8 | op u8 | session u32 | request_id u16
+//                   | result u8 | pi_instance u32 | body
+//
+// These header offsets are frozen for every version.
 // ---------------------------------------------------------------------------
 
-enum StatusBit : uint16_t {
-    kStatusPoseValid    = 1u << 0,
-    kStatusEncHealthy   = 1u << 1,
-    kStatusGyroHealthy  = 1u << 2,
-    kStatusVisionAlive  = 1u << 3,
-    kStatusBiasCal      = 1u << 4,  // init bias calibration completed cleanly
-    kStatusLocInit      = 1u << 5,  // pose was initialized from a command
-    kStatusObjRequested = 1u << 6,
-    kStatusObjValid     = 1u << 7,  // object fields hold a usable estimate
-    kStatusObjObserved  = 1u << 8,  // vision-locked target or observed field snapshot
+constexpr uint8_t kBrainLinkVersion = 3;
+
+enum BrainOp : uint8_t {
+    kOpHello          = 1, // body nonce u32
+    kOpSetPose        = 2, // body x_mm i32, y_mm i32, heading_cdeg i32
+    kOpSelectLandmark = 3, // body landmark_id u8, flags u8
+    kOpGetState       = 4, // no body
 };
 
-constexpr uint8_t kMaxLandmarks = 8;
-
-struct LandmarkObs {
-    uint8_t id;
-    int16_t dx_mm;
-    int16_t dy_mm;
-    int16_t bearing_cdeg;
-    uint8_t quality;  // 0-255, scaled from the association's quality value
+enum BrainResult : uint8_t {
+    kResultOk                  = 0, // done; for SET_POSE localization applied it
+    kResultPending             = 1, // SET_POSE accepted in this session, not applied yet
+    kResultUnknownSession      = 2,
+    kResultUnsupportedVersion  = 3, // reply header carries the Pi version
+    kResultUnsupportedOp       = 4,
+    kResultInvalidArgument     = 5, // request_id 0, or reused id with a different op/body
+    kResultUnknownLandmark     = 6, // no configured mapping for the id
+    kResultLandmarkUnsupported = 7, // world estimation is noop
+    kResultStale               = 8, // old request id, or HELLO reusing a recent nonce
 };
 
-struct PoseFrame {
-    uint8_t     seq;
-    uint32_t    stamp_ms;
-    int32_t     x_mm;
-    int32_t     y_mm;
-    int32_t     heading_cdeg;
-    uint16_t    status;
-    uint8_t     object_id;
-    int32_t     obj_x_mm;
-    int32_t     obj_y_mm;
-    int32_t     obj_heading_cdeg;
-    uint8_t     n_landmarks;
-    LandmarkObs landmarks[kMaxLandmarks];
+enum SelectFlagBit : uint8_t {
+    kSelectFlagSelected = 1u << 0, // clear releases the selection
 };
 
-// ---------------------------------------------------------------------------
-// Command frame (brain -> Pi)
-//
-//   sync0 sync1 | type | seq u8 | command u8
-//   | x_mm i32 | y_mm i32 | heading_cdeg i32
-//   | mode u8 | object_id u8 | flags u8
-//   | xor u8
-//
-// Fixed length. Fields a command does not use are zero. Unknown command
-// values decode fine and are ignored by the consumer, so the brain can be
-// newer than the Pi.
-// ---------------------------------------------------------------------------
-
-enum CommandType : uint8_t {
-    kCmdInitPose     = 0x01,  // place robot at x, y, heading; mode is carried as metadata
-    kCmdSelectObject = 0x02,  // request object_id, or clear when the flag is off
-    kCmdSetStream    = 0x03,  // stream flag on or off
+// State block robot_flags. Never acknowledgements.
+enum RobotFlagBit : uint8_t {
+    kRobotPoseValid         = 1u << 0, // estimator produced a pose
+    kRobotLocalized         = 1u << 1, // field anchor set by a placement
+    kRobotAgeKnown          = 1u << 2, // robot_age_ms is meaningful
+    kRobotAnchorCommand     = 1u << 3, // anchor from a brain SET_POSE
+    kRobotAnchorConfigured  = 1u << 4, // anchor from the configured initial placement
 };
 
-enum CommandFlagBit : uint8_t {
-    kCmdFlagObjectRequested = 1u << 0,
-    kCmdFlagStreamOn        = 1u << 1,
+// State block health. Information only, never acknowledgements.
+enum HealthBit : uint8_t {
+    kHealthEncodersFresh  = 1u << 0,
+    kHealthGyroFresh      = 1u << 1,
+    kHealthVisionAlive    = 1u << 2,
+    kHealthBiasCalibrated = 1u << 3,
 };
 
-struct CommandFrame {
-    uint8_t seq;
-    uint8_t command;
-    int32_t x_mm;
-    int32_t y_mm;
-    int32_t heading_cdeg;
-    uint8_t mode;
-    uint8_t object_id;
-    uint8_t flags;
+enum LandmarkSourceCode : uint8_t {
+    kLandmarkSourceNone     = 0,
+    kLandmarkSourceNominal  = 1,
+    kLandmarkSourceObserved = 2,
+};
+
+// Brain -> Pi. Body fields are used only by their op.
+struct BrainRequest {
+    uint8_t  version    = kBrainLinkVersion;
+    uint8_t  op         = 0;
+    uint32_t session    = 0; // 0 in HELLO
+    uint16_t request_id = 0; // per brain boot, 1..65535, never 0
+
+    uint32_t nonce        = 0; // HELLO
+    int32_t  x_mm         = 0; // SET_POSE, field frame
+    int32_t  y_mm         = 0;
+    int32_t  heading_cdeg = 0;
+    uint8_t  landmark_id  = 0; // SELECT_LANDMARK
+    uint8_t  select_flags = 0;
+};
+
+// GET_STATE Ok body. Robot and landmark poses share the same field anchor.
+struct BrainState {
+    uint8_t  robot_flags     = 0;
+    int32_t  x_mm            = 0; // robot origin, field frame
+    int32_t  y_mm            = 0;
+    int32_t  heading_cdeg    = 0; // CCW from +x, (-18000, 18000]
+    uint16_t robot_age_ms    = 0; // Pi cycle time minus measurement time, clamped
+    uint32_t odometry_epoch  = 0; // low 32 bits
+    uint32_t anchor_revision = 0; // low 32 bits
+    uint8_t  health          = 0;
+    uint8_t  landmark_id     = 0; // selected landmark, 0 when none
+    uint8_t  landmark_source = 0; // LandmarkSourceCode
+    int32_t  lm_x_mm         = 0; // physical landmark pose, field frame
+    int32_t  lm_y_mm         = 0;
+    int32_t  lm_heading_cdeg = 0;
+    uint16_t landmark_age_ms = 0; // observed only, clamped; 0 otherwise
+};
+
+// Pi -> brain. Body fields are used only by their (op, result).
+struct BrainReply {
+    uint8_t  version     = kBrainLinkVersion;
+    uint8_t  op          = 0; // echo
+    uint32_t session     = 0; // echo, or the opened session for HELLO Ok
+    uint16_t request_id  = 0; // echo
+    uint8_t  result      = kResultOk;
+    uint32_t pi_instance = 0; // random nonzero id per Pi process start and reset
+
+    uint32_t   nonce           = 0; // HELLO, every result
+    uint32_t   odometry_epoch  = 0; // SET_POSE Ok and Pending, current values
+    uint32_t   anchor_revision = 0;
+    uint8_t    landmark_id     = 0; // SELECT_LANDMARK Ok, echo
+    uint8_t    select_flags    = 0;
+    BrainState state;               // GET_STATE Ok
 };
 
 // ---------------------------------------------------------------------------
 
 inline uint8_t checksum(const uint8_t* data, uint16_t len) {
     uint8_t x = 0;
-    for (uint16_t i = 0; i < len; ++i) x ^= data[i];
+    for (uint16_t i = 0; i < len; ++i) {
+        x ^= data[i];
+    }
     return x;
 }
 

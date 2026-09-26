@@ -2,6 +2,8 @@
 
 #include "frame_codec.h"
 
+#include <string.h>
+
 namespace gatr2
 {
 namespace
@@ -51,7 +53,94 @@ void storeSensorValue(SensorSample& s, uint8_t bit, uint8_t word, int32_t v) {
     }
 }
 
+bool linkLenValid(uint8_t type, uint8_t len) {
+    if (type == kFrameBrainRequest) {
+        return len >= kBrainRequestHeaderLen && len <= kBrainRequestMaxLen;
+    }
+    if (type == kFrameBrainReply) {
+        return len >= kBrainReplyHeaderLen && len <= kBrainReplyMaxLen;
+    }
+    return false;
+}
+
+// Sync, type, len and crc around a payload already written at buf + 4.
+uint16_t finishLinkFrame(uint8_t type, uint8_t len, uint8_t* buf) {
+    buf[0] = kSync0;
+    buf[1] = kSync1;
+    buf[2] = type;
+    buf[3] = len;
+    wr16(buf + 4 + len, crc16(buf + 2, static_cast<uint16_t>(len + 2)));
+    return static_cast<uint16_t>(len + kLinkEnvelopeLen);
+}
+
+// Payload of a whole link frame, nullptr on a bad envelope, len or crc.
+const uint8_t* linkPayload(uint8_t type, const uint8_t* buf, uint16_t len) {
+    if (len < kLinkEnvelopeLen || len > kMaxFrameLen) {
+        return nullptr;
+    }
+    if (buf[0] != kSync0 || buf[1] != kSync1 || buf[2] != type) {
+        return nullptr;
+    }
+    const uint8_t n = buf[3];
+    if (!linkLenValid(type, n) || len != n + kLinkEnvelopeLen) {
+        return nullptr;
+    }
+    if (crc16(buf + 2, static_cast<uint16_t>(n + 2)) != rd16(buf + 4 + n)) {
+        return nullptr;
+    }
+    return buf + 4;
+}
+
+void wrState(uint8_t* p, const BrainState& s) {
+    p[0] = s.robot_flags;
+    wr32(p + 1, static_cast<uint32_t>(s.x_mm));
+    wr32(p + 5, static_cast<uint32_t>(s.y_mm));
+    wr32(p + 9, static_cast<uint32_t>(s.heading_cdeg));
+    wr16(p + 13, s.robot_age_ms);
+    wr32(p + 15, s.odometry_epoch);
+    wr32(p + 19, s.anchor_revision);
+    p[23] = s.health;
+    p[24] = s.landmark_id;
+    p[25] = s.landmark_source;
+    wr32(p + 26, static_cast<uint32_t>(s.lm_x_mm));
+    wr32(p + 30, static_cast<uint32_t>(s.lm_y_mm));
+    wr32(p + 34, static_cast<uint32_t>(s.lm_heading_cdeg));
+    wr16(p + 38, s.landmark_age_ms);
+}
+
+void rdState(const uint8_t* p, BrainState& s) {
+    s.robot_flags     = p[0];
+    s.x_mm            = static_cast<int32_t>(rd32(p + 1));
+    s.y_mm            = static_cast<int32_t>(rd32(p + 5));
+    s.heading_cdeg    = static_cast<int32_t>(rd32(p + 9));
+    s.robot_age_ms    = rd16(p + 13);
+    s.odometry_epoch  = rd32(p + 15);
+    s.anchor_revision = rd32(p + 19);
+    s.health          = p[23];
+    s.landmark_id     = p[24];
+    s.landmark_source = p[25];
+    s.lm_x_mm         = static_cast<int32_t>(rd32(p + 26));
+    s.lm_y_mm         = static_cast<int32_t>(rd32(p + 30));
+    s.lm_heading_cdeg = static_cast<int32_t>(rd32(p + 34));
+    s.landmark_age_ms = rd16(p + 38);
+}
+
 } // namespace
+
+uint16_t crc16(const uint8_t* data, uint16_t len) {
+    uint16_t crc = 0xFFFF;
+    for (uint16_t i = 0; i < len; ++i) {
+        crc = static_cast<uint16_t>(crc ^ (data[i] << 8));
+        for (uint8_t bit = 0; bit < 8; ++bit) {
+            if (crc & 0x8000) {
+                crc = static_cast<uint16_t>((crc << 1) ^ 0x1021);
+            } else {
+                crc = static_cast<uint16_t>(crc << 1);
+            }
+        }
+    }
+    return crc;
+}
 
 bool sensorMaskValid(uint16_t mask) {
     const uint16_t known = static_cast<uint16_t>((1u << kSensorBitCount) - 1u);
@@ -72,8 +161,31 @@ uint16_t sensorFrameLen(uint16_t mask) {
     return static_cast<uint16_t>(kSensorHeaderLen + sensorPayloadLen(mask) + 1);
 }
 
-uint16_t poseFrameLen(uint8_t n_landmarks) {
-    return static_cast<uint16_t>(kPoseHeaderLen + n_landmarks * kLandmarkLen + 1);
+uint8_t brainRequestLen(uint8_t op) {
+    switch (op) {
+    case kOpHello: return kBrainRequestHeaderLen + 4;
+    case kOpSetPose: return kBrainRequestHeaderLen + 12;
+    case kOpSelectLandmark: return kBrainRequestHeaderLen + 2;
+    case kOpGetState: return kBrainRequestHeaderLen;
+    default: return 0;
+    }
+}
+
+uint8_t brainReplyLen(uint8_t op, uint8_t result) {
+    if (op == kOpHello) {
+        return kBrainReplyHeaderLen + 4;
+    }
+    if (result > kResultStale) {
+        return 0;
+    }
+    const bool ok = result == kResultOk;
+    switch (op) {
+    case kOpSetPose:
+        return (ok || result == kResultPending) ? kBrainReplyHeaderLen + 8 : kBrainReplyHeaderLen;
+    case kOpSelectLandmark: return ok ? kBrainReplyHeaderLen + 2 : kBrainReplyHeaderLen;
+    case kOpGetState: return ok ? kBrainReplyHeaderLen + kBrainStateLen : kBrainReplyHeaderLen;
+    default: return 0;
+    }
 }
 
 uint16_t encodeSensorFrame(const SensorSample& in, uint8_t* buf, uint16_t cap) {
@@ -142,133 +254,158 @@ bool decodeSensorFrame(const uint8_t* buf, uint16_t len, SensorSample& out) {
     return true;
 }
 
-uint16_t encodePoseFrame(const PoseFrame& in, uint8_t* buf, uint16_t cap) {
-    if (in.n_landmarks > kMaxLandmarks) {
+uint16_t encodeBrainRequest(const BrainRequest& in, uint8_t* buf, uint16_t cap) {
+    const uint8_t known = brainRequestLen(in.op);
+    const uint8_t n     = known != 0 ? known : kBrainRequestHeaderLen;
+    if (n + kLinkEnvelopeLen > cap) {
         return 0;
     }
-    const uint16_t total = poseFrameLen(in.n_landmarks);
-    if (total > cap || total > kMaxFrameLen) {
-        return 0;
+
+    uint8_t* p = buf + 4;
+    p[0]       = in.version;
+    p[1]       = in.op;
+    wr32(p + 2, in.session);
+    wr16(p + 6, in.request_id);
+
+    uint8_t* body = p + kBrainRequestHeaderLen;
+    switch (in.op) {
+    case kOpHello: wr32(body, in.nonce); break;
+    case kOpSetPose:
+        wr32(body, static_cast<uint32_t>(in.x_mm));
+        wr32(body + 4, static_cast<uint32_t>(in.y_mm));
+        wr32(body + 8, static_cast<uint32_t>(in.heading_cdeg));
+        break;
+    case kOpSelectLandmark:
+        body[0] = in.landmark_id;
+        body[1] = in.select_flags;
+        break;
+    default: break;
     }
-
-    buf[0] = kSync0;
-    buf[1] = kSync1;
-    buf[2] = kFramePose;
-    buf[3] = in.seq;
-    wr32(buf + 4, in.stamp_ms);
-    wr32(buf + 8, static_cast<uint32_t>(in.x_mm));
-    wr32(buf + 12, static_cast<uint32_t>(in.y_mm));
-    wr32(buf + 16, static_cast<uint32_t>(in.heading_cdeg));
-    wr16(buf + 20, in.status);
-    buf[22] = in.object_id;
-    wr32(buf + 23, static_cast<uint32_t>(in.obj_x_mm));
-    wr32(buf + 27, static_cast<uint32_t>(in.obj_y_mm));
-    wr32(buf + 31, static_cast<uint32_t>(in.obj_heading_cdeg));
-    buf[35] = in.n_landmarks;
-
-    uint16_t at = kPoseHeaderLen;
-    for (uint8_t i = 0; i < in.n_landmarks; ++i) {
-        const LandmarkObs& L = in.landmarks[i];
-        buf[at]              = L.id;
-        wr16(buf + at + 1, static_cast<uint16_t>(L.dx_mm));
-        wr16(buf + at + 3, static_cast<uint16_t>(L.dy_mm));
-        wr16(buf + at + 5, static_cast<uint16_t>(L.bearing_cdeg));
-        buf[at + 7] = L.quality;
-        at          = static_cast<uint16_t>(at + kLandmarkLen);
-    }
-
-    buf[at] = checksum(buf, at);
-    return total;
+    return finishLinkFrame(kFrameBrainRequest, n, buf);
 }
 
-bool decodePoseFrame(const uint8_t* buf, uint16_t len, PoseFrame& out) {
-    if (len < kPoseHeaderLen + 1 || len > kMaxFrameLen) {
+bool decodeBrainRequest(const uint8_t* buf, uint16_t len, BrainRequest& out) {
+    const uint8_t* p = linkPayload(kFrameBrainRequest, buf, len);
+    if (p == nullptr) {
         return false;
     }
-    if (buf[0] != kSync0 || buf[1] != kSync1 || buf[2] != kFramePose) {
-        return false;
-    }
-    const uint8_t n = buf[35];
-    if (n > kMaxLandmarks || poseFrameLen(n) != len) {
-        return false;
-    }
-    if (checksum(buf, len) != 0) {
-        return false;
+    const uint8_t n = buf[3];
+
+    out            = BrainRequest{};
+    out.version    = p[0];
+    out.op         = p[1];
+    out.session    = rd32(p + 2);
+    out.request_id = rd16(p + 6);
+    if (out.version != kBrainLinkVersion) {
+        return true;
     }
 
-    out                  = PoseFrame{};
-    out.seq              = buf[3];
-    out.stamp_ms         = rd32(buf + 4);
-    out.x_mm             = static_cast<int32_t>(rd32(buf + 8));
-    out.y_mm             = static_cast<int32_t>(rd32(buf + 12));
-    out.heading_cdeg     = static_cast<int32_t>(rd32(buf + 16));
-    out.status           = rd16(buf + 20);
-    out.object_id        = buf[22];
-    out.obj_x_mm         = static_cast<int32_t>(rd32(buf + 23));
-    out.obj_y_mm         = static_cast<int32_t>(rd32(buf + 27));
-    out.obj_heading_cdeg = static_cast<int32_t>(rd32(buf + 31));
-    out.n_landmarks      = n;
-
-    uint16_t at = kPoseHeaderLen;
-    for (uint8_t i = 0; i < n; ++i) {
-        LandmarkObs& L = out.landmarks[i];
-        L.id           = buf[at];
-        L.dx_mm        = static_cast<int16_t>(rd16(buf + at + 1));
-        L.dy_mm        = static_cast<int16_t>(rd16(buf + at + 3));
-        L.bearing_cdeg = static_cast<int16_t>(rd16(buf + at + 5));
-        L.quality      = buf[at + 7];
-        at             = static_cast<uint16_t>(at + kLandmarkLen);
+    const uint8_t want = brainRequestLen(out.op);
+    if (want == 0) {
+        return true;
+    }
+    if (n != want) {
+        return false;
+    }
+    const uint8_t* body = p + kBrainRequestHeaderLen;
+    switch (out.op) {
+    case kOpHello: out.nonce = rd32(body); break;
+    case kOpSetPose:
+        out.x_mm         = static_cast<int32_t>(rd32(body));
+        out.y_mm         = static_cast<int32_t>(rd32(body + 4));
+        out.heading_cdeg = static_cast<int32_t>(rd32(body + 8));
+        break;
+    case kOpSelectLandmark:
+        out.landmark_id  = body[0];
+        out.select_flags = body[1];
+        break;
+    default: break;
     }
     return true;
 }
 
-uint16_t encodeCommandFrame(const CommandFrame& in, uint8_t* buf, uint16_t cap) {
-    if (kCommandFrameLen > cap) {
+uint16_t encodeBrainReply(const BrainReply& in, uint8_t* buf, uint16_t cap) {
+    const uint8_t known = brainReplyLen(in.op, in.result);
+    const uint8_t n     = known != 0 ? known : kBrainReplyHeaderLen;
+    if (n + kLinkEnvelopeLen > cap) {
         return 0;
     }
 
-    buf[0] = kSync0;
-    buf[1] = kSync1;
-    buf[2] = kFrameCommand;
-    buf[3] = in.seq;
-    buf[4] = in.command;
-    wr32(buf + 5, static_cast<uint32_t>(in.x_mm));
-    wr32(buf + 9, static_cast<uint32_t>(in.y_mm));
-    wr32(buf + 13, static_cast<uint32_t>(in.heading_cdeg));
-    buf[17] = in.mode;
-    buf[18] = in.object_id;
-    buf[19] = in.flags;
+    uint8_t* p = buf + 4;
+    p[0]       = in.version;
+    p[1]       = in.op;
+    wr32(p + 2, in.session);
+    wr16(p + 6, in.request_id);
+    p[8] = in.result;
+    wr32(p + 9, in.pi_instance);
 
-    buf[20] = checksum(buf, 20);
-    return kCommandFrameLen;
+    uint8_t* body = p + kBrainReplyHeaderLen;
+    if (n > kBrainReplyHeaderLen) {
+        switch (in.op) {
+        case kOpHello: wr32(body, in.nonce); break;
+        case kOpSetPose:
+            wr32(body, in.odometry_epoch);
+            wr32(body + 4, in.anchor_revision);
+            break;
+        case kOpSelectLandmark:
+            body[0] = in.landmark_id;
+            body[1] = in.select_flags;
+            break;
+        case kOpGetState: wrState(body, in.state); break;
+        default: break;
+        }
+    }
+    return finishLinkFrame(kFrameBrainReply, n, buf);
 }
 
-bool decodeCommandFrame(const uint8_t* buf, uint16_t len, CommandFrame& out) {
-    if (len != kCommandFrameLen) {
+bool decodeBrainReply(const uint8_t* buf, uint16_t len, BrainReply& out) {
+    const uint8_t* p = linkPayload(kFrameBrainReply, buf, len);
+    if (p == nullptr) {
         return false;
     }
-    if (buf[0] != kSync0 || buf[1] != kSync1 || buf[2] != kFrameCommand) {
-        return false;
-    }
-    if (checksum(buf, len) != 0) {
-        return false;
+    const uint8_t n = buf[3];
+
+    out             = BrainReply{};
+    out.version     = p[0];
+    out.op          = p[1];
+    out.session     = rd32(p + 2);
+    out.request_id  = rd16(p + 6);
+    out.result      = p[8];
+    out.pi_instance = rd32(p + 9);
+    if (out.version != kBrainLinkVersion) {
+        return true;
     }
 
-    out              = CommandFrame{};
-    out.seq          = buf[3];
-    out.command      = buf[4];
-    out.x_mm         = static_cast<int32_t>(rd32(buf + 5));
-    out.y_mm         = static_cast<int32_t>(rd32(buf + 9));
-    out.heading_cdeg = static_cast<int32_t>(rd32(buf + 13));
-    out.mode         = buf[17];
-    out.object_id    = buf[18];
-    out.flags        = buf[19];
+    const uint8_t want = brainReplyLen(out.op, out.result);
+    if (want == 0) {
+        return true;
+    }
+    if (n != want) {
+        return false;
+    }
+    if (n == kBrainReplyHeaderLen) {
+        return true;
+    }
+    const uint8_t* body = p + kBrainReplyHeaderLen;
+    switch (out.op) {
+    case kOpHello: out.nonce = rd32(body); break;
+    case kOpSetPose:
+        out.odometry_epoch  = rd32(body);
+        out.anchor_revision = rd32(body + 4);
+        break;
+    case kOpSelectLandmark:
+        out.landmark_id  = body[0];
+        out.select_flags = body[1];
+        break;
+    case kOpGetState: rdState(body, out.state); break;
+    default: break;
+    }
     return true;
 }
 
 void FrameReader::reset() {
-    len_   = 0;
-    ready_ = false;
+    len_       = 0;
+    frame_len_ = 0;
 }
 
 uint16_t FrameReader::expectedLen() const {
@@ -276,69 +413,68 @@ uint16_t FrameReader::expectedLen() const {
     if (len_ < 3) {
         return 0;
     }
-    if (buf_[2] == kFrameSensor) {
+    const uint8_t type = buf_[2];
+    if (type == kFrameSensor) {
         if (len_ < kSensorHeaderLen) {
             return 0;
         }
         const uint16_t mask = rd16(buf_ + 8);
         return sensorMaskValid(mask) ? sensorFrameLen(mask) : reject;
     }
-    if (buf_[2] == kFramePose) {
-        if (len_ < kPoseHeaderLen) {
+    if (type == kFrameBrainRequest || type == kFrameBrainReply) {
+        if (len_ < 4) {
             return 0;
         }
-        const uint8_t n = buf_[35];
-        return n <= kMaxLandmarks ? poseFrameLen(n) : reject;
-    }
-    if (buf_[2] == kFrameCommand) {
-        return kCommandFrameLen;
+        const uint8_t n = buf_[3];
+        return linkLenValid(type, n) ? static_cast<uint16_t>(n + kLinkEnvelopeLen) : reject;
     }
     return reject;
 }
 
+bool FrameReader::frameValid(uint16_t len) const {
+    if (buf_[2] == kFrameSensor) {
+        return checksum(buf_, len) == 0;
+    }
+    return crc16(buf_ + 2, static_cast<uint16_t>(len - 4)) == rd16(buf_ + len - 2);
+}
+
+void FrameReader::drop(uint16_t n) {
+    memmove(buf_, buf_ + n, len_ - n);
+    len_ = static_cast<uint16_t>(len_ - n);
+}
+
 bool FrameReader::push(uint8_t b) {
-    if (ready_) {
-        reset();
+    if (frame_len_ > 0) {
+        drop(frame_len_);
+        frame_len_ = 0;
     }
-
-    if (len_ == 0) {
-        if (b == kSync0) {
-            buf_[len_++] = b;
-        }
-        return false;
-    }
-    if (len_ == 1) {
-        if (b == kSync1) {
-            buf_[len_++] = b;
-        } else if (b != kSync0) {
-            len_ = 0;
-        }
-        return false;
-    }
-
     if (len_ >= kMaxFrameLen) {
-        len_ = 0;
-        return false;
+        drop(1);
     }
     buf_[len_++] = b;
 
-    const uint16_t want = expectedLen();
-    if (want == 0) {
-        return false;
+    // A rejected candidate drops only its sync0, so the bytes after it are rescanned.
+    while (len_ > 0) {
+        if (buf_[0] != kSync0 || (len_ > 1 && buf_[1] != kSync1)) {
+            drop(1);
+            continue;
+        }
+        const uint16_t want = expectedLen();
+        if (want > kMaxFrameLen) {
+            drop(1);
+            continue;
+        }
+        if (want == 0 || len_ < want) {
+            return false;
+        }
+        if (!frameValid(want)) {
+            drop(1);
+            continue;
+        }
+        frame_len_ = want;
+        return true;
     }
-    if (want > kMaxFrameLen) {
-        len_ = 0;
-        return false;
-    }
-    if (len_ < want) {
-        return false;
-    }
-    if (checksum(buf_, want) != 0) {
-        len_ = 0;
-        return false;
-    }
-    ready_ = true;
-    return true;
+    return false;
 }
 
 } // namespace gatr2

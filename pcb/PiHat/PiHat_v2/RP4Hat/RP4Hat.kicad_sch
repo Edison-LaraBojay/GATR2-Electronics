@@ -11350,48 +11350,6 @@
 			)
 		)
 	)
-	(sheet
-		(at 219.964 122.936)
-		(size 16.002 12.192)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0.0000)
-		)
-		(uuid "f3ef1434-28ca-440b-bf4f-425c3a27f7c4")
-		(property "Sheetname" "LinearRegulator"
-			(at 219.964 122.2244 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left bottom)
-			)
-		)
-		(property "Sheetfile" "LinearRegulator.kicad_sch"
-			(at 219.964 135.7126 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left top)
-			)
-		)
-		(instances
-			(project "RP4Hat"
-				(path "/48e8712f-9e83-40b5-843b-6f1e3e03f403"
-					(page "2")
-				)
-			)
-		)
-	)
 	(sheet_instances
 		(path "/"
 			(page "1")
