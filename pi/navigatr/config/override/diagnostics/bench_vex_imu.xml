@@ -29,11 +29,11 @@
                      lateral offsets. Edit to match the actual robot.
                      direction is positive if forward travel increases counts. -->
                 <Wheel id="forward_wheel_a" sensor_id="tracking_encoder_a"
-                       radius_m="0.0254" position_x_m="0" position_y_m="0.15"
+                       radius_m="0.024" position_x_m="0" position_y_m="0.15"
                        measurement_angle_deg="0" direction="positive"
                        calibration_status="UNMEASURED_BENCH_DEFAULT"/>
                 <Wheel id="forward_wheel_b" sensor_id="tracking_encoder_b"
-                       radius_m="0.0254" position_x_m="0" position_y_m="-0.15"
+                       radius_m="0.024" position_x_m="0" position_y_m="-0.15"
                        measurement_angle_deg="0" direction="positive"
                        calibration_status="UNMEASURED_BENCH_DEFAULT"/>
             </Resource>
