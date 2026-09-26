@@ -68,16 +68,20 @@ bool comparableClocks(const std::string& a, const std::string& b, std::string& w
 }
 
 bool PlacementEdge::apply(RobotState& r, const PlacementRequest& placement) {
-    if (!placement.requested ||
-        (placement.origin == origin && placement.sequence == sequence)) {
+    if (!placement.requested || (placement.origin == origin && placement.session == session &&
+                                 placement.sequence == sequence)) {
         return false;
     }
     origin            = placement.origin;
+    session           = placement.session;
     sequence          = placement.sequence;
     r.field_from_odom = compose(placement.pose, inverse(r.odom_pose));
     r.anchor_revision += 1;
-    r.valid       = true;
-    r.initialized = true;
+    r.valid              = true;
+    r.initialized        = true;
+    r.placement_origin   = origin;
+    r.placement_session  = session;
+    r.placement_sequence = sequence;
     return true;
 }
 
@@ -393,7 +397,9 @@ bool prepareStep(PlanarStepState& state, const StateEstimatorInput& in,
     const auto motion_it = in.observations.find(motion_ref);
     if (motion_it == in.observations.end()) {
         out.status       = FunctionStatus::kNoData;   // hold
-        out.clock_mapped = state.clock.valid();
+        // Host-stamped observations already share the history clock. Their
+        // mapping remains valid on quiet polls without a device-clock fit.
+        out.clock_mapped = r.measuredAt.domain == ClockDomain::kHost || state.clock.valid();
         applyAttitude(state.clock.valid());
         return false;
     }

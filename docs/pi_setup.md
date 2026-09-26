@@ -47,8 +47,11 @@ actual installation and update the XML or bench script if it differs. The Pico
 link is a separate UART and must match its 115200-baud firmware configuration.
 
 The [RS-485 bench test](../bench/rs485_link/README.md) documents transmit bring-up.
-The runtime's configured DriverEnable remains high while the link is open;
-bidirectional command traffic needs transmit/receive turnaround work.
+With DriverEnable configured the runtime holds the enable low while idle and
+high only while it answers a Brain request. The `gpio` attribute is the sysfs
+number: check `/sys/class/gpio/gpiochip*/base` on the installed kernel (newer
+kernels offset it, for example GPIO6 is 518) and see
+[navigatr resources](navigatr_resources.md#linux_serial_link).
 
 ## View the running Pi
 

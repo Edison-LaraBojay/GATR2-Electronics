@@ -1,7 +1,7 @@
 // register_publishers.cpp
 
 #include "impl/noop/noops.h"
-#include "impl/publishing/vex_brain.h"
+#include "impl/publishing/brain_link_publisher.h"
 #include "runtime/register_all.h"
 
 namespace navigatr
@@ -9,8 +9,8 @@ namespace navigatr
 
 void register_publishers(FunctionRegistry& functions) {
     registerOrDie<PublishingMakeFunction>(functions, "noop", &makeNoopPublishing);
-    registerOrDie<PublishingMakeFunction>(functions, "vex_brain",
-                                          &VexBrainPublisher::create);
+    registerOrDie<PublishingMakeFunction>(functions, "brain_link",
+                                          &BrainLinkPublisher::create);
 }
 
 } // namespace navigatr

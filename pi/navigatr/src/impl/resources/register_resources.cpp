@@ -10,12 +10,17 @@
 #include "impl/resources/target_set_resource.h"
 #include "impl/resources/wheel_geometry_resource.h"
 #include "resources/resource_store.h"
+#include "resources/brain_imu_bench.h"
 #include "runtime/register_all.h"
 
 namespace navigatr
 {
 
 void register_resources(FunctionRegistry& functions) {
+    registerOrDie<ResourceMakeFunction>(functions, "brain_imu_bench",
+        [](const ConfigNode&, ResourceInitializationContext&, std::string&) {
+            return ResourceInstance::asContract<BrainImuBench>(std::make_shared<BrainImuBench>());
+        });
     registerOrDie<ResourceMakeFunction>(functions, "linux_serial_link",
                                         &make_linux_serial_link);
     registerOrDie<ResourceMakeFunction>(functions, "memory_link", &make_memory_link);

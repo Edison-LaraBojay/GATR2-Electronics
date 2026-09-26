@@ -159,10 +159,11 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     }
 
     SlotInitializationContext slot_context;
-    slot_context.resources = &resources_;
-    slot_context.sensors   = &execute_sensors_.outputs();
-    slot_context.functions = &functions;
-    slot_context.warnings  = &warnings_;
+    slot_context.resources    = &resources_;
+    slot_context.sensors      = &execute_sensors_.outputs();
+    slot_context.functions    = &functions;
+    slot_context.warnings     = &warnings_;
+    slot_context.loop_rate_hz = loop_rate_hz_;
 
     // Every slot must be present exactly once and explicitly typed. An
     // intentionally unused slot selects its category noop; omission is an
@@ -185,10 +186,9 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     };
 
     const auto buildSlot = [&](const char* slot_name, auto& target, auto make_tag,
-                               auto& context, std::string& label) {
+                               auto& context, std::string& label, FunctionKey& type) {
         using MakeFunction = typename decltype(make_tag)::type;
-        ConfigNode  node;
-        FunctionKey type;
+        ConfigNode node;
         if (!slotNode(slot_name, node, type)) {
             return false;
         }
@@ -203,9 +203,13 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     };
 
     if (!buildSlot("CommandCollection", commands_, Tag<CommandsMakeFunction>{},
-                   slot_context, slot_labels_[0])) {
+                   slot_context, slot_labels_[0], commands_type_)) {
         return false;
     }
+    // a publisher answering this collector must read the same link
+    slot_context.commands_type = commands_type_;
+    slot_context.commands_serial =
+        ResourceId{pipeline.child("CommandCollection").child("Serial").attr("resource_id")};
 
     // Localization is an aggregate stage, not a typed slot: its observation
     // functions and estimator are selected inside it.
@@ -243,15 +247,24 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     execute_world_ = std::move(*world);
     // Later slots reference only what the estimator declares it publishes
     // across the boundary, never an implementation detail.
-    slot_context.observations = execute_world_.observationOutputs();
-    slot_context.associations = execute_world_.associationOutputs();
+    slot_context.observations          = execute_world_.observationOutputs();
+    slot_context.associations          = execute_world_.associationOutputs();
+    slot_context.world_estimation_noop = execute_world_.estimatorType() == "noop";
 
+    FunctionKey target_type;
     if (!buildSlot("TargetResolution", target_resolution_,
-                   Tag<TargetResolutionMakeFunction>{}, slot_context, slot_labels_[1])) {
+                   Tag<TargetResolutionMakeFunction>{}, slot_context, slot_labels_[1],
+                   target_type)) {
         return false;
     }
+    FunctionKey publishing_type;
     if (!buildSlot("Publishing", publishing_, Tag<PublishingMakeFunction>{}, slot_context,
-                   slot_labels_[2])) {
+                   slot_labels_[2], publishing_type)) {
+        return false;
+    }
+    if (commands_type_.value == "brain_link" && publishing_type.value != "brain_link") {
+        err = pipeline.path() + ": brain_link CommandCollection needs brain_link Publishing "
+                                "to answer its requests";
         return false;
     }
 
@@ -261,9 +274,12 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
 
 LocalizationRequests System::requestsFrom(const CommandState& command) const {
     LocalizationRequests requests;
-    if (command.init_sequence != 0) {
+    // A new brain session withdraws a placement not applied yet; an applied
+    // one stays recorded in the robot state and never re-applies.
+    if (command.init_sequence != 0 && command.init_session == command.session) {
         requests.placement.requested = true;
         requests.placement.origin    = "command";
+        requests.placement.session   = command.init_session;
         requests.placement.sequence  = command.init_sequence;
         requests.placement.pose      = command.init_pose;
     }
@@ -336,7 +352,7 @@ void System::reportingCycle(MonotonicTime now) {
 
     PublishingOutput pub_out = publishing_->run(
         {execute_sensors_.retained(), field->observations, field->associations, robot_,
-         status, field->field, command_, target_, now});
+         status, field->field, command_, target_, now, &diagnostics_});
     diagnostics_.note(slot_labels_[2], pub_out.status);
 
     auto reporting     = std::make_shared<ReportingSnapshot>();
@@ -449,6 +465,25 @@ void System::publishSourceHealth(MonotonicTime now) {
 
 void System::publishDetectionFrames(const SensorMap& sensors, const FieldSnapshot& snapshot,
                                     MonotonicTime now) {
+    const auto frameSnapshot = [&](const SensorId& camera, const CameraFramePayload& frame) {
+        auto d                     = std::make_shared<DetectionFrameSnapshot>();
+        d->camera                  = camera;
+        d->engineering_frame       = frame.engineering_frame;
+        d->frame_epoch             = frame.frame.epoch;
+        d->frame_sequence          = frame.frame.sequence;
+        d->exposureAt              = frame.frame.exposureAt;
+        d->receivedAt              = frame.frame.receivedAt;
+        d->processedAt             = running_.load() ? HostClock::now() : now;
+        d->exposure_uncertainty_ms = frame.frame.exposure_uncertainty_ms;
+        d->exposure_time_reliable  = frame.frame.exposure_time_reliable;
+        d->width_px                = frame.frame.width_px;
+        d->height_px               = frame.frame.height_px;
+        d->y8                      = frame.frame.y8;
+        d->intrinsics              = frame.intrinsics;
+        d->field_invocation        = snapshot.invocation;
+        return d;
+    };
+
     // Every tag observation set published this invocation is bound to the
     // exact frame it was decoded from: the pixels come from the sensor
     // record whose identity matches, never from "the latest image".
@@ -468,22 +503,9 @@ void System::publishDetectionFrames(const SensorMap& sensors, const FieldSnapsho
             frame->frame.sequence != set->frame_sequence) {
             continue;   // the retained frame is not the one these came from
         }
-        auto d                     = std::make_shared<DetectionFrameSnapshot>();
-        d->camera                  = set->camera;
-        d->engineering_frame       = frame->engineering_frame;
-        d->frame_epoch             = set->frame_epoch;
-        d->frame_sequence          = set->frame_sequence;
-        d->exposureAt              = frame->frame.exposureAt;
-        d->receivedAt              = frame->frame.receivedAt;
-        d->processedAt             = running_.load() ? HostClock::now() : now;
-        d->exposure_uncertainty_ms = frame->frame.exposure_uncertainty_ms;
-        d->exposure_time_reliable  = frame->frame.exposure_time_reliable;
-        d->width_px                = frame->frame.width_px;
-        d->height_px               = frame->frame.height_px;
-        d->y8                      = frame->frame.y8;
-        d->intrinsics              = frame->intrinsics;
-        d->has_observations        = true;
-        d->observations            = *set;
+        auto d              = frameSnapshot(set->camera, *frame);
+        d->has_observations = true;
+        d->observations     = *set;
         for (const auto& akv : snapshot.associations) {
             const TagAssociationTraceSet* trace =
                 akv.second.payload.get<TagAssociationTraceSet>();
@@ -507,8 +529,37 @@ void System::publishDetectionFrames(const SensorMap& sensors, const FieldSnapsho
             d->field_from_odom      = exposure.current.robot.field_from_odom;
             d->anchor_revision      = exposure.current.robot.anchor_revision;
         }
-        d->field_invocation     = snapshot.invocation;
-        produced[set->camera]   = std::move(d);
+        produced[set->camera] = std::move(d);
+    }
+
+    // Preview without detection: a camera frame nothing decoded this
+    // invocation is still published under its own identity with
+    // has_observations false, so preview works with noop world estimation.
+    // A frame already published, decoded or not, is never replaced by a
+    // raw copy of itself.
+    for (const auto& kv : sensors) {
+        if (produced.count(kv.first) != 0 || !kv.second.latest.has_value()) {
+            continue;
+        }
+        const CameraFramePayload* frame = kv.second.latest->payload.get<CameraFramePayload>();
+        if (frame == nullptr) {
+            continue;
+        }
+        {
+            std::lock_guard<std::mutex> lock(snapshot_mutex_);
+            const auto                  it = detection_frames_.find(kv.first);
+            if (it != detection_frames_.end() && it->second->frame_epoch == frame->frame.epoch &&
+                it->second->frame_sequence == frame->frame.sequence) {
+                continue;
+            }
+        }
+        auto       d        = frameSnapshot(kv.first, *frame);
+        const auto exposure = execute_localization_.feed()->sampleSnapshotAt(frame->frame.exposureAt);
+        d->pose_at_exposure     = exposure.sample.pose;
+        d->attitude_at_exposure = exposure.sample.attitude;
+        d->field_from_odom      = exposure.current.robot.field_from_odom;
+        d->anchor_revision      = exposure.current.robot.anchor_revision;
+        produced[kv.first]      = std::move(d);
     }
     if (produced.empty()) {
         return;

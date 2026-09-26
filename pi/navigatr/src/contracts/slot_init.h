@@ -48,6 +48,15 @@ struct SlotInitializationContext {
     std::vector<ObservationOutputDecl> observations;   // filled after world estimation
     std::vector<AssociationOutputDecl> associations;   // filled after world estimation
 
+    double loop_rate_hz = 0.0;   // estimation loop rate; 0 outside a System build
+
+    // Filled after Command Collection is built: its type and the Serial
+    // resource it reads, empty when it names none.
+    FunctionKey commands_type;
+    ResourceId  commands_serial;
+
+    bool world_estimation_noop = false;   // filled after world estimation
+
     std::vector<std::string>* warnings = nullptr;
 
     bool requireObservation(const ObservationId& id, const std::type_index* expected,

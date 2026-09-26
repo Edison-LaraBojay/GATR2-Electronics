@@ -7,22 +7,51 @@ This page connects the hardware to the checked-in acquisition and Pi runtime.
 
 ## IMU
 
-The [IMU board](../pcb/IMU/README.md) uses the ASM330LHHG1 for inertial sensing,
-primarily heading. The Pico's [driver](../pico/src/imu.cpp) communicates over SPI1
-and currently reads only gyro Z. It configures:
+The robot's IMU is a GY-BNO08X breakout on SPI1 (mode 3, at most 3 MHz). The
+Pico's [BNO08X driver](../pico/src/imu_bno08x.cpp) runs CEVA's sh2 library over a
+non-blocking SPI layer. It enables acceleration report `0x01` at 100 Hz and
+uncalibrated gyro report `0x07` at 200 Hz. At startup or IMU reset, at least two
+seconds of stationary, level robot data establish sensor-space up. The driver
+projects gyro XYZ onto that fixed axis, allowing sideways and upside-down IMU
+mounts. Each 50 Hz frame carries the mean projected yaw rate in millidegrees
+per second, with bias left for the Pi. The gyro bit stays clear during alignment
+or stale reports. Recovery retries do not stop encoders or UART frames.
 
-| Firmware setting | Value |
-|---|---|
-| Gyro output data rate | 208 Hz |
-| Gyro full scale | 2000 degrees/second |
-| Conversion to wire units | 70 millidegrees/second per LSB |
-| Block-data update and address increment | Enabled |
-| Accelerometer | Disabled |
+Pi HAT v2 wiring, by the module's printed labels:
+
+| Module | Pico | Route |
+|---|---|---|
+| VCC / GND | 3.3 V / GND | J7 pin 7 / J7 pin 1 or 8 |
+| SCL (SCK) | GP10, pin 14 | J7 pin 5 |
+| SDA (MISO) | GP8, pin 11 | J7 pin 3 |
+| ADO (MOSI) | GP11, pin 15 | J7 pin 4 |
+| CS | GP9, pin 12 | J7 pin 6 |
+| INT | GP22, pin 29 | J7 pin 2 |
+| RST | GP12, pin 16 | added wire |
+| PS0/WAKE | GP13, pin 17 | added wire |
+| PS1 | 3.3 V | added wire |
+
+PS0 and PS1 must be high through reset to select SPI; the driver resets the hub
+with PS0 held high, then uses PS0 as WAKE. The interrupt line is required: the
+v3 HAT's six-pin IMU connector drops it. Pins live in
+[board.h](../pico/src/board.h).
+
+The earlier [IMU board](../pcb/IMU/README.md) with the ASM330LHHG1 stays
+selectable with the `hat2_asm330` build ([driver](../pico/src/imu_asm330.cpp)):
+208 Hz, 2000 degrees/second full scale, 70 millidegrees/second per LSB, newest
+sample per frame, accelerometer disabled.
+
+Keep the robot level and still for about six seconds at a full startup: about
+two for BNO08X alignment, then four for the Pi's 200-sample gyro bias collection.
+The [bring-up guide](../pi/navigatr/docs/parallel_wheel_bringup.md) lists the
+stationarity checks. The fixed axis does not compensate later rocking, and the
+Brain's placement still supplies field heading.
 
 The Pi's `pico_imu_channel` converts yaw rate and accumulated rotation into radians,
 then localization observation models estimate bias and use heading increments.
 The protocol defines optional accel XY fields, but the current firmware does not
-populate them. No quaternion/roll/pitch report exists. See the
+populate them: BNO08X acceleration is used internally for startup alignment.
+No quaternion/roll/pitch report exists. See the
 [attitude follow-up](../pi/navigatr/docs/attitude_firmware_followup.md) for the
 additional acquisition and protocol work needed for measured tilt.
 
@@ -37,14 +66,20 @@ do not establish assembled-robot drift or alignment accuracy.
 The [magnetic encoder board](../pcb/MagneticEncoder/README.md) supports compact
 custom tracking-wheel assemblies using contactless magnetic rotation sensing.
 The Pico counts A/B quadrature for three channels. Its
-[pin configuration](../pico/src/config.h) assigns channels to GP0/1, GP2/3, and
-GP4/5; pin and connector wiring must match the chosen HAT revision.
+[pin map](../pico/src/board.h) assigns channels to GP0/1, GP2/3, and GP4/5,
+which are J2, J3 and J4 on the v2 HAT; pin and connector wiring must match the
+chosen HAT revision. The current robot has two parallel tracking wheels, both
+measuring forward travel, on channels 0 (J2) and 1 (J3); see the
+[parallel-wheel bring-up](../pi/navigatr/docs/parallel_wheel_bringup.md).
 
 Counts per revolution and electrical sign are sensor calibration. Effective
 wheel radius, position, and rolling direction belong to `wheel_geometry`, used
 by `tracking_wheel_motion` to calculate body movement. Verify the actual encoder
 configuration and counted edges rather than assuming every assembly has the same
-counts per revolution. Unpowered tracking wheels measure ground movement but
+counts per revolution. The parallel-wheel AS5047P template uses its default
+4000 counts/revolution with x4 decoding and direct 1:1 wheel coupling; see the
+[bring-up guide](../pi/navigatr/docs/parallel_wheel_bringup.md#3-fill-in-the-robot-description).
+Unpowered tracking wheels measure ground movement but
 still depend on contact, mounting rigidity, and calibration.
 
 ## Pi HAT
@@ -77,12 +112,21 @@ The HAT routes Pi UART5 through a half-duplex transceiver:
 | UART5 RX from transceiver RO | 13 | 33 |
 | Transceiver DE and /RE enable | 6 | 31 |
 
-The enable line is pulled down on the board. The checked-in Linux serial resource
-sets its configured `DriverEnable` GPIO high while open and low on destruction.
-There is no transmit/receive turnaround implementation; with DE and /RE tied
-together, that keeps this physical link in transmit mode. The runtime has a
-command-frame parser, but receive traffic on this shared link still needs the
-direction-control implementation and hardware validation.
+The enable line is pulled down on the board. With `<DriverEnable gpio="6"/>` the
+Linux serial resource runs the link half duplex: it drives DE low at open so the
+Pi listens, raises it only while it sends a reply, and drives it low again once
+the UART reports its transmitter empty and a two-character guard has passed.
+Errors and timeouts also release DE. The Brain is the only initiator and the Pi only
+answers requests; the [interface spec](interfaces.md) defines bus ownership and
+timing, and [navigatr resources](navigatr_resources.md#linux_serial_link) the
+transmit sequence. The V5 smart port is assumed to switch its own RS-485
+direction.
+
+Hardware checks, not validated on the robot yet: the sysfs GPIO number (newer
+kernels can offset it, for example 512 + 6), `TIOCSERGETLSR` and turnaround
+timing on the Pi UART, DE behavior, and the V5 port's direction handling. If
+the runtime is killed (SIGKILL, crash) while transmitting, DE stays high and
+blocks the Brain until the runtime starts again and drives it low.
 
 The [bench example](../bench/rs485_link/README.md) exercises Pi-to-Brain byte
 transfer separately from the production codec. It does not validate command

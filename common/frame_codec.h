@@ -61,15 +61,21 @@ bool decodeBrainReply(const uint8_t* buf, uint16_t len, BrainReply& out);
 
 // Byte stream reader for sensor and brain link frames. Scans for the sync
 // pair, buffers one frame and validates its length and checksum or CRC. On a
-// rejected candidate it rescans the buffered bytes after that sync byte.
+// rejected candidate it rescans the buffered bytes after that sync byte, so
+// one push can leave more complete frames buffered behind the reported one.
+//
+//   if (r.push(b)) { do { use(r.frame()); } while (r.next()); }
 class FrameReader
 {
 public:
     void reset();
 
     // Feed one byte. True when a complete valid frame is buffered.
-    // Bytes buffered behind a frame are kept for the following pushes.
     bool push(uint8_t b);
+
+    // Release the reported frame and report the next complete frame already
+    // buffered, without a new byte. False when none is complete yet.
+    bool next();
 
     const uint8_t* frame() const { return buf_; }
     uint16_t       frameLen() const { return frame_len_; }
@@ -83,6 +89,7 @@ private:
     uint16_t expectedLen() const;
     bool     frameValid(uint16_t len) const;
     void     drop(uint16_t n);
+    bool     scan();
 
     uint8_t  buf_[kMaxFrameLen] = {};
     uint16_t len_               = 0; // bytes buffered

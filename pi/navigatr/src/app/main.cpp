@@ -10,9 +10,10 @@
 // configuration enables it, the inspection service; SIGINT/SIGTERM stop the
 // service first, then the workers, then the system. --inline runs every
 // stage on this thread at the loop rate instead (deterministic replay and
-// bench use). --cycles stops after n estimation cycles in either mode.
-// --inspect-port enables the inspection service on loopback at that port
-// without editing the profile.
+// bench use; warned with the brain link, which needs the workers). --cycles
+// stops after n estimation cycles in either mode. --inspect-port enables
+// the inspection service on loopback at that port without editing the
+// profile.
 
 #include <chrono>
 #include <csignal>
@@ -38,9 +39,17 @@ void onSignal(int) { g_stop = 1; }
 void printDiagnostics(const char* title, const navigatr::Diagnostics& d) {
     std::printf("%s: cycles %llu\n", title, static_cast<unsigned long long>(d.cycles));
     for (const auto& kv : d.links) {
+        const navigatr::LinkStats& l = kv.second;
         std::printf("link %-14s %u bytes, %u packets, %u decode errors, %u seq gaps\n",
-                    kv.first.c_str(), kv.second.bytes, kv.second.packets,
-                    kv.second.decode_errors, kv.second.seq_gaps);
+                    kv.first.c_str(), l.bytes, l.packets, l.decode_errors, l.seq_gaps);
+        if (l.requests != 0) {
+            std::printf("     %-14s %u requests, %u replies, %u duplicates, %u superseded, "
+                        "%u stale, %u unknown session, %u unanswered, %u expired, "
+                        "%u input pending, %u late release, %u tx errors\n",
+                        "", l.requests, l.replies, l.duplicates, l.superseded, l.stale,
+                        l.unknown_session, l.unanswered, l.expired, l.input_pending,
+                        l.late_release, l.tx_errors);
+        }
     }
     for (const auto& kv : d.functions) {
         const navigatr::FunctionStats& f = kv.second;
@@ -96,6 +105,10 @@ int main(int argc, char** argv) {
                  system->sessionId().c_str());
     for (const std::string& warning : system->warnings()) {
         std::fprintf(stderr, "warning: %s\n", warning.c_str());
+    }
+    if (inline_mode && system->commandsType() == "brain_link") {
+        std::fprintf(stderr, "warning: --inline runs world estimation between a brain_link "
+                             "request and its reply; replies may miss the reply window\n");
     }
 
     navigatr::InspectionConfig inspection = system->inspection();

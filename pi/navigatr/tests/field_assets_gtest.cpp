@@ -410,11 +410,11 @@ TEST(FieldAssets, LiveCameraProfileResolvesAndNeedsTheLibcameraBackend) {
     EXPECT_NE(err.find("front_camera_device"), std::string::npos) << err;
 #endif
 
-    // the diagnostic templates carry the same inspection settings
+    // the diagnostic profiles and templates carry the same inspection settings
     for (const char* name :
-         {"/override/diagnostics/two_wheel_imu.xml.in",
+         {"/override/diagnostics/parallel_wheels_bno08x.xml",
+          "/override/diagnostics/parallel_wheels_bno08x_camera.xml",
           "/override/diagnostics/three_wheel_imu.xml.in",
-          "/override/diagnostics/two_wheel_imu_camera.xml.in",
           "/override/diagnostics/three_wheel_imu_camera.xml.in"}) {
         tinyxml2::XMLDocument doc;
         ASSERT_EQ(doc.LoadFile((kConfigDir + name).c_str()), tinyxml2::XML_SUCCESS) << name;

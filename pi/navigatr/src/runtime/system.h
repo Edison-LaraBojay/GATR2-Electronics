@@ -149,6 +149,10 @@ public:
     double   loopRateHz() const { return loop_rate_hz_; }
     uint64_t cycle() const { return cycle_.load(); }
 
+    // Configured CommandCollection type, e.g. brain_link, which needs the
+    // workers: step() runs world estimation between request and reply.
+    const std::string& commandsType() const { return commands_type_.value; }
+
     // Identity of the running profile: the Configuration id (or the file
     // name for a plain System document) and a content digest over every
     // contributing file.
@@ -234,6 +238,7 @@ private:
     std::unique_ptr<TargetResolution> target_resolution_;
     std::unique_ptr<Publishing>       publishing_;
     std::string                       slot_labels_[3];   // commands, targets, publishing
+    FunctionKey                       commands_type_;
 
     // estimation worker state
     std::atomic<uint64_t> cycle_{0};

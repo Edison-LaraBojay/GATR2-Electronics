@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Parallel wheels + BNO08X localization, identical to the wheels-only
+     profile, plus the front camera and AprilTag world estimation. Vision
+     updates landmark estimates only; it never corrects the robot pose.
+     Each frame is placed with the pose history at its exposure time and
+     the robot_geometry camera mount. Gate values are tuning starting
+     points, not calibration.
+
+     Landmarks the Brain may request need a Publishing FieldObject mapping
+     with a wire id agreed with the Brain code, e.g.
+         <FieldObject object_id="center_goal" wire_id="1"/>
+     None is configured yet, so such requests are refused as unknown. -->
+<Pipeline>
+
+    <CommandCollection type="brain_link">
+        <Serial resource_id="brain_uart"/>
+    </CommandCollection>
+
+    <Localization file="parallel_wheels_bno08x_localization.xml"/>
+
+    <WorldEstimation>
+        <Estimator id="goals" type="apriltag">
+            <FieldMap resource_id="override_field"/>
+            <ObservationExtraction>
+                <Camera sensor_id="front_camera"/>
+                <Detector resource_id="tag_detector"/>
+                <Output observation_id="tag_observations"/>
+            </ObservationExtraction>
+            <Association>
+                <Observations observation_id="tag_observations"/>
+                <FieldMap resource_id="override_field"/>
+                <RobotFrames resource_id="robot_geometry"/>
+                <!-- the Pico sends yaw rate only; missing tilt is assumed level -->
+                <Attitude policy="assume_level"/>
+                <Gates max_translation_error_m="0.75" max_heading_error_deg="30"
+                       ambiguity_margin_m="0.15" max_range_m="3.0"
+                       min_decision_margin="10" max_hamming="0"
+                       min_facing_cos="0.1" min_projected_size_px="8"
+                       max_reprojection_error_px="0"
+                       max_alternate_pose_ambiguity="0"/>
+                <Output association_id="landmark_pose_observations"/>
+            </Association>
+            <LandmarkEstimation commit="always" blend="1.0"/>
+        </Estimator>
+    </WorldEstimation>
+
+    <TargetResolution type="noop"/>
+
+    <Publishing type="brain_link">
+        <Serial resource_id="brain_uart"/>
+        <Health fresh_ms="150">
+            <Encoder sensor_id="tracking_encoder_a"/>
+            <Encoder sensor_id="tracking_encoder_b"/>
+            <Gyro sensor_id="robot_imu"/>
+            <BiasCal function_id="tracking_motion"/>
+        </Health>
+    </Publishing>
+
+</Pipeline>

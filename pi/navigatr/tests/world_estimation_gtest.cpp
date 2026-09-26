@@ -512,7 +512,7 @@ TEST(WorldEstimationStage, ExactlyOneTypedEstimatorIsConfigured) {
     rejects(R"(<WorldEstimation><Estimator id="a" type="kalman_9000"/></WorldEstimation>)",
             "kalman_9000");
     // a key from another category fails on signature, never constructs
-    rejects(R"(<WorldEstimation><Estimator id="a" type="vex_brain"/></WorldEstimation>)",
+    rejects(R"(<WorldEstimation><Estimator id="a" type="brain_link"/></WorldEstimation>)",
             "different signature");
 }
 

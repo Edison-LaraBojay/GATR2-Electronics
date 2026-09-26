@@ -19,8 +19,7 @@ Pose inverse(const Pose& p) {
 
 } // namespace
 
-DifferentialDriveSim::DifferentialDriveSim(const DifferentialDriveConfig& config,
-                                           const Pose&                    start)
+DifferentialDriveSim::DifferentialDriveSim(const DifferentialDriveConfig& config, const Pose& start)
     : config_(config) {
     setPose(start);
 }

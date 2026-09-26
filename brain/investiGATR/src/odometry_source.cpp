@@ -47,6 +47,10 @@ void OdometrySource::update(Seconds now, Meters left, Meters right, Radians head
 
 void OdometrySource::step(Seconds now, Meters left, Meters right, bool has_heading,
                           Radians heading) {
+    if (!std::isfinite(now) || !std::isfinite(left) || !std::isfinite(right) ||
+        (has_heading && !std::isfinite(heading))) {
+        return;
+    }
     if (!have_travel_) {
         have_travel_ = true;
         last_left_   = left;

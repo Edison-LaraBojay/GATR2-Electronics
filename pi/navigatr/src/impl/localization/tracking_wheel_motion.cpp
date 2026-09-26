@@ -35,6 +35,20 @@ bool solvePlanar(const std::vector<double>& ux, const std::vector<double>& uy,
     return true;
 }
 
+// dtheta known, dy assumed zero: least squares for dx over the wheels.
+bool solveForward(const std::vector<double>& ux, const std::vector<double>& m, double& dx) {
+    double a = 0.0, b = 0.0;
+    for (std::size_t i = 0; i < m.size(); ++i) {
+        a += ux[i] * ux[i];
+        b += ux[i] * m[i];
+    }
+    if (a < 1e-6) {
+        return false;
+    }
+    dx = b / a;
+    return true;
+}
+
 // dtheta unknown: least squares for (d, dtheta) together.
 bool solveFull(const std::vector<double>& ux, const std::vector<double>& uy,
                const std::vector<double>& k, const std::vector<double>& m, double& dx,
@@ -253,6 +267,35 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
         model->heading_.calibrated = model->heading_.bias_samples == 0;
     }
 
+    const ConfigNode lateral = node.child("LateralMotion");
+    if (lateral.valid()) {
+        std::string assume;
+        if (!lateral.requireAttr("assume", assume, err)) {
+            return nullptr;
+        }
+        if (assume != "zero") {
+            err = lateral.path() + ": assume must be zero";
+            return nullptr;
+        }
+        if (lateral.next("LateralMotion").valid()) {
+            err = who + ": at most one LateralMotion";
+            return nullptr;
+        }
+        if (!model->heading_.configured) {
+            err = lateral.path() + ": assuming zero lateral motion needs a HeadingConstraint";
+            return nullptr;
+        }
+        for (const Wheel& w : model->wheels_) {
+            if (std::fabs(w.uy) > 1e-9) {
+                err = lateral.path() + ": wheel " + w.label + " (" + w.binding.id.value +
+                      ") measures sideways travel; with lateral motion assumed zero every "
+                      "wheel must measure along body x (measurement_angle_deg 0 or 180)";
+                return nullptr;
+            }
+        }
+        model->zero_lateral_ = true;
+    }
+
     const ConfigNode timing = node.child("Timing");
     if (!timing.getInt("interval_tolerance_ms", 20, model->interval_tolerance_ms_, err) ||
         !timing.getInt("max_pending_ms", 500, model->max_pending_ms_, err)) {
@@ -274,10 +317,23 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
             m.push_back(0.0);
         }
         double dx = 0.0, dy = 0.0, dtheta = 0.0;
-        if (model->heading_.configured) {
+        if (model->zero_lateral_) {
+            if (!solveForward(ux, m, dx)) {
+                err = who + ": wheel geometry cannot observe forward translation";
+                return nullptr;
+            }
+            std::vector<double> negk;
+            for (double ki : k) {
+                negk.push_back(-ki);
+            }
+            model->has_coupling_ = solveForward(ux, negk, model->coupling_x_);
+            model->coupling_y_   = 0.0;
+        } else if (model->heading_.configured) {
             if (!solvePlanar(ux, uy, m, dx, dy)) {
                 err = who + ": wheel geometry cannot observe planar translation even "
-                      "with a heading constraint; wheels are collinear in direction";
+                      "with a heading constraint; wheels are collinear in direction. "
+                      "Forward-only wheels need an explicit <LateralMotion "
+                      "assume=\"zero\"/>, which leaves sideways motion unmeasured";
                 return nullptr;
             }
         } else {
@@ -288,7 +344,7 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
             }
         }
         // translation sensitivity to rotation: d = (U'U)^-1 U' (m - k dtheta)
-        {
+        if (!model->zero_lateral_) {
             std::vector<double> negk;
             for (double ki : k) {
                 negk.push_back(-ki);
@@ -669,7 +725,12 @@ FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
         for (std::size_t i = 0; i < m.size(); ++i) {
             m[i] -= k[i] * increment.dtheta_rad;
         }
-        solved = solvePlanar(ux, uy, m, increment.dx_m, increment.dy_m);
+        if (zero_lateral_) {
+            increment.dy_m = 0.0;
+            solved         = solveForward(ux, m, increment.dx_m);
+        } else {
+            solved = solvePlanar(ux, uy, m, increment.dx_m, increment.dy_m);
+        }
     } else {
         solved = solveFull(ux, uy, k, m, increment.dx_m, increment.dy_m,
                            increment.dtheta_rad);

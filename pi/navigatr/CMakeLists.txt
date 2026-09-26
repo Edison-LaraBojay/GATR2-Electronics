@@ -92,9 +92,10 @@ set(NAVIGATR_SOURCES
     src/impl/sensors/attitude_channel.cpp
     src/impl/sensors/register_sensors.cpp
     src/impl/noop/noops.cpp
-    src/impl/commands/vex_brain_serial.cpp
+    src/impl/commands/brain_link_commands.cpp
     src/impl/commands/register_commands.cpp
     src/impl/localization/tracking_wheel_motion.cpp
+    src/impl/localization/brain_imu_parallel_bench.cpp
     src/impl/localization/imu_heading_increment.cpp
     src/impl/localization/attitude_reference.cpp
     src/impl/localization/motion_step.cpp
@@ -108,7 +109,7 @@ set(NAVIGATR_SOURCES
     src/impl/world_estimation/register_world_estimation.cpp
     src/impl/target_resolution/configured_targets.cpp
     src/impl/target_resolution/register_target_resolution.cpp
-    src/impl/publishing/vex_brain.cpp
+    src/impl/publishing/brain_link_publisher.cpp
     src/impl/publishing/register_publishers.cpp
     src/state/pose_history.cpp
     src/state/robot_state_feed.cpp

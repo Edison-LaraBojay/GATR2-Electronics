@@ -35,7 +35,7 @@ struct LandmarkEstimate {
     LandmarkId     id     = 0; // the requested id, 0 when none requested
     LandmarkStatus status = LandmarkStatus::kNotRequested;
     LandmarkSource source = LandmarkSource::kNone;
-    Pose           pose;       // physical landmark pose, field frame
+    Pose           pose; // physical landmark pose, field frame
     bool           age_known = false;
     Seconds        age       = 0; // observation age at the snapshot time
 };

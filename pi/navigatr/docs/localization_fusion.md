@@ -142,8 +142,8 @@ Cases:
   measurement with the motion is rejected and never counted twice. A wheel
   profile with a `HeadingConstraint` already folds that gyro under
   whatever id it was configured, so a `Heading` from the same output does
-  nothing but log the rejection, and the two-wheel profiles keep working
-  unchanged. Sensor ids stay in `Provenance.source` for diagnostics.
+  nothing but log the rejection, and the wheel profiles with a heading
+  constraint keep working unchanged. Sensor ids stay in `Provenance.source` for diagnostics.
 - Source time regression bumps the odometry epoch and integrates nothing.
   A repeated effective time is rejected as already consumed, together with
   a heading offered for that same window. Every offered observation is

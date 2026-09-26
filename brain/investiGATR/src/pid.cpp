@@ -29,8 +29,8 @@ double Pid::update(double error, Seconds dt) {
             out += gains_.kD * change / dt;
         }
     }
-    previous_      = error;
-    have_previous_ = true;
+    previous_          = error;
+    have_previous_     = true;
     const double limit = std::fabs(gains_.output_limit);
     return std::clamp(out, -limit, limit);
 }

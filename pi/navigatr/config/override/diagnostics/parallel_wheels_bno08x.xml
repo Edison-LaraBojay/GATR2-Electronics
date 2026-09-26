@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Profile A: two parallel tracking wheels + BNO08X localization only.
+
+    ./build/navigatr --config_file=config/override/diagnostics/parallel_wheels_bno08x.xml
+
+Needs shared/robots/gatr2_parallel_wheels_bno08x.xml, made from the .xml.in
+template next to it with measured values. Until that file exists this
+profile does not resolve and names the missing file.
+
+No camera, detector or landmark estimation. The field map is loaded for
+display only: nominal landmarks are drawn as the map, never as estimates.
+The Brain supplies the starting field pose; until it does the viewer shows
+the robot as not placed (odometry frame).
+See docs/parallel_wheel_bringup.md.
+-->
+<Configuration id="override_parallel_wheels_bno08x">
+    <ConfigurationName>Parallel wheels + BNO08X localization</ConfigurationName>
+    <Loop rate_hz="100"/>
+    <Inspection enabled="true" bind="127.0.0.1" port="8765"
+                snapshot_hz="20" preview_hz="5" preview_quality="70" preview_max_width="640"/>
+    <Robot file="../../shared/robots/gatr2_parallel_wheels_bno08x.xml"/>
+    <Field file="../field.xml"/>
+    <Pipeline file="../../shared/pipelines/parallel_wheels_bno08x_no_camera.xml"/>
+</Configuration>

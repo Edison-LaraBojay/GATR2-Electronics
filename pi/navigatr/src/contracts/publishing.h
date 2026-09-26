@@ -10,6 +10,7 @@
 
 #include "config/config_node.h"
 #include "contracts/slot_init.h"
+#include "core/diagnostics.h"
 #include "core/function_status.h"
 #include "core/records.h"
 #include "state/command_state.h"
@@ -31,6 +32,7 @@ struct PublishingInput {
     const CommandState&       command;
     const TargetState&        target;
     MonotonicTime             now;   // host clock
+    Diagnostics*              diagnostics = nullptr;
 };
 
 struct PublishingOutput {

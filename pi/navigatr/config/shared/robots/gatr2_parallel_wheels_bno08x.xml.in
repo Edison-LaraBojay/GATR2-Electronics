@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+THIS IS AN INTENTIONALLY NON-RUNNABLE TEMPLATE.
+
+Replace every @...@ token with a measured or confirmed value and save the
+result as gatr2_parallel_wheels_bno08x.xml next to this file. Both
+parallel-wheel profiles (override/diagnostics/parallel_wheels_bno08x*.xml)
+reference that name and fail to resolve until it exists. Never put a zero
+in just to make it parse. calibration_status labels are reader notes only.
+
+Pi HAT v2. Two parallel tracking wheels, both measuring forward/backward
+travel along body +x: encoder channel 0 (J2) and channel 1 (J3). There is
+no lateral wheel and no channel 2. Sideways motion is not measured; the
+localization fragment assumes it is zero (see docs/parallel_wheel_bringup.md).
+
+BNO08X IMU behind the Pico on SPI1. With the robot stationary and level, the
+Pico learns up from acceleration for two seconds and projects XYZ gyro onto
+that fixed axis. The Pi then calibrates yaw bias while the robot stays still.
+The rate uses millidegrees per second. No measured roll or pitch is sent.
+
+Body frame: origin at the robot pose origin you choose and measure from,
++x forward, +y left. position_y_m is the lateral lever arm that removes
+turning from each wheel's forward travel, so measure it carefully.
+position_x_m does not affect the forward-only solve but is recorded anyway.
+radius_m is the loaded effective rolling radius, not the nominal size.
+Each wheel's sign is set by direction (positive: the count increases when
+the robot drives forward). Encoder invert stays false so there is one sign
+knob per wheel.
+
+Known values already filled in: Pico link /dev/ttyAMA0 at 115200
+(pico/src/board.h) and brain link UART5 /dev/ttyAMA5 at 115200 with RS-485
+driver enable on GPIO 6 (docs/hardware.md).
+
+The camera stack lives in gatr2_front_camera.xml, used only by the camera
+profile.
+-->
+<Robot>
+
+    <Resources>
+        <Resource id="pico_uart" type="linux_serial_link">
+            <Device path="/dev/ttyAMA0"/>
+            <Baud value="115200"/>
+        </Resource>
+
+        <Resource id="pico_telemetry" type="pico_telemetry">
+            <Serial resource_id="pico_uart"/>
+            <Output id="encoder_a" channel="0"/>
+            <Output id="encoder_b" channel="1"/>
+            <Output id="imu" channel="imu"/>
+        </Resource>
+
+        <Resource id="brain_uart" type="linux_serial_link">
+            <Device path="/dev/ttyAMA5"/>
+            <Baud value="115200"/>
+            <DriverEnable gpio="6"/>
+        </Resource>
+
+        <Resource id="wheel_geometry" type="wheel_geometry">
+            <!-- channel 0, connector J2 -->
+            <Wheel id="forward_wheel_a" sensor_id="tracking_encoder_a" label="J2"
+                   calibration_status="UNCONFIGURED"
+                   radius_m="@MEASURE_WHEEL_A_LOADED_RADIUS_M@"
+                   position_x_m="@MEASURE_WHEEL_A_X_M@"
+                   position_y_m="@MEASURE_WHEEL_A_Y_M@"
+                   measurement_angle_deg="0"
+                   direction="@CONFIRM_WHEEL_A_DIRECTION@"/>
+            <!-- channel 1, connector J3 -->
+            <Wheel id="forward_wheel_b" sensor_id="tracking_encoder_b" label="J3"
+                   calibration_status="UNCONFIGURED"
+                   radius_m="@MEASURE_WHEEL_B_LOADED_RADIUS_M@"
+                   position_x_m="@MEASURE_WHEEL_B_X_M@"
+                   position_y_m="@MEASURE_WHEEL_B_Y_M@"
+                   measurement_angle_deg="0"
+                   direction="@CONFIRM_WHEEL_B_DIRECTION@"/>
+        </Resource>
+    </Resources>
+
+    <Sensors>
+        <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
+            <Source resource_id="pico_telemetry" output_id="encoder_a"/>
+            <!-- AS5047P factory default: 1000 ABI pulses, 4000 quadrature counts.
+                 Assumes direct 1:1 magnet-to-wheel rotation; verify during bring-up. -->
+            <Calibration counts_per_revolution="4000" invert="false"/>
+        </Sensor>
+
+        <Sensor id="tracking_encoder_b" type="pico_encoder_channel">
+            <Source resource_id="pico_telemetry" output_id="encoder_b"/>
+            <Calibration counts_per_revolution="4000" invert="false"/>
+        </Sensor>
+
+        <!-- Pico gravity alignment makes CCW positive even with the sensor
+             sideways or upside down. Do not add a second mounting inversion. -->
+        <Sensor id="robot_imu" type="pico_imu_channel">
+            <Source resource_id="pico_telemetry" output_id="imu"/>
+            <Calibration invert="false"/>
+        </Sensor>
+    </Sensors>
+
+</Robot>

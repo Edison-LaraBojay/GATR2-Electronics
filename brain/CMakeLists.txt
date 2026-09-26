@@ -26,6 +26,4 @@ enable_testing()
 include(GoogleTest)
 
 add_subdirectory(investiGATR)
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/navigatr-interface/CMakeLists.txt)
-    add_subdirectory(navigatr-interface)
-endif()
+add_subdirectory(communiGATR)

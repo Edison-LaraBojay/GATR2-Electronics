@@ -25,6 +25,19 @@ struct LinkStats {
     uint32_t packets       = 0;
     uint32_t decode_errors = 0;
     uint32_t seq_gaps      = 0;
+
+    // Brain link request/reply counters.
+    uint32_t requests        = 0;   // decoded requests
+    uint32_t duplicates      = 0;   // answered from a record, not applied again
+    uint32_t superseded      = 0;   // completed in a drain behind a newer request
+    uint32_t stale           = 0;   // answered kResultStale
+    uint32_t unknown_session = 0;   // answered kResultUnknownSession
+    uint32_t unanswered      = 0;   // processed, no reply: first drain or trailing bytes
+    uint32_t replies         = 0;   // written
+    uint32_t expired         = 0;   // reply window missed, nothing sent
+    uint32_t input_pending   = 0;   // input before driver enable, nothing sent
+    uint32_t late_release    = 0;   // driver released after the frame budget
+    uint32_t tx_errors       = 0;   // other write failures
 };
 
 struct Diagnostics {

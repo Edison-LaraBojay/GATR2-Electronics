@@ -132,7 +132,9 @@ explicitly (see `viewer/app.js`).
 
 ```text
 type, contract, host_ms, session {id, reset_count}, cycle, running
-robot           valid, initialized, odometry_epoch, anchor_revision,
+robot           valid, initialized, placement_origin ("command", "configuration"
+                or "" before any placement), placement_session,
+                placement_sequence, odometry_epoch, anchor_revision,
                 odom {x_m, y_m, heading_deg}, field {...}, field_from_odom {...},
                 vx_m_s, vy_m_s, yaw_rate_deg_s, confidence, has_covariance,
                 odom_covariance {xx, xy, xh, yy, yh, hh}?   odometry frame, m and rad
@@ -154,7 +156,8 @@ detection_frames[] one per camera, the newest processed frame:
                 camera, frame_id, epoch, sequence, exposure_host_ms,
                 received_host_ms, processed_host_ms, exposure_age_ms,
                 exposure_uncertainty_ms, exposure_time_reliable, width_px,
-                height_px, has_image, intrinsics|null,
+                height_px, has_image, has_observations, has_trace,
+                intrinsics|null,
                 mounted, T_robot_camera|null, field_invocation,
                 pose_at_exposure {status, exact, odometry_epoch, odom {...}, field {...}},
                 attitude_at_exposure {status, attitude {...}},
@@ -169,7 +172,7 @@ detection_frames[] one per camera, the newest processed frame:
                       heading_error_deg, score}}}
 target          null or {active, target_id, wire_id, generation, status, latched,
                 T_odom_robot_target {...}, odometry_epoch, activated_host_ms}
-command         null or {stream_on, init_sequence, init_pose {...}, mode,
+command         null or {session, init_sequence, init_session, init_pose {...},
                 object_requested, object_wire_id, object_sequence}
 sources[]       {kind (resource|sensor), id, state (no_data_yet|valid|unavailable|fault),
                 diagnostic, payload, has_sample, measured_at {clock, ms},
@@ -185,7 +188,10 @@ workers         estimation {running, cycles, rate_hz, last_cycle_ms, mean_cycle_
                   frames_sent, frames_skipped, bytes_sent, encodes,
                   last_encode_ms, mean_encode_ms, snapshot_rate_hz, frame_rate_hz}
 diagnostics     null or {estimation {cycles, functions[] {label, runs, ok, no_data,
-                  fault, last}, links[] {id, bytes, packets, decode_errors, seq_gaps}},
+                  fault, last}, links[] {id, bytes, packets, decode_errors, seq_gaps,
+                  requests, duplicates, superseded, stale, unknown_session,
+                  unanswered, replies, expired, input_pending, late_release,
+                  tx_errors}},
                 field {same}}
 ```
 
@@ -216,6 +222,29 @@ Meaning of a few fields:
 - `workers.field.dropped` counts sensor snapshots replaced before the field
   worker reached them (latest-frame policy). Motion increments are never in
   that queue.
+- `command.session` is the Brain application session the brain link opened
+  (0 when none). It is unrelated to the top-level `session.id`, which
+  identifies this Pi process. `init_session`/`init_sequence` identify the
+  newest Brain placement; it is requested from localization only while
+  `init_session == session`. `robot.placement_*` is what localization actually
+  applied. `object_wire_id` is the Brain's landmark wire id and
+  `object_sequence` counts selections, releases and new sessions.
+- `links[]` is keyed by the serial resource id. A frame failing its checksum
+  or CRC is skipped by the frame reader and not counted anywhere. `packets`
+  counts decoded sensor frames on a Pico link and every CRC-valid frame on
+  the brain link; `decode_errors` counts valid frames whose body does not
+  decode (brain link: a request whose body length does not match its op).
+  `seq_gaps` applies to Pico telemetry only.
+- The brain link counters, zero on other links: `requests` (decoded
+  requests), `duplicates` (answered from the session's record, not applied
+  again), `superseded` (completed in the same drain as a newer request, never
+  applied), `stale` and `unknown_session` (answered with that result),
+  `unanswered` (processed but not answered: completed in the first drain after
+  start or reset, or more bytes followed it), `replies` (written), `expired`
+  (reply window missed, nothing sent), `input_pending` (Brain bytes waiting
+  before the driver enable, nothing sent), `late_release` (driver enable
+  released after the frame deadline plus post guard; can accompany a sent
+  reply), `tx_errors` (any other write failure).
 
 ## `frame`
 

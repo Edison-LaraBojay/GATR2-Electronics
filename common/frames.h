@@ -84,6 +84,11 @@ enum BrainOp : uint8_t {
     kOpSetPose        = 2, // body x_mm i32, y_mm i32, heading_cdeg i32
     kOpSelectLandmark = 3, // body landmark_id u8, flags u8
     kOpGetState       = 4, // no body
+    kOpGetStateWithImu = 5, // opt-in bench: flags u8, stamp_ms u32, rotation_mdeg i32
+};
+
+enum BenchImuFlagBit : uint8_t {
+    kBenchImuValid = 1u << 0,
 };
 
 enum BrainResult : uint8_t {
@@ -104,11 +109,11 @@ enum SelectFlagBit : uint8_t {
 
 // State block robot_flags. Never acknowledgements.
 enum RobotFlagBit : uint8_t {
-    kRobotPoseValid         = 1u << 0, // estimator produced a pose
-    kRobotLocalized         = 1u << 1, // field anchor set by a placement
-    kRobotAgeKnown          = 1u << 2, // robot_age_ms is meaningful
-    kRobotAnchorCommand     = 1u << 3, // anchor from a brain SET_POSE
-    kRobotAnchorConfigured  = 1u << 4, // anchor from the configured initial placement
+    kRobotPoseValid        = 1u << 0, // estimator produced a pose
+    kRobotLocalized        = 1u << 1, // field anchor set by a placement
+    kRobotAgeKnown         = 1u << 2, // robot_age_ms is meaningful
+    kRobotAnchorCommand    = 1u << 3, // anchor from a brain SET_POSE, any session
+    kRobotAnchorConfigured = 1u << 4, // anchor from the configured initial placement
 };
 
 // State block health. Information only, never acknowledgements.
@@ -138,6 +143,9 @@ struct BrainRequest {
     int32_t  heading_cdeg = 0;
     uint8_t  landmark_id  = 0; // SELECT_LANDMARK
     uint8_t  select_flags = 0;
+    uint8_t  imu_flags = 0; // GET_STATE_WITH_IMU, invalid while calibrating/disconnected
+    uint32_t imu_stamp_ms = 0; // Brain acquisition clock, not the Pico clock
+    int32_t  imu_rotation_mdeg = 0; // continuous rotation, CCW positive
 };
 
 // GET_STATE Ok body. Robot and landmark poses share the same field anchor.
@@ -167,12 +175,13 @@ struct BrainReply {
     uint8_t  result      = kResultOk;
     uint32_t pi_instance = 0; // random nonzero id per Pi process start and reset
 
-    uint32_t   nonce           = 0; // HELLO, every result
-    uint32_t   odometry_epoch  = 0; // SET_POSE Ok and Pending, current values
-    uint32_t   anchor_revision = 0;
-    uint8_t    landmark_id     = 0; // SELECT_LANDMARK Ok, echo
-    uint8_t    select_flags    = 0;
-    BrainState state;               // GET_STATE Ok
+    uint32_t nonce           = 0; // HELLO, every result
+    uint32_t odometry_epoch  = 0; // SET_POSE Ok and Pending, current values
+    uint32_t anchor_revision = 0;
+    uint8_t  landmark_id     = 0; // SELECT_LANDMARK Ok, echo
+    uint8_t  select_flags    = 0;
+
+    BrainState state; // GET_STATE Ok
 };
 
 // ---------------------------------------------------------------------------

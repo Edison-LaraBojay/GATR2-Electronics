@@ -44,6 +44,27 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build-navigatr --output-on-failure
 
+  # Host build and tests of the Brain libraries. brain/testing needs the PROS
+  # toolchain and is not built here.
+  brain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gtest
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtest-dev cmake
+
+      - name: Configure
+        run: cmake -S brain -B build-brain
+
+      - name: Build
+        run: cmake --build build-brain -j
+
+      - name: Run tests
+        run: ctest --test-dir build-brain --output-on-failure
+
   pico:
     runs-on: ubuntu-latest
     steps:
@@ -63,5 +84,11 @@ jobs:
         run: pip install platformio
 
       - name: Build firmware
-        run: pio run
+        run: pio run -e hat2_bno08x -e hat2_asm330
         working-directory: pico
+
+      - name: Host tests
+        run: |
+          cmake -S pico/tests -B build-pico-tests
+          cmake --build build-pico-tests -j
+          ctest --test-dir build-pico-tests --output-on-failure

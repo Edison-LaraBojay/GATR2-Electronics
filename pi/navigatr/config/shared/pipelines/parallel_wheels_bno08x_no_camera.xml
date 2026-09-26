@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Parallel wheels + BNO08X localization only. World estimation is the
+     registered noop: no camera, detector or landmark estimation, so
+     landmark-relative requests from the Brain are refused as unsupported.
+     The field map is still loaded by the profile for display. -->
+<Pipeline>
+
+    <CommandCollection type="brain_link">
+        <Serial resource_id="brain_uart"/>
+    </CommandCollection>
+
+    <Localization file="parallel_wheels_bno08x_localization.xml"/>
+
+    <WorldEstimation>
+        <Estimator id="none" type="noop"/>
+    </WorldEstimation>
+
+    <TargetResolution type="noop"/>
+
+    <Publishing type="brain_link">
+        <Serial resource_id="brain_uart"/>
+        <Health fresh_ms="150">
+            <Encoder sensor_id="tracking_encoder_a"/>
+            <Encoder sensor_id="tracking_encoder_b"/>
+            <Gyro sensor_id="robot_imu"/>
+            <BiasCal function_id="tracking_motion"/>
+        </Health>
+    </Publishing>
+
+</Pipeline>

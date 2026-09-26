@@ -43,13 +43,13 @@ SerialWriteResult LinuxSerialLink::write(ByteSpan source) {
 }
 
 SerialWriteResult LinuxSerialLink::write(ByteSpan source, const TransmitWindow& window) {
+    if (half_duplex_ && !port_.driverEnableOpen()) {
+        return writeFailed("driver enable gpio unavailable");
+    }
     if (!port_.isOpen()) {
         return writeFailed("serial port not open");
     }
     if (half_duplex_) {
-        if (!port_.driverEnableOpen()) {
-            return writeFailed("driver enable gpio unavailable");
-        }
         return transmitHalfDuplex(port_, source, window, timing_);
     }
     if (!waitForWindow(port_, window)) {

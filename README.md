@@ -1,16 +1,17 @@
 # GATR2 Electronics
 
-Electronics, firmware, shared protocols, and Raspberry Pi sensing software for
-the GATR2 VEX robot.
+Electronics, firmware, shared protocols, Raspberry Pi sensing software, and V5
+Brain navigation libraries for the GATR2 VEX robot.
 
 ```text
-encoders / IMU -> RP2040 acquisition -> Raspberry Pi estimation -> V5 Brain
+encoders / IMU -> RP2040 acquisition -> Raspberry Pi estimation <-> V5 Brain
 camera / other Pi-connected sensors ----------^
 ```
 
 The Pi combines timestamped sensor measurements into robot localization and
-information about a requested physical landmark. The Brain owns destinations,
-alignment behavior, mechanisms, and motor control.
+information about a requested physical landmark. The Brain asks for them over a
+request/reply link and owns destinations, alignment behavior, mechanisms, and
+motor control.
 
 ## PCBs
 
@@ -38,11 +39,15 @@ Neither pipeline requires a particular sensor family or relative execution rate.
 
 Robot position and field-object positions use configured field coordinates.
 Field estimation starts with nominal landmark poses and can update them from
-accepted observations. The publisher reports the requested configured object
-or a latched target from target resolution. Object headings on the wire are
-full field headings; the inspection viewer also displays their difference from
-nominal orientation. See the landmark documentation for selection and retention
-behavior.
+accepted observations. The Pi sends nothing unasked: each Brain request gets
+one reply, and a state reply carries the robot pose with its measurement age
+and anchor identity, plus the physical pose of the landmark the Brain selected,
+labeled nominal or observed. Landmark headings on the wire are full field
+headings, and the Brain applies its own destination offset. Configured targets
+from target resolution stay on the Pi. The inspection viewer also displays
+heading differences from nominal orientation. See the landmark documentation
+for selection and retention behavior, and the
+[brain link v3](docs/interfaces.md#brain-link-v3) for the wire contract.
 
 - [Architecture and scheduling](pi/navigatr/docs/architecture.md)
 - [Coordinates and heading](pi/navigatr/docs/coordinates.md)
@@ -54,11 +59,26 @@ A hardware-free demo (`pi/navigatr/config/demo/`) drives the whole runtime
 from a synthetic rig and serves the field viewer on loopback; the README above
 has the run and SSH port-forward commands.
 
+## Brain
+
+[`brain/`](brain/README.md) holds portable C++ libraries with host tests and
+the PROS programs that compile them in place.
+
+- [investiGATR](docs/investigatr.md): waypoint navigation and motion control
+  over an abstract input source.
+- [communiGATR](docs/communigatr.md): the Brain side of the brain link, an
+  investiGATR input source backed by Navigatr, PROS packaging, and the testing
+  application with its hardware bring-up checklist.
+
+Both are host tested and compile in the PROS build; none of the Brain code has
+run on the robot yet.
+
 ## Repository map
 
 - [`pcb/`](pcb/) - KiCad boards, symbols, footprints, and hardware revisions.
 - [`pico/`](pico/) - RP2040 acquisition firmware.
 - [`pi/navigatr/`](pi/navigatr/) - Pi sensing and estimation runtime.
+- [`brain/`](brain/) - V5 Brain libraries and PROS applications.
 - [`common/`](common/) - shared framing and wire codecs.
 - [`bench/`](bench/) - host and hardware bring-up utilities.
 - [`docs/`](docs/) - supporting hardware, interface, and setup material.

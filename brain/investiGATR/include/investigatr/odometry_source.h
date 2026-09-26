@@ -26,6 +26,7 @@ public:
     void invalidate();
 
     // Cumulative travel in meters, heading from any absolute heading sensor.
+    // Non-finite readings are ignored.
     void update(Seconds now, Meters left, Meters right);
     void update(Seconds now, Meters left, Meters right, Radians heading);
 
@@ -40,18 +41,18 @@ private:
     void step(Seconds now, Meters left, Meters right, bool has_heading, Radians heading);
 
     Meters          track_width_;
-    bool            aligned_     = false;
+    bool            aligned_ = false;
     Pose            pose_;
     Seconds         measured_at_ = 0;
     FrameGeneration frame_       = 0;
     InputRequest    request_;
 
-    bool    have_travel_  = false;
-    Meters  last_left_    = 0;
-    Meters  last_right_   = 0;
-    bool    have_heading_ = false;
-    Radians last_heading_ = 0;
-    bool    heading_ref_  = false;
+    bool    have_travel_    = false;
+    Meters  last_left_      = 0;
+    Meters  last_right_     = 0;
+    bool    have_heading_   = false;
+    Radians last_heading_   = 0;
+    bool    heading_ref_    = false;
     Radians heading_offset_ = 0;
 };
 

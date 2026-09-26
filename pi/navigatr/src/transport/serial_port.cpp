@@ -90,7 +90,8 @@ bool SerialPort::open(const std::string& device, int baud, std::string& err) {
     termios tio{};
     if (tcgetattr(fd_, &tio) != 0) {
         err = "tcgetattr failed on " + device;
-        close();
+        ::close(fd_);
+        fd_ = -1;
         return false;
     }
 
@@ -103,7 +104,8 @@ bool SerialPort::open(const std::string& device, int baud, std::string& err) {
 
     if (tcsetattr(fd_, TCSANOW, &tio) != 0) {
         err = "tcsetattr failed on " + device;
-        close();
+        ::close(fd_);
+        fd_ = -1;
         return false;
     }
     tcflush(fd_, TCIOFLUSH);
@@ -146,7 +148,11 @@ bool SerialPort::write(const uint8_t* src, int len) {
 
 bool SerialPort::openDriverEnable(int gpio, std::string& err) {
     const std::string number = std::to_string(gpio);
-    const std::string base   = "/sys/class/gpio/gpio" + number;
+    if (gpio < 0) {
+        err = "invalid gpio " + number;
+        return false;
+    }
+    const std::string base = "/sys/class/gpio/gpio" + number;
     // export fails when the pin is already exported
     writeSysfs("/sys/class/gpio/export", number.c_str());
     // "low" makes it an output driven low in one step; udev may need a

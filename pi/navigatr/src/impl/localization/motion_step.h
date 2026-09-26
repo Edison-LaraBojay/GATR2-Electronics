@@ -57,16 +57,19 @@ bool observationClock(MonotonicTime stamp, const std::vector<Provenance>& source
 // Whether stamps on these two clocks may be compared.
 bool comparableClocks(const std::string& a, const std::string& b, std::string& why);
 
-// Edge triggered per (origin, sequence): re-anchors the field frame around
-// the untouched odometry pose and bumps anchor_revision.
+// Edge triggered per (origin, session, sequence): re-anchors the field frame
+// around the untouched odometry pose, bumps anchor_revision and records the
+// applied identity in the state.
 struct PlacementEdge {
     std::string origin;
+    uint32_t    session  = 0;
     uint64_t    sequence = 0;
 
     bool apply(RobotState& r, const PlacementRequest& placement);
 
     void reset() {
         origin.clear();
+        session  = 0;
         sequence = 0;
     }
 };

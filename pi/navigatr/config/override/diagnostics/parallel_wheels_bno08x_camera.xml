@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Profile B: the same parallel-wheel + BNO08X localization as profile A, plus
+the front camera and AprilTag world estimation.
+
+    ./build/navigatr --config_file=config/override/diagnostics/parallel_wheels_bno08x_camera.xml
+
+Needs shared/robots/gatr2_parallel_wheels_bno08x.xml (as profile A) and
+shared/robots/gatr2_front_camera.xml, made from its .xml.in template with
+the measured camera mount and calibration. Needs a build with
+-DNAVIGATR_WITH_LIBCAMERA=ON. A camera fault is reported in the viewer and
+the robot state while localization keeps running.
+See docs/parallel_wheel_bringup.md.
+-->
+<Configuration id="override_parallel_wheels_bno08x_camera">
+    <ConfigurationName>Parallel wheels + BNO08X localization + camera</ConfigurationName>
+    <Loop rate_hz="100"/>
+    <Inspection enabled="true" bind="127.0.0.1" port="8765"
+                snapshot_hz="20" preview_hz="5" preview_quality="70" preview_max_width="640"/>
+    <Robot file="../../shared/robots/gatr2_parallel_wheels_bno08x.xml"/>
+    <Robot file="../../shared/robots/gatr2_front_camera.xml"/>
+    <Field file="../field.xml"/>
+    <Pipeline file="../../shared/pipelines/parallel_wheels_bno08x_camera.xml"/>
+</Configuration>

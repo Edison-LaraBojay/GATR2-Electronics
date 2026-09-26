@@ -558,9 +558,9 @@ TEST(Profiles, CheckedInTreeStaysHonest) {
 
     // the shared pipeline fragments are valid Pipeline documents
     for (const char* name :
-         {"/shared/pipelines/two_wheel_imu_no_correction.xml",
+         {"/shared/pipelines/parallel_wheels_bno08x_no_camera.xml",
           "/shared/pipelines/three_wheel_imu_no_correction.xml",
-          "/shared/pipelines/two_wheel_imu_camera_diagnostic.xml",
+          "/shared/pipelines/parallel_wheels_bno08x_camera.xml",
           "/shared/pipelines/three_wheel_imu_camera_diagnostic.xml"}) {
         tinyxml2::XMLDocument doc;
         ASSERT_EQ(doc.LoadFile((config_dir + name).c_str()), tinyxml2::XML_SUCCESS)

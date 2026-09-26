@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Three-wheel + IMU odometry, no landmark correction. Geometry lives in
      the robot description's wheel_geometry resource; this fragment only
-     selects which wheels participate. The pose publishes to the brain so
-     the estimate is live-inspectable. -->
+     selects which wheels participate. The brain link answers Brain
+     requests with this estimate; world estimation is noop, so a landmark
+     selection is answered unsupported. -->
 <Pipeline>
 
-    <CommandCollection type="noop"/>
+    <CommandCollection type="brain_link">
+        <Serial resource_id="brain_uart"/>
+    </CommandCollection>
 
     <Localization>
         <Observation id="tracking_motion" type="tracking_wheel_motion">
@@ -32,7 +35,7 @@
 
     <TargetResolution type="noop"/>
 
-    <Publishing type="vex_brain">
+    <Publishing type="brain_link">
         <Serial resource_id="brain_uart"/>
         <Health fresh_ms="150">
             <Encoder sensor_id="tracking_encoder_a"/>

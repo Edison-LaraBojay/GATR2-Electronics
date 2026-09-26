@@ -2,7 +2,8 @@
 // The inspection documents are well-formed JSON built only from published
 // runtime snapshots: the writer escapes and never emits NaN, hello carries
 // the configured field and cameras, and a snapshot taken after real frames
-// were processed binds detections to the frame identity they came from.
+// were processed binds detections to the frame identity they came from, and a
+// camera with world estimation switched off still previews its raw frames.
 
 #include <gtest/gtest.h>
 
@@ -408,4 +409,57 @@ TEST(InspectionDocuments, SnapshotBindsDetectionsToTheirFrameIdentity) {
     EXPECT_NE(header.find("\"type\":\"frame\""), std::string::npos);
     EXPECT_NE(header.find("\"preview_width_px\":" + std::to_string(f.width_px / 2)),
               std::string::npos);
+}
+
+TEST(InspectionDocuments, CameraPreviewWorksWithoutWorldEstimation) {
+    // the same rig and camera with world estimation switched off in config
+    std::string       xml   = kRig;
+    const std::string close = "</WorldEstimation>";
+    const std::size_t a     = xml.find("<WorldEstimation>");
+    const std::size_t b     = xml.find(close);
+    ASSERT_NE(a, std::string::npos);
+    ASSERT_NE(b, std::string::npos);
+    xml.replace(a, b + close.size() - a,
+                R"(<WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>)");
+
+    FunctionRegistry functions;
+    registerAll(functions);
+    std::string             err;
+    std::unique_ptr<System> system = System::buildFromString(xml.c_str(), functions, err);
+    ASSERT_NE(system, nullptr) << err;
+    EXPECT_EQ(system->worldEstimation().estimatorType(), "noop");
+
+    int64_t now = 1;
+    for (int i = 0; i < 180; ++i) {
+        now += 10;
+        system->step(hostTime(now));
+    }
+    auto frames = system->detectionFrames();
+    ASSERT_EQ(frames.size(), 1u);
+    const auto first = frames.begin()->second;
+    EXPECT_EQ(first->camera, SensorId{"front_camera"});
+    EXPECT_FALSE(first->has_observations);   // preview only, nothing decoded
+    EXPECT_FALSE(first->has_trace);
+    ASSERT_NE(first->y8, nullptr);
+    EXPECT_EQ(first->y8->size(), static_cast<std::size_t>(first->width_px) * first->height_px);
+    EXPECT_TRUE(system->field().objects.empty());
+    EXPECT_TRUE(system->robot().valid);   // localization never waits on the camera
+
+    std::string snap = snapshotDocument(*system, InspectionServiceStats{}, hostTime(now));
+    ASSERT_TRUE(validJson(snap)) << snap;
+    EXPECT_NE(snap.find("\"has_observations\":false"), std::string::npos);
+    EXPECT_NE(snap.find("\"has_image\":true"), std::string::npos);
+    EXPECT_NE(snap.find("\"tags\":[]"), std::string::npos);
+    EXPECT_NE(snap.find("\"field_objects\":[]"), std::string::npos);
+    EXPECT_NE(snap.find("\"pose_at_exposure\":{\"status\":\"ok\""), std::string::npos) << snap;
+
+    // the preview follows new frames, each under its own identity
+    for (int i = 0; i < 50; ++i) {
+        now += 10;
+        system->step(hostTime(now));
+    }
+    frames = system->detectionFrames();
+    ASSERT_EQ(frames.size(), 1u);
+    EXPECT_GT(frames.begin()->second->frame_sequence, first->frame_sequence);
+    EXPECT_FALSE(frames.begin()->second->has_observations);
 }

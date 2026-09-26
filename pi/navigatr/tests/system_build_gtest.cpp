@@ -60,7 +60,7 @@ TEST(SystemBuild, AllNoopBuildsStepsAndPersistsCommandState) {
     EXPECT_FALSE(system->robot().valid);
     EXPECT_TRUE(system->field().objects.empty());
     // no update carries the previous command state forward unchanged
-    EXPECT_TRUE(system->command().stream_on);
+    EXPECT_EQ(system->command().session, 0u);
     EXPECT_EQ(system->command().init_sequence, 0u);
     EXPECT_EQ(system->diagnostics().functions.at("Localization/noop").runs, 5u);
 }
@@ -100,7 +100,7 @@ TEST(SystemBuild, WrongCategoryKeyCannotBeConstructed) {
     // while the shared name noop resolves per category
     std::string err;
     EXPECT_EQ(tryBuild(withSlot("<Estimator type=\"noop\"/>",
-                                "<Estimator type=\"vex_brain\"/>")
+                                "<Estimator type=\"brain_link\"/>")
                            .c_str(),
                        err),
               nullptr);

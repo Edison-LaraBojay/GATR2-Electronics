@@ -28,7 +28,8 @@ inline double cdegToRad(int32_t cdeg) { return degToRad(cdeg / 100.0); }
 
 // wrapped to (-18000, 18000]
 inline int32_t radToCdeg(double rad) {
-    return static_cast<int32_t>(std::llround(radToDeg(wrapAngle(rad)) * 100.0));
+    const int32_t cdeg = static_cast<int32_t>(std::llround(radToDeg(wrapAngle(rad)) * 100.0));
+    return cdeg == -18000 ? 18000 : cdeg;
 }
 
 } // namespace navigatr

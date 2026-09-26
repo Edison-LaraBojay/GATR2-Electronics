@@ -130,6 +130,9 @@ if [ "$ready" -ne 1 ]; then
     echo "FAIL: /api/health did not come up; log:"; tail -5 "$NAVLOG"; exit 1
 fi
 echo "health   $(curl -s "http://127.0.0.1:$PORT/api/health")"
+# a configuration without camera sensors is not expected to deliver frames
+CAMERAS=1
+if curl -s "http://127.0.0.1:$PORT/api/hello" 2>/dev/null | grep -q '"camera_sensors":\[\]'; then CAMERAS=0; fi
 
 # --- headless load: virtual time so the socket delivers before the DOM is
 #     dumped; a screenshot for a human; swiftshader so WebGL works without a
@@ -193,7 +196,7 @@ if [ "$LIVE_SEEN" != "1" ] && [ "$STATE" != "live" ]; then
     echo "  x feed never reached live (state=$STATE, live-seen=$LIVE_SEEN)"; fail=1
 fi
 if [ "$(num "$SNAPS")" -le 5 ]; then echo "  x snapshots=$SNAPS (need > 5)"; fail=1; fi
-if [ "$(num "$FRAMES")" -lt 1 ]; then echo "  x frames=$FRAMES (need >= 1)"; fail=1; fi
+if [ "$CAMERAS" -eq 1 ] && [ "$(num "$FRAMES")" -lt 1 ]; then echo "  x frames=$FRAMES (need >= 1)"; fail=1; fi
 if [ -n "$ERRORS" ]; then echo "  x page errors present"; fail=1; fi
 if [ "$BROWSER_EXIT" -ne 0 ]; then echo "  x browser exited unsuccessfully"; fail=1; fi
 if [ "$WEBGL" != "1" ]; then echo "  x 3D view did not initialize"; fail=1; fi

@@ -22,7 +22,9 @@ origins lie on the field floor beneath the goals.
 Internal distances are meters and angles are radians. XML attributes explicitly
 ending in `_deg` use degrees. Heading is positive counterclockwise from +x when
 viewed from above: +90 degrees points along +y. `wrapAngle` returns `(-pi, pi]`.
-The Brain codec converts positions to millimeters and headings to centidegrees.
+The brain link rounds positions to whole millimeters and headings to
+centidegrees wrapped to `(-18000, 18000]`; the Brain converts them back to
+meters and radians.
 
 Use `T_A_B` for the pose of frame B expressed in frame A:
 
@@ -39,8 +41,11 @@ implement these conventions.
 ## Heading values
 
 Robot heading and `FieldObjectState.pose.heading_rad` are full field orientations.
-The existing Brain publisher also emits full field heading, whether its object
-fields contain a target robot pose or a mapped field-object pose.
+The brain link's landmark fields are always the physical landmark pose `T_F_L`
+under the robot's current anchor, with full field heading; they never carry a
+resolved robot destination. A Brain destination relative to a landmark is
+`T_F_dest = T_F_L * T_L_dest`, composed once on the Brain. See
+[landmarks](landmarks.md#brain-output) for the source and age rules.
 
 Inspection additionally calculates:
 
@@ -92,6 +97,13 @@ revision. Retained observed objects are stored in odometry coordinates and
 re-expressed under the new anchor. A hard odometry reset changes the epoch and
 invalidates measurements tied to the previous local frame.
 
+A Brain SET_POSE is a placement command. Each placement applies once per
+(origin, Brain session, sequence), so a retry never re-anchors twice and a
+genuine placement from a new Brain session always applies. The brain link
+reports `odometry_epoch` and `anchor_revision` with every state; the Brain
+treats any change of (pi_instance, session, odometry_epoch, anchor_revision)
+as a coordinate discontinuity.
+
 An initial placement error also appears in inferred field-object coordinates.
 For example, if the robot's initialized x is 0.1 m too large, a correctly measured
 object one meter ahead is also represented 0.1 m too far along x. Their relative
@@ -133,6 +145,10 @@ monotonic clock using upstream receipt information. A polling timestamp
 cannot substitute for when the data arrived. Camera frames carry host exposure
 time from the capture backend; see [camera setup](pi_camera_setup.md) for its
 mapping and exposure-midpoint convention.
+
+The brain link sends ages, not timestamps: robot and landmark ages are
+differences of Pi host clock values taken at the Pi cycle start. The Brain adds
+its own measured round trip and never subtracts a Pi time from its clock.
 
 `RobotStateFeed` supplies synchronized current snapshots and timestamped lookups.
 Pose history uses binary search and interpolation within configured gap and age

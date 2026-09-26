@@ -3,8 +3,11 @@
 ## Runtime and configuration
 
 - [Set up and run Navigatr](../pi/navigatr/docs/setup.md): complete Pi/Pico bring-up,
-  camera calibration, robot geometry, two- and three-wheel camera configurations,
-  and the live viewer.
+  camera calibration, robot geometry, three-wheel camera configurations, and the
+  live viewer.
+- [Parallel-wheel bring-up](../pi/navigatr/docs/parallel_wheel_bringup.md): the
+  current robot's systems test, two parallel wheels + BNO08X, localization
+  first and camera second.
 - [Navigatr](../pi/navigatr/README.md): build, run, demo, and implementation coverage.
 - [Configuration](../pi/navigatr/docs/configuration.md): default profile, command-line
   overrides, inline XML, and referenced fragments.
@@ -19,12 +22,24 @@
 - [Inspection](../pi/navigatr/docs/inspection.md): browser field viewer, camera
   previews, and inspection protocol.
 
+## Brain
+
+- [investiGATR](investigatr.md): Brain navigation library: API, input contract,
+  input sources and fallback, control law, configuration and tuning, host build
+  and tests.
+- [communiGATR](communigatr.md): Brain side of the brain link: driver and client,
+  sessions and restarts, timing, PROS packaging, the testing application, and
+  the hardware bring-up checklist.
+- [Brain folder](../brain/README.md): libraries, PROS applications, and the host
+  build.
+
 ## Hardware and deployment
 
 - [PCB overview](../pcb/README.md): board families, revisions, and validation status.
 - [Hardware](hardware.md): sensor roles, firmware settings, and communication wiring.
 - [Pico firmware](../pico/README.md): acquisition and sensor telemetry.
-- [Wire interfaces](interfaces.md): sensor, pose, and command frames.
+- [Wire interfaces](interfaces.md): Pico sensor frames and the brain link v3
+  request/reply protocol (sessions, results, bus timing).
 - [Pi access](pi_setup.md): SSH and provisioning.
 - [Pi camera setup](../pi/navigatr/docs/pi_camera_setup.md): libcamera build and
   capture checks.

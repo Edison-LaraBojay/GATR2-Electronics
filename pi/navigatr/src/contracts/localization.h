@@ -103,11 +103,13 @@ using RobotObservationMakeFunction = std::function<std::unique_ptr<RobotObservat
     const ConfigNode&, RobotObservationInitializationContext&, std::string& err)>;
 
 // A request to place the robot origin in the field frame. origin tells
-// where it came from so a configured placement and a commanded one are
-// separate edges.
+// where it came from and session which brain session sent it, so a
+// configured placement, a commanded one, and one from a new brain session
+// are separate edges.
 struct PlacementRequest {
     bool        requested = false;
     std::string origin;   // "command", "configuration"
+    uint32_t    session  = 0;
     uint64_t    sequence = 0;
     Pose2D      pose;     // T_field_robot
 };

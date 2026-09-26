@@ -76,3 +76,12 @@ build/
 build-*/
 cmake-build-*/
 out/
+
+# ---------------------------------------------------------------------------
+# PROS projects under brain/. The kernel files are restored from the local PROS
+# cache; `pros c apply --force-apply` also rewrites each project's .gitignore.
+# ---------------------------------------------------------------------------
+brain/*/firmware/
+brain/*/include/pros/
+brain/*/bin/
+brain/*/.d/

@@ -167,6 +167,7 @@ uint8_t brainRequestLen(uint8_t op) {
     case kOpSetPose: return kBrainRequestHeaderLen + 12;
     case kOpSelectLandmark: return kBrainRequestHeaderLen + 2;
     case kOpGetState: return kBrainRequestHeaderLen;
+    case kOpGetStateWithImu: return kBrainRequestHeaderLen + 9;
     default: return 0;
     }
 }
@@ -183,7 +184,8 @@ uint8_t brainReplyLen(uint8_t op, uint8_t result) {
     case kOpSetPose:
         return (ok || result == kResultPending) ? kBrainReplyHeaderLen + 8 : kBrainReplyHeaderLen;
     case kOpSelectLandmark: return ok ? kBrainReplyHeaderLen + 2 : kBrainReplyHeaderLen;
-    case kOpGetState: return ok ? kBrainReplyHeaderLen + kBrainStateLen : kBrainReplyHeaderLen;
+    case kOpGetState:
+    case kOpGetStateWithImu: return ok ? kBrainReplyHeaderLen + kBrainStateLen : kBrainReplyHeaderLen;
     default: return 0;
     }
 }
@@ -279,6 +281,11 @@ uint16_t encodeBrainRequest(const BrainRequest& in, uint8_t* buf, uint16_t cap) 
         body[0] = in.landmark_id;
         body[1] = in.select_flags;
         break;
+    case kOpGetStateWithImu:
+        body[0] = in.imu_flags;
+        wr32(body + 1, in.imu_stamp_ms);
+        wr32(body + 5, static_cast<uint32_t>(in.imu_rotation_mdeg));
+        break;
     default: break;
     }
     return finishLinkFrame(kFrameBrainRequest, n, buf);
@@ -319,6 +326,11 @@ bool decodeBrainRequest(const uint8_t* buf, uint16_t len, BrainRequest& out) {
         out.landmark_id  = body[0];
         out.select_flags = body[1];
         break;
+    case kOpGetStateWithImu:
+        out.imu_flags = body[0];
+        out.imu_stamp_ms = rd32(body + 1);
+        out.imu_rotation_mdeg = static_cast<int32_t>(rd32(body + 5));
+        break;
     default: break;
     }
     return true;
@@ -351,7 +363,8 @@ uint16_t encodeBrainReply(const BrainReply& in, uint8_t* buf, uint16_t cap) {
             body[0] = in.landmark_id;
             body[1] = in.select_flags;
             break;
-        case kOpGetState: wrState(body, in.state); break;
+        case kOpGetState:
+        case kOpGetStateWithImu: wrState(body, in.state); break;
         default: break;
         }
     }
@@ -397,7 +410,8 @@ bool decodeBrainReply(const uint8_t* buf, uint16_t len, BrainReply& out) {
         out.landmark_id  = body[0];
         out.select_flags = body[1];
         break;
-    case kOpGetState: rdState(body, out.state); break;
+    case kOpGetState:
+    case kOpGetStateWithImu: rdState(body, out.state); break;
     default: break;
     }
     return true;
@@ -452,7 +466,18 @@ bool FrameReader::push(uint8_t b) {
         drop(1);
     }
     buf_[len_++] = b;
+    return scan();
+}
 
+bool FrameReader::next() {
+    if (frame_len_ > 0) {
+        drop(frame_len_);
+        frame_len_ = 0;
+    }
+    return scan();
+}
+
+bool FrameReader::scan() {
     // A rejected candidate drops only its sync0, so the bytes after it are rescanned.
     while (len_ > 0) {
         if (buf_[0] != kSync0 || (len_ > 1 && buf_[1] != kSync1)) {

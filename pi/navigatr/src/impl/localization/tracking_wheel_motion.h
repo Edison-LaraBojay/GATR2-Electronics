@@ -13,6 +13,7 @@
 //       ...   or   <Wheels resource_id="wheel_geometry"><Use wheel_id=.../></Wheels>
 //       <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
 //                          max_calibration_travel_m="0.005" max_gap_ms="250"/>
+//       <LateralMotion assume="zero"/>   optional, forward-only wheels
 //       <Timing interval_tolerance_ms="20" max_pending_ms="500"/>
 //       <Output observation_id="tracking_motion"/>
 //   </Observation>
@@ -24,6 +25,12 @@
 // bias over its first bias_samples readings while the robot sits still;
 // wheel travel during calibration restarts it and wheel baselines rebase
 // until it completes.
+//
+// Wheels that all measure along body x cannot see sideways motion. They
+// build only with LateralMotion assume="zero", which needs the heading
+// constraint: dy is fixed at zero, dtheta comes from the gyro, and each
+// wheel's forward estimate is travel_i + y_i * dtheta (angle 0). Sideways
+// slip or pushing is then unmeasured, not corrected.
 //
 // Every source accumulates its own pending interval between solves. A
 // solve happens only when every configured source has a pending interval
@@ -140,6 +147,8 @@ private:
 
     long interval_tolerance_ms_ = 20;
     long max_pending_ms_        = 500;
+
+    bool zero_lateral_ = false;   // LateralMotion assume="zero"
 
     // d(dx, dy)/d(dtheta) from the wheel geometry, published with every
     // increment

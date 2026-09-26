@@ -12,8 +12,8 @@ namespace investigatr
 {
 
 struct SimulatedLandmark {
-    LandmarkStatus status    = LandmarkStatus::kAvailable;
-    LandmarkSource source    = LandmarkSource::kObserved;
+    LandmarkStatus status = LandmarkStatus::kAvailable;
+    LandmarkSource source = LandmarkSource::kObserved;
     Pose           pose;
     bool           age_known = true;
     Seconds        age       = 0;

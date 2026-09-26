@@ -272,6 +272,32 @@ TEST(PlanarMotionIntegrator, PlacementRequestsAreEdgeTriggeredPerOrigin) {
     f.requests.placement.sequence = 1;
     out                           = f.run();
     EXPECT_EQ(out.robot.anchor_revision, 3u);
+    EXPECT_EQ(out.robot.placement_origin, "configuration");
+}
+
+TEST(PlanarMotionIntegrator, SamePlacementFromANewSessionReAnchors) {
+    EstimatorFixture f;
+    f.requests.placement.requested = true;
+    f.requests.placement.origin    = "command";
+    f.requests.placement.session   = 7;
+    f.requests.placement.sequence  = 1;
+    f.requests.placement.pose      = Pose2D{0.61, 0.457, kPi / 2.0};
+
+    StateEstimatorOutput out = f.run();
+    EXPECT_EQ(out.robot.anchor_revision, 1u);
+    EXPECT_EQ(out.robot.placement_origin, "command");
+    EXPECT_EQ(out.robot.placement_session, 7u);
+    EXPECT_EQ(out.robot.placement_sequence, 1u);
+
+    out = f.run();   // same identity: no edge
+    EXPECT_EQ(out.robot.anchor_revision, 1u);
+
+    // a rebooted brain repeats origin, sequence and pose in a new session
+    f.requests.placement.session = 8;
+    out                          = f.run();
+    EXPECT_EQ(out.robot.anchor_revision, 2u);
+    EXPECT_EQ(out.robot.placement_session, 8u);
+    EXPECT_EQ(out.robot.placement_sequence, 1u);
 }
 
 TEST(PlanarMotionIntegrator, HeadingReplacesRotationOnlyWhenAlignedAndIndependent) {

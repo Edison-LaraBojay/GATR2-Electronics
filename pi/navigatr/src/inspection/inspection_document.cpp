@@ -219,6 +219,17 @@ void diagnostics(JsonWriter& w, const char* key, const Diagnostics& d) {
         w.field("packets", kv.second.packets);
         w.field("decode_errors", kv.second.decode_errors);
         w.field("seq_gaps", kv.second.seq_gaps);
+        w.field("requests", kv.second.requests);
+        w.field("duplicates", kv.second.duplicates);
+        w.field("superseded", kv.second.superseded);
+        w.field("stale", kv.second.stale);
+        w.field("unknown_session", kv.second.unknown_session);
+        w.field("unanswered", kv.second.unanswered);
+        w.field("replies", kv.second.replies);
+        w.field("expired", kv.second.expired);
+        w.field("input_pending", kv.second.input_pending);
+        w.field("late_release", kv.second.late_release);
+        w.field("tx_errors", kv.second.tx_errors);
         w.endObject();
     }
     w.endArray();
@@ -268,6 +279,9 @@ void detectionFrame(JsonWriter& w, const System& system, const DetectionFrameSna
     pose2(w, "field_from_odom", f.field_from_odom);
     w.field("anchor_revision", f.anchor_revision);
 
+    // false: preview only, detection did not run on this frame
+    w.field("has_observations", f.has_observations);
+    w.field("has_trace", f.has_trace);
     w.field("detector_processing_ms",
             f.has_observations ? f.observations.detector_processing_ms : 0.0);
     w.field("frame_note", f.has_trace ? f.trace.frame_note : std::string());
@@ -602,6 +616,10 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
     w.beginObject();
     w.field("valid", robot.valid);
     w.field("initialized", robot.initialized);
+    // "command" (Brain), "configuration", or empty before any placement
+    w.field("placement_origin", robot.placement_origin);
+    w.field("placement_session", static_cast<uint64_t>(robot.placement_session));
+    w.field("placement_sequence", robot.placement_sequence);
     w.field("odometry_epoch", robot.odometry_epoch);
     w.field("anchor_revision", robot.anchor_revision);
     pose2(w, "odom", robot.odom_pose);
@@ -774,10 +792,10 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
     } else {
         const CommandState& c = reporting->command;
         w.beginObject();
-        w.field("stream_on", c.stream_on);
+        w.field("session", c.session);
         w.field("init_sequence", c.init_sequence);
+        w.field("init_session", c.init_session);
         pose2(w, "init_pose", c.init_pose);
-        w.field("mode", static_cast<int64_t>(c.mode));
         w.field("object_requested", c.object_requested);
         w.field("object_wire_id", static_cast<int64_t>(c.object_wire_id));
         w.field("object_sequence", c.object_sequence);

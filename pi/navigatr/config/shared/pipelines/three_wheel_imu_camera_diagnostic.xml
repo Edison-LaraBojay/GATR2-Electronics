@@ -8,7 +8,9 @@
      facts. -->
 <Pipeline>
 
-    <CommandCollection type="noop"/>
+    <CommandCollection type="brain_link">
+        <Serial resource_id="brain_uart"/>
+    </CommandCollection>
 
     <Localization>
         <Observation id="tracking_motion" type="tracking_wheel_motion">
@@ -53,7 +55,7 @@
 
     <TargetResolution type="noop"/>
 
-    <Publishing type="vex_brain">
+    <Publishing type="brain_link">
         <Serial resource_id="brain_uart"/>
         <Health fresh_ms="150">
             <Encoder sensor_id="tracking_encoder_a"/>

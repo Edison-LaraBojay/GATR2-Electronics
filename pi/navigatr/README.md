@@ -8,14 +8,17 @@ Brain owns movement control and motor commands.
 Robot position and reported landmark position use the configured field
 coordinates. Robot heading is its orientation in that field. The landmark's
 inspection `heading_error` is its estimated rotation away from nominal, wrapped
-to `(-180, 180]` degrees. The existing Brain publisher uses full field heading
-and gives a matching latched target precedence over a mapped field-object pose.
+to `(-180, 180]` degrees. The brain link answers Brain requests only. Its
+landmark fields are the physical landmark pose with full field heading, labeled
+nominal or observed; configured targets stay on the Pi.
 
 ## Runtime design
 
 **First setup:** [Set up and run Navigatr](docs/setup.md) covers Pi/Pico provisioning,
 build commands, camera calibration software, robot and camera geometry, complete
-two- and three-wheel IMU + camera templates, launch commands, and output locations.
+three-wheel IMU + camera templates, launch commands, and output locations. The
+current robot's two parallel wheels + BNO08X profiles have their own
+[bring-up guide](docs/parallel_wheel_bringup.md).
 
 These documents describe the implemented runtime and data contracts. Hardware
 integration still needs the checks recorded in the deployment documents.
@@ -101,6 +104,12 @@ exact checks): the libcamera capture backend (`libcamera_camera`, built only
 with `-DNAVIGATR_WITH_LIBCAMERA=ON` on the Pi) including exposure timestamp
 mapping and buffer ownership.
 
+Implemented and host tested, not run on hardware: the brain link
+(`brain_link` command collection and publishing, Brain link v3 sessions,
+per-session dedupe, placement acknowledged only once applied) over the
+half-duplex `linux_serial_link` (`DriverEnable`). The hardware checks are in
+[Connect the Brain](docs/setup.md#hardware-checks-still-to-do).
+
 Deferred, deliberately:
 
 - Live tilt: the Pico firmware sends gyro Z alongside encoders; the protocol has
@@ -109,8 +118,6 @@ Deferred, deliberately:
   association uses the assumed-level policy. The attitude path is exercised by
   the synthetic rig.
 - Manual exposure and gain control for the camera (auto exposure is used).
-- Half-duplex RS-485 turnaround: `DriverEnable` is held high, so the shared HAT
-  link cannot yet receive Brain commands using that configuration.
 - Measured calibration values for the GATR2 robot: the robot templates stay
   `.xml.in` until measured (see the calibration inventory).
 
@@ -126,14 +133,16 @@ duplicate outputs, and invalid calibration.
 - [`config/shared/robots/`](config/shared/robots/): the GATR2 robot templates
   (`.xml.in`, measured values required), the uncalibrated camera fragment for
   live inspection, and the synthetic rig fragments.
-- [`config/shared/pipelines/`](config/shared/pipelines/): two- and three-wheel
-  diagnostic pipelines, the synthetic demo pipeline, and the camera-only
-  inspection pipeline.
+- [`config/shared/pipelines/`](config/shared/pipelines/): the parallel-wheel
+  pipelines and their shared localization, three-wheel diagnostic pipelines, the
+  synthetic demo pipeline, and the camera-only inspection pipeline.
 - [`config/override/field.xml`](config/override/field.xml): nominal Override
   geometry for nine goals and their tag mounts, plus display dimensions and
   static features.
-- [`config/override/diagnostics/`](config/override/diagnostics/): composed
-  profile templates and the runnable live camera inspection profile.
+- [`config/override/diagnostics/`](config/override/diagnostics/): the
+  parallel-wheel profiles (runnable once their robot file is measured),
+  composed three-wheel profile templates, and the runnable live camera
+  inspection profile.
 - [`config/demo/`](config/demo/): hardware-free demo profiles.
 - [`config/examples/modular/main.xml`](config/examples/modular/main.xml): a minimal
   runnable scaffold with separate Resources, Sensors, Pipeline, and Localization files.
@@ -183,6 +192,7 @@ configuration error naming the missing backend; nothing pretends to capture.
 - Default execution: workers plus the inspection service when the profile enables it.
   Ctrl-C stops the service, then the workers, then the system.
 - `--inline` runs every stage on one thread at the loop rate (replay, bench).
+  The brain link needs the default workers; `--inline` with it prints a warning.
 - `--inspect-port` enables the inspection service on loopback without editing
   the profile.
 

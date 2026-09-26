@@ -266,7 +266,10 @@ function updateStatus() {
     const att = r.attitude || {};
     if (!r.valid) {
         badgesEl.appendChild(badge('localization unavailable', 'bad', 'localization-unavailable'));
+    } else if (!r.initialized) {
+        badgesEl.appendChild(badge('not placed: odometry frame, not a field position', 'warn', 'unplaced'));
     }
+    statusEl.dataset.placement = r.valid && r.initialized ? 'placed' : 'unplaced';
     if (snap.localization && !snap.localization.clock_mapped) {
         badgesEl.appendChild(badge('clock unmapped', 'warn', 'clock-unmapped'));
     }
@@ -291,10 +294,11 @@ function updateStatus() {
     if (state.hello && (state.hello.warnings || []).length) {
         badgesEl.appendChild(badge(`${state.hello.warnings.length} build warnings`, 'warn', 'warnings'));
     }
-    const f = r.field || {};
+    const placed = !!r.initialized;
+    const f = (placed ? r.field : r.odom) || {};
     readoutEl.innerHTML = '';
     const parts = [
-        `robot x <b>${fmt(f.x_m, 3)}</b> m  y <b>${fmt(f.y_m, 3)}</b> m  heading <b>${fmt(f.heading_deg, 1)}</b> deg`,
+        `${placed ? 'robot' : 'odometry (not placed)'} x <b>${fmt(f.x_m, 3)}</b> m  y <b>${fmt(f.y_m, 3)}</b> m  heading <b>${fmt(f.heading_deg, 1)}</b> deg`,
         `pose age ${fmtMs(age(r.age_ms))}`,
         `cycle ${snap.cycle}`,
         `session ${snap.session.id.slice(0, 8)}`,
@@ -331,6 +335,27 @@ function renderLandmarks(snap) {
         tr.addEventListener('pointerleave', () => scene.setHighlight(null));
         landmarkTable.appendChild(tr);
     }
+    // configured geometry with no estimate at all, e.g. world estimation off
+    const estimated = new Set(objects.map((o) => o.id));
+    for (const field of (state.hello && state.hello.fields) || []) {
+        for (const lm of field.landmarks || []) {
+            if (estimated.has(lm.id)) {
+                continue;
+            }
+            const tr = document.createElement('tr');
+            const cells = [lm.id, 'nominal (map)', fmt(lm.nominal.x_m, 3), fmt(lm.nominal.y_m, 3),
+                '-', '-', 'no estimate', 'no'];
+            for (const c of cells) {
+                const td = document.createElement('td');
+                td.textContent = c;
+                tr.appendChild(td);
+            }
+            tr.title = `${lm.id}: configured map pose only, not an estimate`;
+            tr.addEventListener('pointerenter', () => scene.setHighlight(lm.id));
+            tr.addEventListener('pointerleave', () => scene.setHighlight(null));
+            landmarkTable.appendChild(tr);
+        }
+    }
 }
 
 // staleness by the browser's receipt clock, never by document host_ms
@@ -352,10 +377,12 @@ connect();
 // headless --dump-dom (which captures at load) then sees a live page with
 // snapshots and a frame instead of the empty shell. People see the page
 // render regardless; only the tab's loading indicator lasts a moment longer.
+// A configuration without cameras never waits for a frame.
 await new Promise((resolve) => {
     const started = performance.now();
     const tick = () => {
-        const ready = state.snapshots >= 10 && state.frames >= 1;
+        const cameras = state.hello ? (state.hello.camera_sensors || []).length : 1;
+        const ready = state.snapshots >= 10 && (state.frames >= 1 || cameras === 0);
         if (ready || performance.now() - started > 6000) {
             resolve();
         } else {

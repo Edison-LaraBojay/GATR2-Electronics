@@ -196,13 +196,20 @@ bool decodes(const Bytes& f, BrainReply& out) {
     return decodeBrainReply(f.data(), static_cast<uint16_t>(f.size()), out);
 }
 
+Bytes frameOf(const FrameReader& r) {
+    return Bytes(r.frame(), r.frame() + r.frameLen());
+}
+
 // Frames completed while pushing bytes one at a time.
 std::vector<Bytes> readAll(FrameReader& r, const Bytes& stream) {
     std::vector<Bytes> frames;
     for (uint8_t b : stream) {
-        if (r.push(b)) {
-            frames.emplace_back(r.frame(), r.frame() + r.frameLen());
+        if (!r.push(b)) {
+            continue;
         }
+        do {
+            frames.push_back(frameOf(r));
+        } while (r.next());
     }
     return frames;
 }
@@ -250,8 +257,9 @@ TEST(Codec, BrainRequestLens) {
     EXPECT_EQ(brainRequestLen(kOpSetPose), 20);
     EXPECT_EQ(brainRequestLen(kOpSelectLandmark), 10);
     EXPECT_EQ(brainRequestLen(kOpGetState), 8);
+    EXPECT_EQ(brainRequestLen(kOpGetStateWithImu), 17);
     EXPECT_EQ(brainRequestLen(0), 0);
-    EXPECT_EQ(brainRequestLen(5), 0);
+    EXPECT_EQ(brainRequestLen(6), 0);
 }
 
 TEST(Codec, BrainReplyLens) {
@@ -714,17 +722,17 @@ TEST(BrainReply, GetStateOkKnownBytes) {
 }
 
 TEST(BrainReply, GetStateRoundTripExtremes) {
-    BrainReply r              = makeReply(kOpGetState, 1, 1, kResultOk);
-    r.state.x_mm              = INT32_MIN;
-    r.state.y_mm              = INT32_MAX;
-    r.state.heading_cdeg      = -17999;
-    r.state.robot_age_ms      = 65535;
-    r.state.odometry_epoch    = 0xFFFFFFFF;
-    r.state.anchor_revision   = 0x80000000;
-    r.state.lm_heading_cdeg   = INT32_MIN;
-    r.state.landmark_age_ms   = 65535;
-    r.state.robot_flags       = 0xFF;
-    r.state.landmark_source   = 0xFE;
+    BrainReply r            = makeReply(kOpGetState, 1, 1, kResultOk);
+    r.state.x_mm            = INT32_MIN;
+    r.state.y_mm            = INT32_MAX;
+    r.state.heading_cdeg    = -17999;
+    r.state.robot_age_ms    = 65535;
+    r.state.odometry_epoch  = 0xFFFFFFFF;
+    r.state.anchor_revision = 0x80000000;
+    r.state.lm_heading_cdeg = INT32_MIN;
+    r.state.landmark_age_ms = 65535;
+    r.state.robot_flags     = 0xFF;
+    r.state.landmark_source = 0xFE;
 
     BrainReply out{};
     ASSERT_TRUE(decodes(encode(r), out));
@@ -791,8 +799,8 @@ TEST(BrainReply, OtherVersionDecodesHeaderOnly) {
     EXPECT_EQ(out.state.robot_flags, 0);
     EXPECT_EQ(out.state.robot_age_ms, 0);
 
-    BrainReply r = makeReply(kOpSetPose, kSession, 2, kResultOk);
-    r.version    = 2;
+    BrainReply r     = makeReply(kOpSetPose, kSession, 2, kResultOk);
+    r.version        = 2;
     r.odometry_epoch = 5;
     ASSERT_TRUE(decodes(encode(r), out));
     EXPECT_EQ(out.version, 2);
@@ -922,6 +930,7 @@ TEST(Reader, LinkFrameCompletesOnLastByteOnly) {
     BrainReply out{};
     ASSERT_TRUE(decodeBrainReply(r.frame(), r.frameLen(), out));
     EXPECT_EQ(out.state.x_mm, 1500);
+    EXPECT_FALSE(r.next());
 }
 
 TEST(Reader, InterleavedSensorAndLinkFrames) {
@@ -991,6 +1000,39 @@ TEST(Reader, ShortenedLenDoesNotLoseNextFrame) {
     EXPECT_EQ(frames[0], kSetPoseOkReply);
 }
 
+TEST(Reader, OneRescanCanBufferSeveralFrames) {
+    // A reply len of 64 claims 70 bytes and swallows two whole requests.
+    const Bytes stream =
+        concat({{0xAA, 0x55, 0x11, 64}, kGetStateRequest, kSelectRequest, Bytes(36, 0x00)});
+    ASSERT_EQ(stream.size(), 70u);
+
+    FrameReader r;
+    for (size_t i = 0; i + 1 < stream.size(); ++i) {
+        EXPECT_FALSE(r.push(stream[i]));
+    }
+    ASSERT_TRUE(r.push(stream.back()));
+    EXPECT_EQ(frameOf(r), kGetStateRequest);
+    ASSERT_TRUE(r.next());
+    EXPECT_EQ(frameOf(r), kSelectRequest);
+    EXPECT_FALSE(r.next());
+    EXPECT_FALSE(r.next());
+
+    const std::vector<Bytes> frames = readAll(r, kHelloRequest);
+    ASSERT_EQ(frames.size(), 1u);
+    EXPECT_EQ(frames[0], kHelloRequest);
+}
+
+TEST(Reader, NextKeepsPartialFrame) {
+    FrameReader r;
+    EXPECT_FALSE(r.next());
+    for (size_t i = 0; i + 1 < kHelloRequest.size(); ++i) {
+        EXPECT_FALSE(r.push(kHelloRequest[i]));
+        EXPECT_FALSE(r.next());
+    }
+    ASSERT_TRUE(r.push(kHelloRequest.back()));
+    EXPECT_EQ(frameOf(r), kHelloRequest);
+}
+
 TEST(Reader, ResetDropsPartialFrame) {
     FrameReader r;
     for (size_t i = 0; i < 10; ++i) {
@@ -1000,4 +1042,55 @@ TEST(Reader, ResetDropsPartialFrame) {
     const std::vector<Bytes> frames = readAll(r, kSelectRequest);
     ASSERT_EQ(frames.size(), 1u);
     EXPECT_EQ(frames[0], kSelectRequest);
+}
+
+TEST(BenchImuCodec, RequestCarriesIndependentClockAndSignedContinuousRotation) {
+    BrainRequest request = makeRequest(kOpGetStateWithImu, kSession, 42);
+    request.imu_flags = kBenchImuValid;
+    request.imu_stamp_ms = 0x12345678u;
+    request.imu_rotation_mdeg = -450123;
+    const Bytes bytes = encode(request);
+    ASSERT_EQ(bytes.size(), kLinkEnvelopeLen + kBrainRequestHeaderLen + 9u);
+    EXPECT_EQ(bytes[12], kBenchImuValid);
+    EXPECT_EQ(bytes[13], 0x78);
+    EXPECT_EQ(bytes[14], 0x56);
+    EXPECT_EQ(bytes[15], 0x34);
+    EXPECT_EQ(bytes[16], 0x12);
+    BrainRequest decoded;
+    ASSERT_TRUE(decodeBrainRequest(bytes.data(), static_cast<uint16_t>(bytes.size()), decoded));
+    EXPECT_EQ(decoded.op, kOpGetStateWithImu);
+    EXPECT_EQ(decoded.session, kSession);
+    EXPECT_EQ(decoded.request_id, 42);
+    EXPECT_EQ(decoded.imu_flags, request.imu_flags);
+    EXPECT_EQ(decoded.imu_stamp_ms, request.imu_stamp_ms);
+    EXPECT_EQ(decoded.imu_rotation_mdeg, request.imu_rotation_mdeg);
+
+    // A CRC-correct op5 with the old empty body must not be accepted.
+    BrainRequest ordinary = makeRequest(kOpGetState, kSession, 43);
+    Bytes short_body = encode(ordinary);
+    short_body[5] = kOpGetStateWithImu;
+    const uint16_t crc = crc16(short_body.data() + 2,
+                              static_cast<uint16_t>(short_body.size() - 4));
+    short_body[short_body.size() - 2] = static_cast<uint8_t>(crc);
+    short_body.back() = static_cast<uint8_t>(crc >> 8);
+    EXPECT_FALSE(decodeBrainRequest(short_body.data(),
+                                   static_cast<uint16_t>(short_body.size()), decoded));
+}
+
+TEST(BenchImuCodec, ReplyReusesStateBlockAndErrorsHaveNoBody) {
+    BrainReply reply = makeReply(kOpGetStateWithImu, kSession, 42, kResultOk);
+    reply.state = makeState();
+    Bytes bytes = encode(reply);
+    EXPECT_EQ(bytes.size(), kGetStateOkReply.size());
+    BrainReply decoded;
+    ASSERT_TRUE(decodeBrainReply(bytes.data(), static_cast<uint16_t>(bytes.size()), decoded));
+    EXPECT_EQ(decoded.state.x_mm, reply.state.x_mm);
+    EXPECT_EQ(decoded.state.heading_cdeg, reply.state.heading_cdeg);
+    EXPECT_EQ(decoded.state.anchor_revision, reply.state.anchor_revision);
+    EXPECT_EQ(decoded.state.lm_heading_cdeg, reply.state.lm_heading_cdeg);
+    reply.result = kResultUnsupportedOp;
+    bytes = encode(reply);
+    EXPECT_EQ(bytes.size(), kLinkEnvelopeLen + kBrainReplyHeaderLen);
+    ASSERT_TRUE(decodeBrainReply(bytes.data(), static_cast<uint16_t>(bytes.size()), decoded));
+    EXPECT_EQ(decoded.result, kResultUnsupportedOp);
 }

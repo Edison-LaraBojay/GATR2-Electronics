@@ -58,17 +58,20 @@ void PicoTelemetry::refresh(uint64_t cycle, Diagnostics* diagnostics) {
             if (!reader_.push(buf[i])) {
                 continue;
             }
-            if (reader_.frameType() != gatr2::kFrameSensor) {
-                continue;
-            }
-            gatr2::SensorSample s{};
-            if (!gatr2::decodeSensorFrame(reader_.frame(), reader_.frameLen(), s)) {
-                if (stats != nullptr) {
-                    ++stats->decode_errors;
+            // one rescan can buffer several whole frames
+            do {
+                if (reader_.frameType() != gatr2::kFrameSensor) {
+                    continue;
                 }
-                continue;
-            }
-            applyPacket(s, diagnostics);
+                gatr2::SensorSample s{};
+                if (!gatr2::decodeSensorFrame(reader_.frame(), reader_.frameLen(), s)) {
+                    if (stats != nullptr) {
+                        ++stats->decode_errors;
+                    }
+                    continue;
+                }
+                applyPacket(s, diagnostics);
+            } while (reader_.next());
         }
     }
 }

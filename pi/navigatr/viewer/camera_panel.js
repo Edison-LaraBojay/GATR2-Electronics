@@ -356,11 +356,17 @@ export class CameraPanel {
         if (img && !entry) {
             badges.push(['overlay identity mismatch, waiting', 'warn']);
         }
+        const cameras = (this.hello && this.hello.camera_sensors) || [];
+        if (this.hello && cameras.length === 0) {
+            badges.push(['no camera configured', 'info']);
+        }
         if (ref) {
             if (!ref.has_image) {
                 badges.push(['no image in frame', 'warn']);
             }
-            if (!ref.tags || ref.tags.length === 0) {
+            if (ref.has_observations === false) {
+                badges.push(['preview only, detection not run', 'info']);
+            } else if (!ref.tags || ref.tags.length === 0) {
                 badges.push(['no tags', 'info']);
             }
             if (!ref.intrinsics) {
@@ -375,13 +381,15 @@ export class CameraPanel {
             if (ref.pose_at_exposure && ref.pose_at_exposure.status !== 'ok') {
                 badges.push([`pose at exposure ${ref.pose_at_exposure.status}`, 'warn']);
             }
-        } else if (!img) {
+        } else if (!img && cameras.length > 0) {
             badges.push(['no detection frame yet', 'info']);
         }
         this.renderBadges(badges);
 
         this.updateAge();
-        if (entry) {
+        if (entry && entry.has_observations === false) {
+            this.overlayNote.textContent = `preview seq ${entry.sequence}: detection not run, no overlay`;
+        } else if (entry) {
             this.overlayNote.textContent = `overlay bound to seq ${entry.sequence}: ${(entry.tags || []).length} tags, detector ${fmt(entry.detector_processing_ms, 1)} ms` +
                 (latest && latest.sequence !== entry.sequence ? `; newest processed seq ${latest.sequence}` : '') +
                 (entry.frame_note ? `; ${entry.frame_note}` : '');

@@ -3,7 +3,7 @@
 Field estimation tracks configured physical objects in the same field coordinate
 system used for robot localization. Target resolution separately turns configured
 navigation intent into a desired robot pose. The browser exposes both; the Brain
-publisher's object fields depend on which of these outputs is available.
+link reports only physical landmark poses, never a resolved target.
 
 ## Definitions and retained state
 
@@ -82,8 +82,10 @@ displaced goal changes that goal's estimate, not the robot pose used to measure 
 
 ## Configured targets
 
-`target_set` declares targets selected by command wire ID. `configured_targets`
-resolves and retains one active TargetState:
+`target_set` declares targets selected by wire ID: a Brain SELECT_LANDMARK
+activates the target whose `wire_id` equals the selected landmark wire id, a
+release or a new Brain session deactivates it. `configured_targets` resolves
+and retains one active TargetState:
 
 - `robot_relative` snapshots a configured movement relative to the robot when a
   new request activates.
@@ -98,35 +100,72 @@ resolves and retains one active TargetState:
 Acquisition preferences such as camera and allowed mount filter accepted evidence
 for the requested target; they do not decide association. Request sequence and
 odometry epoch control the target lifecycle. A latched target is a desired robot
-body pose in odometry coordinates, re-expressed in the field for output. It is not
-the landmark's physical pose. The Brain performs movement control.
+body pose in odometry coordinates, re-expressed in the field for inspection. It
+is not the landmark's physical pose and is never sent to the Brain; the Brain
+applies its own offset to the landmark pose and performs movement control.
 
 ## Brain output
 
-The [`vex_brain` publisher](../src/impl/publishing/vex_brain.cpp) uses the shared
-[pose-frame codec](../../../common/frames.h). Robot x/y/heading always describe the
-robot origin in the field frame. When the command requests an object:
+The [`brain_link` publisher](../src/impl/publishing/brain_link_publisher.cpp)
+answers Brain requests only; the wire layout is the
+[GET_STATE state block](../../../docs/interfaces.md#state-block-get_state-ok).
+Everything is taken from the cycle that processed the request: the robot state,
+the newest completed field snapshot, and sensor health.
 
-1. A matching active, latched, non-cancelled target supplies the desired robot
-   pose. A vision-locked target sets `kStatusObjObserved`.
-2. Otherwise, a matching configured `FieldObject` mapping supplies that object's
-   retained absolute pose. The entry's `observed` flag controls
-   `kStatusObjObserved` for this path.
-3. If neither is available, `kStatusObjValid` remains clear.
+Robot fields:
 
-Object heading is a full field orientation on both paths. Consumers must use the
-profile's target/object mapping to interpret the object fields. The separate
-optional landmark list contains relative dx/dy, bearing, and quality for a
-compatible configured `LandmarkAssociationSet`; tag-mount pose evidence is a
-different payload and cannot be bound to that list.
+- x/y/heading are the robot origin in the field frame
+  (`T_field_odom * T_odom_robot`), millimeters and centidegrees.
+- `PoseValid` is `RobotState.valid`; `Localized` is `RobotState.initialized`
+  (a placement set the field anchor). `AnchorCommand` or `AnchorConfigured`
+  follows `placement_origin`: a Brain SET_POSE or the profile's
+  `InitialPlacement`.
+- `AgeKnown` and `robot_age_ms` (cycle time minus the pose's host
+  measurement time, clamped to 0..65535) are set only when the estimator maps
+  the pose onto the host clock.
+- `odometry_epoch` and `anchor_revision` are the low 32 bits of the robot
+  state's counters.
+- Health bits come only from configured `Health` references: encoders fresh
+  when every listed `Encoder` sensor is valid and was received within
+  `fresh_ms`; gyro fresh the same for `Gyro`; vision alive when the newest
+  field snapshot published observations, which only a field cycle that
+  processed a new camera frame does, so the bit can clear between frames;
+  bias calibrated once the `BiasCal` observation function has reported ready
+  (latched until reset). They are information only, never acknowledgements.
+
+Landmark fields describe the physical landmark, never a robot destination:
+
+- `landmark_id` is the session's selected wire id, 0 when none or released.
+  A `<FieldObject object_id=".." wire_id=".."/>` in the Publishing section maps
+  a wire id (1..255, unique both ways) to a configured field object.
+- Source `observed`: the entry's evidence came from the robot's current
+  odometry epoch. The pose is `T_field_odom * T_odom_object` under the
+  robot's current anchor, and `landmark_age_ms` is cycle time minus the last
+  observation time, clamped. A retained observation keeps source `observed`
+  with a growing age; the Brain decides how old is usable.
+- Source `nominal`: the entry is still the field-map seed; its nominal pose,
+  age 0. It is never labeled observed.
+- Source `none`, zero pose: world estimation is `noop`, nothing is selected,
+  the wire id has no mapping, the entry is missing or invalid, or the
+  observation belongs to another odometry epoch.
+
+Heading is the landmark's full field orientation. The Brain composes its own
+offset onto this pose exactly once. Configured targets stay on the Pi.
+
+Both ages are Pi host clock differences taken at the Pi cycle start. The Brain
+adds its measured round trip, so its total is an upper bound only to within the
+Pi cycle processing time (a few milliseconds).
+
+A SELECT_LANDMARK reply is `Ok` for a release, `LandmarkUnsupported` when world
+estimation is `noop`, `UnknownLandmark` when the wire id has no `FieldObject`
+mapping, and `Ok` otherwise. The selection is recorded in every case, so the
+state block reports that id with source `none`. No checked-in profile maps a
+wire id yet.
 
 Inspection's `heading_error_deg` is the wrapped difference between estimated and
-nominal object heading, in `(-180, 180]` degrees. It is not sent as
-`obj_heading_cdeg`, and there is no configurable 90-degree symmetry period. See
+nominal object heading, in `(-180, 180]` degrees. It is not sent to the Brain,
+and there is no configurable 90-degree symmetry period. See
 [coordinates](coordinates.md).
 
-The command parser supports stream, placement, and object requests, but the
-Linux serial resource currently holds its optional RS-485 DriverEnable high
-rather than switching direction around writes. The checked-in physical HAT path
-therefore needs receive/turnaround work before bidirectional command traffic can
-be used on that shared link.
+Replies go out through the half-duplex RS-485 link; see
+[setup](setup.md#connect-the-brain) for its configuration and hardware checks.

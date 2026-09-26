@@ -92,12 +92,15 @@ Current observation implementations are:
 
 | Type | Inputs and result |
 |---|---|
-| `tracking_wheel_motion` | Configured wheel geometry and encoder sensors, optionally a gyro heading constraint; produces a body-motion increment over an interval. |
+| `tracking_wheel_motion` | Configured wheel geometry and encoder sensors, optionally a gyro heading constraint and an explicit zero-lateral-motion assumption for forward-only wheels; produces a body-motion increment over an interval. |
 | `imu_heading_increment` | One IMU sensor and bias settings; produces a heading increment over an interval. |
 | `attitude_reference` | One attitude sensor; produces a timestamped quaternion observation. |
 
 Three suitably placed tracking wheels can solve planar motion. Two wheels need
-a heading constraint. The model validates the geometry, aligns intervals, handles
+a heading constraint. Wheels that all measure forward, such as two parallel
+wheels, also need `<LateralMotion assume="zero"/>`: sideways motion is then
+assumed, not measured, and each wheel's travel is corrected by its lateral
+lever arm times the gyro rotation. The model validates the geometry, aligns intervals, handles
 source restarts, and does not bridge invalid spans. Gyro bias calibration belongs
 to these observation models. Configuring the same gyro independently twice does
 not create independent information: every sample carries the acquisition output
@@ -194,24 +197,68 @@ and status. It is an immutable published snapshot. See
 
 ## Commands, target resolution, and publishing
 
-Command collection produces `CommandState`: placement requests, requested object
-ID and command sequence, and stream control. The `vex_brain_serial` implementation
-parses the shared command-frame codec; diagnostic profiles can use `noop`.
+Command collection produces `CommandState`: the current Brain session, the
+newest placement (`init_pose`, `init_session`, `init_sequence`), the landmark
+selection (`object_requested`, `object_wire_id`, `object_sequence`), and the
+reply owed for this cycle's request (`BrainReplyContext`). Implementations are
+`brain_link` and `noop`; `noop` keeps the Pi standalone on a bench.
+
+The Brain talks to the Pi with the request/reply protocol in
+[Brain link v3](../../../docs/interfaces.md#brain-link-v3): the Brain asks,
+the Pi answers each request at most once, and nothing is sent unasked. The
+`brain_link` pair implements the Pi side:
+
+- `brain_link` command collection drains its serial link once per cycle,
+  stamps every read with the link's microsecond clock, and processes only the
+  newest request the drain completed. It owns the session rules: a random
+  nonzero session per HELLO, a HELLO retry answered with the same session
+  until another request is accepted, the last four opening nonces rejected as
+  stale, per-session request_id dedupe with 16-bit wraparound, and SET_POSE
+  and SELECT_LANDMARK records so a retry is answered, never applied twice. It
+  also holds `pi_instance`, a random nonzero id that is new for every process
+  start and every `reset()`. It computes the reply window from its read
+  timestamps; see [Bus ownership and timing](../../../docs/interfaces.md#bus-ownership-and-timing).
+- A new session clears only client state: the selection is released and
+  `object_sequence` advances, which cancels a configured target latch. It
+  never touches `init_*` or localization, so a new session alone never
+  relocates the robot.
+- `System::requestsFrom` passes the command placement to localization only
+  while `init_session` equals the current session, so a new session withdraws
+  a placement not applied yet. `PlacementEdge` applies a placement once per
+  (origin, session, sequence) and records that identity in `RobotState`
+  (`placement_origin` `command` or `configuration`, `placement_session`,
+  `placement_sequence`). A configured `InitialPlacement` is
+  (`configuration`, 0, 1).
+- `brain_link` publishing writes only when the command slot left a reply
+  pending, once, through the link's windowed write. SET_POSE is `Ok` only
+  when `RobotState` reports that exact placement applied, otherwise
+  `Pending`. SELECT_LANDMARK is `Ok` for a release,
+  `LandmarkUnsupported` when world estimation is `noop`, `UnknownLandmark`
+  for a wire id with no `FieldObject` mapping, otherwise `Ok`. GET_STATE
+  carries the robot pose and flags, the robot measurement age, health bits,
+  and the selected landmark's physical pose (see [landmarks](landmarks.md#brain-output)).
+
+Construction enforces the pairing: `brain_link` command collection needs
+`brain_link` publishing, and that publisher needs `brain_link` command
+collection on the same `Serial` resource. A profile with `brain_link`
+command collection must also satisfy `1000 / Loop rate_hz <= window_ms / 2`.
+The factories read the loop rate, the command type and its serial resource,
+and whether world estimation is `noop` from `SlotInitializationContext`.
+Publishing receives the diagnostics through `PublishingInput` and counts its
+writes in the link's `LinkStats`.
 
 `configured_targets` resolves targets from `target_set`. It can latch a desired
 robot pose from a relative movement, a landmark estimate, or an `acquire_once`
-visual acquisition. This stage owns target lifecycle; it does not alter the field
-estimate. The Brain remains responsible for motor control.
+visual acquisition. A Brain selection activates the target whose `wire_id`
+equals the selected landmark wire id. Targets are Pi internal: inspection shows
+them, the brain link never sends them. This stage owns target lifecycle; it
+does not alter the field estimate. The Brain remains responsible for motor
+control.
 
-The `vex_brain` publisher writes the existing pose frame. For a requested object,
-a matching latched target takes precedence and supplies a desired robot pose.
-Otherwise a configured FieldObject mapping supplies its estimated absolute pose.
-Both use full field heading. The browser's heading error from nominal is a
-separate inspection value, not the wire object's heading convention.
-
-The Linux serial link's optional `DriverEnable` holds DE high while the link
-exists. It does not implement half-duplex transmit/receive turnaround. A command
-parser in software does not make the HAT's shared RS-485 path bidirectional.
+A `linux_serial_link` with `DriverEnable` runs RS-485 half duplex: it listens
+while idle and drives the transceiver only while sending a reply, releasing it
+once the transmitter is empty. The sequence is in `transport/half_duplex` over
+a small port interface; see [linux_serial_link](../../../docs/navigatr_resources.md#linux_serial_link).
 
 ## Scheduling and lifecycle
 
@@ -230,15 +277,26 @@ backend receives camera requests asynchronously and exposes the newest frame;
 there is no generic worker per resource or sensor. A newly added blocking resource
 can therefore slow localization.
 
+A Brain request is read by command collection and answered by publishing in
+the same estimation cycle, from that cycle's robot state and the newest
+completed field snapshot, so a reply never waits for camera processing. The
+reply write blocks the estimation worker for about the frame airtime (5.1 ms
+for the largest reply at 115200 baud).
+
 `--inline` runs estimation, field estimation, and reporting serially for replay
-and tests. The optional inspection service reads published snapshots at its own
-rate, serving JSON and JPEG previews over loopback HTTP/WebSocket. Slow clients
-are skipped rather than stalling an estimator.
+and tests. Field estimation then runs between the Brain request and its reply,
+so the brain link needs the default threaded mode; the executable warns when
+`--inline` is used with it. The optional inspection service reads published
+snapshots at its own rate, serving JSON and JPEG previews over loopback
+HTTP/WebSocket. Slow clients are skipped rather than stalling an estimator.
 
 `stop()` joins workers before their dependencies are destroyed. `reset()` stops
 workers, resets stages and shared resources, changes history/source epochs, clears
-published state, and resumes workers when appropriate. Snapshot readers use
-synchronized copies; inspection never calls mutable estimator implementations.
+published state, and resumes workers when appropriate. For the brain link it
+draws a new `pi_instance`, forgets the Brain session, and clears `CommandState`
+(`init_sequence` restarts at 0); the Brain sees the new `pi_instance` and opens
+a new session. Snapshot readers use synchronized copies; inspection never calls
+mutable estimator implementations.
 
 ## Source map
 
@@ -252,4 +310,6 @@ synchronized copies; inspection never calls mutable estimator implementations.
 | World estimation executor | [world_estimation_stage.cpp](../src/runtime/world_estimation_stage.cpp) |
 | AprilTag world estimator | [apriltag_world_estimator.cpp](../src/impl/world_estimation/apriltag_world_estimator.cpp) |
 | Target lifecycle | [configured_targets.cpp](../src/impl/target_resolution/configured_targets.cpp) |
-| Brain output | [vex_brain.cpp](../src/impl/publishing/vex_brain.cpp) |
+| Brain requests and sessions | [brain_link_commands.cpp](../src/impl/commands/brain_link_commands.cpp), [command_state.h](../src/state/command_state.h) |
+| Brain replies | [brain_link_publisher.cpp](../src/impl/publishing/brain_link_publisher.cpp) |
+| Half-duplex transmit | [half_duplex.cpp](../src/transport/half_duplex.cpp), [serial_port.cpp](../src/transport/serial_port.cpp) |

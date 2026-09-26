@@ -22,6 +22,7 @@
 
 #pragma once
 #include <cstdint>
+#include <string>
 
 #include "math/quaternion.h"
 #include "math/se3.h"
@@ -54,6 +55,13 @@ struct RobotState {
     double confidence  = 0.0;   // producer score, not a covariance
     bool   valid       = false;   // an estimator has produced a pose
     bool   initialized = false;   // field anchor was set from a request
+
+    // Identity of the placement behind the current anchor, empty origin
+    // until one applied: ("command", brain session, init_sequence) or
+    // ("configuration", 0, 1).
+    std::string placement_origin;
+    uint32_t    placement_session  = 0;
+    uint64_t    placement_sequence = 0;
 
     // Effective time of odom_pose: the source clock of the newest folded
     // measurement and, when the estimator has a clock mapping, its host

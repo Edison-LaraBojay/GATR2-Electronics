@@ -155,9 +155,8 @@ const char* toString(MotionReason reason) {
 }
 
 Navigator::Navigator(InputSource& source, const NavigatorConfig& config)
-    : source_(&source), config_(config), config_valid_(valid(config)),
-      drive_pid_(config.drive_pid), heading_pid_(config.heading_pid, true),
-      turn_pid_(config.turn_pid, true) {}
+    : source_(&source), config_(config), config_valid_(valid(config)), drive_pid_(config.drive_pid),
+      heading_pid_(config.heading_pid, true), turn_pid_(config.turn_pid, true) {}
 
 bool Navigator::valid(const NavigatorConfig& c, const char** why) {
     struct Check {
@@ -201,7 +200,8 @@ bool Navigator::valid(const NavigatorConfig& c, const char** why) {
         {nonNegative(c.landmark_follow_turn_rate), "landmark_follow_turn_rate must be >= 0"},
         {nonNegative(c.max_dt) && c.max_dt > 0, "max_dt must be > 0"},
         {c.arrive_distance < c.position_tolerance, "arrive_distance must be < position_tolerance"},
-        {c.waypoint_pass_radius >= c.near_distance, "waypoint_pass_radius must be >= near_distance"},
+        {c.waypoint_pass_radius >= c.near_distance,
+         "waypoint_pass_radius must be >= near_distance"},
         {c.turn_exit < c.turn_in_place_threshold, "turn_exit must be < turn_in_place_threshold"},
     };
     for (const Check& check : checks) {
@@ -294,7 +294,7 @@ DriveCommand Navigator::update(Seconds now) {
     } else if (gap) {
         resetControl();
     }
-    status_.elapsed = now - start_time_;
+    status_.elapsed       = now - start_time_;
     const Seconds timeout = options_.timeout > 0 ? options_.timeout : config_.default_timeout;
     if (status_.elapsed > timeout) {
         finish(MotionState::kFailed, MotionReason::kTimedOut);
@@ -556,9 +556,9 @@ DriveCommand Navigator::navigate(const InputSnapshot& snapshot, Seconds now, Sec
         const std::size_t index   = status_.waypoint_index;
         bool              advance = false;
         if (!stopsAt(index)) {
-            advance = e.distance <= config_.waypoint_pass_radius ||
-                      (status_.state == MotionState::kDriving && along_was_positive_ &&
-                       e.along <= 0);
+            advance =
+                e.distance <= config_.waypoint_pass_radius ||
+                (status_.state == MotionState::kDriving && along_was_positive_ && e.along <= 0);
         }
         if (!advance) {
             const DriveCommand demand = control(e, dt, advance);
@@ -589,7 +589,8 @@ DriveCommand Navigator::control(const Errors& e, Seconds dt, bool& settled) {
     case MotionState::kDriving:
         if (stop && e.distance <= c.arrive_distance) {
             setPhase(MotionState::kAligning);
-        } else if (stop && e.along <= 0) {
+        } else if (stop && e.along <= c.arrive_distance) {
+            // At the perpendicular. With a lateral offset along never quite reaches 0.
             if (e.distance <= c.position_tolerance) {
                 setPhase(MotionState::kAligning);
             } else {
@@ -615,12 +616,10 @@ DriveCommand Navigator::control(const Errors& e, Seconds dt, bool& settled) {
         demand.turn = raise(turn_pid_.update(holdTurnSign(e.bearing), dt), c.min_turn);
         break;
     case MotionState::kDriving: {
-        const Meters along   = e.along + (stop ? 0.0 : remainingPath());
-        const double scale   = std::max(0.0, std::cos(e.bearing));
-        demand.forward       = std::clamp(drive_pid_.update(along, dt) * scale, 0.0, c.max_forward);
-        if (e.distance > c.position_tolerance) {
-            demand.forward = raise(demand.forward, c.min_forward);
-        }
+        const Meters along = e.along + (stop ? 0.0 : remainingPath());
+        const double scale = std::max(0.0, std::cos(e.bearing));
+        demand.forward = raise(std::clamp(drive_pid_.update(along, dt) * scale, 0.0, c.max_forward),
+                               c.min_forward);
         if (e.distance > c.near_distance) {
             demand.turn = heading_pid_.update(e.bearing, dt);
         } else {
@@ -632,8 +631,8 @@ DriveCommand Navigator::control(const Errors& e, Seconds dt, bool& settled) {
         break;
     }
     case MotionState::kAligning: {
-        const bool inside = e.distance <= c.position_tolerance &&
-                            std::fabs(e.heading) <= c.heading_tolerance;
+        const bool inside =
+            e.distance <= c.position_tolerance && std::fabs(e.heading) <= c.heading_tolerance;
         const double turn = turn_pid_.update(holdTurnSign(e.heading), dt);
         demand.turn       = inside ? turn : raise(turn, c.min_turn);
         if (!inside) {
@@ -656,8 +655,9 @@ DriveCommand Navigator::control(const Errors& e, Seconds dt, bool& settled) {
 DriveCommand Navigator::shape(const DriveCommand& demand, Seconds dt) {
     const NavigatorConfig& c = config_;
     DriveCommand           out;
-    out.forward = slewLimit(output_.forward, std::clamp(demand.forward, -c.max_forward, c.max_forward),
-                            c.forward_slew, dt);
+    out.forward =
+        slewLimit(output_.forward, std::clamp(demand.forward, -c.max_forward, c.max_forward),
+                  c.forward_slew, dt);
     out.turn =
         slewLimit(output_.turn, std::clamp(demand.turn, -c.max_turn, c.max_turn), c.turn_slew, dt);
     output_ = out;

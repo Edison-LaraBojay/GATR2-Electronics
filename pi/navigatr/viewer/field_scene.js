@@ -398,7 +398,7 @@ export class FieldScene {
                     `x ${fmt(lm.nominal.x_m)} m  y ${fmt(lm.nominal.y_m)} m  heading ${fmt(lm.nominal.heading_deg, 1)} deg\n` +
                     (lm.visual ? `${lm.visual.shape}` : 'no visual declared: stand-in drawn') +
                     `\n${(lm.mounts || []).length} tag mounts`;
-                body.label = textSprite(shortId(lm.id) + (body.known ? '' : ' (no visual)'), { height_m: 0.07, bg: 'rgba(0,0,0,0.45)', color: '#d8dde6' });
+                body.label = textSprite(shortId(lm.id) + (body.known ? ' (nominal)' : ' (nominal, no visual)'), { height_m: 0.07, bg: 'rgba(0,0,0,0.45)', color: '#d8dde6' });
                 body.label.position.set(0, 0, body.height + 0.09);
                 body.group.add(body.label);
                 this.fieldGroup.add(body.group);
@@ -530,6 +530,7 @@ export class FieldScene {
         const box = new THREE.Mesh(
             new THREE.BoxGeometry(body.length_m, body.width_m, body.height_m),
             new THREE.MeshStandardMaterial({ color: 0xff9f43, transparent: true, opacity: 0.85, roughness: 0.6 }));
+        this.robotMaterial = box.material;
         // body center relative to the robot origin, which stays the group origin
         box.position.set(body.origin_x_m, body.origin_y_m, body.height_m / 2);
         robot.add(box);
@@ -591,6 +592,10 @@ export class FieldScene {
         }
         if (robot && robot.valid) {
             const f = robot.field;
+            // before placement the field pose is just odometry from the origin
+            const placed = !!robot.initialized;
+            this.robotMaterial.color.setHex(placed ? 0xff9f43 : 0x8a8f98);
+            this.robotMaterial.opacity = placed ? 0.85 : 0.45;
             this.robot.visible = true;
             this.robot.position.set(f.x_m, f.y_m, 0);
             const att = robot.attitude;
@@ -606,10 +611,13 @@ export class FieldScene {
             const attText = tilt
                 ? `roll ${fmt(att.roll_deg, 1)} pitch ${fmt(att.pitch_deg, 1)} deg (${att.source}, age ${fmtMs(att.age_ms)})`
                 : (att && att.assumed_level ? 'attitude assumed level' : 'attitude unavailable');
-            this.robot.userData.info = `robot origin\nx ${fmt(f.x_m)} m  y ${fmt(f.y_m)} m  heading ${fmt(f.heading_deg, 1)} deg\n` +
+            const placedBy = robot.placement_origin === 'command' ? 'Brain' : robot.placement_origin;
+            this.robot.userData.info = (placed ? `robot origin, placed by ${placedBy}` : 'robot origin, NOT PLACED: odometry pose, not a field position') +
+                `\nx ${fmt(f.x_m)} m  y ${fmt(f.y_m)} m  heading ${fmt(f.heading_deg, 1)} deg\n` +
                 `pose age ${fmtMs(robot.age_ms)}  confidence ${fmt(robot.confidence, 2)}\n${attText}`;
+            const attLabel = tilt ? 'robot' : (att && att.assumed_level ? 'robot (level assumed)' : 'robot (no attitude)');
             this.robotLabel = setLabel(this.robot, this.robotLabel,
-                tilt ? 'robot' : (att && att.assumed_level ? 'robot (level assumed)' : 'robot (no attitude)'),
+                placed ? attLabel : 'robot (not placed, odometry)',
                 { height_m: 0.07, position: new THREE.Vector3(0, 0, this.robotBody.height_m + 0.1) });
         } else {
             this.robot.visible = false;

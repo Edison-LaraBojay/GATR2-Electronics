@@ -19,31 +19,67 @@ executable configuration and there is no monolithic robot config header.
 
 ## linux_serial_link
 
-- Contract: `SerialLink` (readAvailable, write).
+- Contract: `SerialLink` (readAvailable, write, windowed write, inputPending,
+  nowUs).
 - Schema:
 
 ```xml
-<Resource id="pico_uart" type="linux_serial_link">
-    <Device path="/dev/ttyAMA0"/>
+<Resource id="brain_uart" type="linux_serial_link">
+    <Device path="/dev/ttyAMA5"/>
     <Baud value="115200"/>
-    <DriverEnable gpio="6"/>   <!-- optional, e.g. RS-485 DE//RE -->
+    <DriverEnable gpio="6"/>   <!-- optional, RS-485 DE and /RE: half duplex -->
 </Resource>
 ```
 
+- `DriverEnable` optional attributes: `post_guard_us` (driver held after the
+  transmitter is empty, default 2 character times, 174 us at 115200) and
+  `tx_margin_us` (added to the frame airtime for the transmit deadline,
+  default 2000).
 - Dependencies: none.
 - Ownership: opens the device at initialization; open failure is a build
   warning and a dead link at runtime (an unplugged cable must not stop the
-  robot). Closed on destruction. `DriverEnable` drives the named GPIO high
-  (sysfs) while the link exists and low on destruction; on the HAT this is
-  the RS-485 transceiver enable on GPIO6, whose pulldown idles the bus when
-  the Pi is dead. GPIO failure is a build warning.
+  robot). Closed on destruction; a half-duplex link drives DE low first.
+- Clock: `nowUs()` is the steady clock in microseconds. Transmit windows and
+  read timestamps use it, never the pipeline cycle time.
+- Windowed write: `write(bytes, TransmitWindow{not_before_us, deadline_us})`
+  waits until `not_before_us` and sends nothing once `deadline_us` has
+  passed (`expired`). Plain `write(bytes)` uses an unbounded window.
+- Half duplex (`DriverEnable` present). The GPIO is exported through sysfs,
+  driven low at open so the transceiver listens, and its value file stays
+  open. Each write:
+  1. checks the window (`expired`, nothing sent);
+  2. refuses while received bytes are waiting (`FIONREAD`; `input_pending`,
+     nothing sent);
+  3. drives DE high and writes every byte across partial writes, waiting for
+     output space with poll();
+  4. waits for the transmitter to be empty (`TIOCSERGETLSR`/`TEMT` polled
+     once per character time; `tcdrain` if the driver lacks that ioctl);
+  5. holds DE for the post guard, then drives it low.
+
+  Steps 3 and 4 share one deadline: bytes * 10 / baud + `tx_margin_us` from
+  DE high. Every error or timeout discards unsent output (`tcflush`
+  `TCOFLUSH`) and drives DE low. `late_release` marks a release later than
+  deadline + post guard (for example the thread was preempted). The write
+  blocks its caller for about the frame airtime: 5.1 ms for 59 bytes at
+  115200.
+- Without `DriverEnable` the link is full duplex: windows apply, input
+  pending does not.
 - Thread safety: single threaded.
 - Failure behavior: reads report the link closed; consumers surface fault
-  states.
-- Hardware alignment: the Pico transmits at 115200 (`pico/src/config.h`), the
-  brain link is UART5 at `/dev/ttyAMA5` (`dtoverlay=uart5`), and that link is
-  one way, Pi to brain, so command collection stays `noop` until a return
-  path exists.
+  states. A write reports `ok = false` with `error` text; `expired` and
+  `input_pending` mean nothing was sent. If the DriverEnable GPIO cannot be
+  reached that is a build warning and every write fails; the link never
+  reports success with nothing on the bus.
+- Hardware checks: the `gpio` attribute is the sysfs number. Newer kernels
+  can offset it (for example 512 + n, so GPIO6 is 518); compare
+  `/sys/class/gpio/gpiochip*/base` on the installed kernel. If the runtime is
+  killed (SIGKILL, crash) while transmitting, DE stays high until the next
+  start drives it low. Implemented and host tested with a fake port; not
+  validated on hardware (TIOCSERGETLSR on the Pi UART, turnaround timing, DE
+  behavior).
+- Hardware alignment: the Pico transmits at 115200 (`pico/src/config.h`); the
+  brain link is UART5 at `/dev/ttyAMA5` (`dtoverlay=uart5`), RS-485 half
+  duplex with DE on GPIO6, where the Pi only answers Brain requests.
 
 ## memory_link
 
@@ -51,6 +87,10 @@ executable configuration and there is no monolithic robot config header.
 - Schema: `<Resource id="x" type="memory_link"/>`.
 - In-memory link for tests and loopback rigs. Input and output streams are
   separate, so a bidirectional link never reads its own writes.
+- Clock: steady microseconds unless a test injects one with `setClock`.
+- Windowed write never waits: before or inside the window it writes, after
+  the deadline it is `expired`, and while input is waiting it is
+  `input_pending`; nothing is written in either case.
 - Thread safety: single threaded.
 
 ## file_replay_link
@@ -227,8 +267,9 @@ executable configuration and there is no monolithic robot config header.
   numeric geometry attribute is required and validated; radius is the loaded
   effective rolling radius. `calibration_status` is an optional reader note.
   `tracking_wheel_motion` consumes it through
-  `<Wheels resource_id=...><Use wheel_id=.../></Wheels>`, so two- and
-  three-wheel pipelines differ only through wheel references. The inline
+  `<Wheels resource_id=...><Use wheel_id=.../></Wheels>`, so wheel pipelines
+  differ in wheel references plus, for forward-only parallel wheels, the
+  explicit `<LateralMotion assume="zero"/>`. The inline
   `<TrackingWheel>` form supports self-contained configurations;
   the two forms are mutually exclusive within one observation function.
 - Thread safety: immutable after construction.
