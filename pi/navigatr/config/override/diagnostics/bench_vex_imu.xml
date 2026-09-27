@@ -10,7 +10,7 @@
     <Robot>
         <Resources>
             <Resource id="pico_uart" type="linux_serial_link">
-                <Device path="/dev/ttyAMA0"/>
+                <Device path="/dev/ttyAMA0" required="true"/>
                 <Baud value="115200"/>
             </Resource>
             <Resource id="pico_telemetry" type="pico_telemetry">
@@ -19,7 +19,7 @@
                 <Output id="encoder_b" channel="1"/>
             </Resource>
             <Resource id="brain_uart" type="linux_serial_link">
-                <Device path="/dev/ttyAMA5"/>
+                <Device path="/dev/ttyAMA5" required="true"/>
                 <Baud value="115200"/>
                 <DriverEnable gpio="6"/>
             </Resource>

@@ -36,9 +36,14 @@ executable configuration and there is no monolithic robot config header.
   `tx_margin_us` (added to the frame airtime for the transmit deadline,
   default 2000).
 - Dependencies: none.
-- Ownership: opens the device at initialization; open failure is a build
-  warning and a dead link at runtime (an unplugged cable must not stop the
-  robot). Closed on destruction; a half-duplex link drives DE low first.
+- `Device` optionally accepts `required="true"` (default false). When true,
+  inability to open the serial device or its configured DriverEnable GPIO is
+  a build error. The bench startup service uses this to retry until its UARTs
+  and GPIO are accessible. This checks local hardware access, not whether the
+  Brain or Pico is connected or responding.
+- Ownership: opens the device at initialization, with no automatic reopen.
+  With `required="false"`, open failure is a build warning and a dead link at
+  runtime. Closed on destruction; a half-duplex link drives DE low first.
 - Clock: `nowUs()` is the steady clock in microseconds. Transmit windows and
   read timestamps use it, never the pipeline cycle time.
 - Windowed write: `write(bytes, TransmitWindow{not_before_us, deadline_us})`
@@ -68,8 +73,9 @@ executable configuration and there is no monolithic robot config header.
 - Failure behavior: reads report the link closed; consumers surface fault
   states. A write reports `ok = false` with `error` text; `expired` and
   `input_pending` mean nothing was sent. If the DriverEnable GPIO cannot be
-  reached that is a build warning and every write fails; the link never
-  reports success with nothing on the bus.
+  reached, initialization fails for a required device; otherwise it is a build
+  warning and every write fails. The link never reports success with nothing
+  on the bus.
 - Hardware checks: the `gpio` attribute is the sysfs number. Newer kernels
   can offset it (for example 512 + n, so GPIO6 is 518); compare
   `/sys/class/gpio/gpiochip*/base` on the installed kernel. If the runtime is

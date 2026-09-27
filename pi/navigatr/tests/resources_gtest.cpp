@@ -326,3 +326,49 @@ TEST(Resources, SpiTransactionsApplyDeviceSettingsAtomically) {
     EXPECT_EQ(f.spi_state->transfers[2].chip_select, 8);
     EXPECT_EQ(rx[0], 0xAB);
 }
+
+TEST(Resources, OptionalSerialOpenFailureWarnsAndKeepsDeadLink) {
+    for (const char* required : {"", " required=\"false\""}) {
+        Fixture       f;
+        ResourceStore store;
+        std::string   err;
+        const std::string xml =
+            "<Resources><Resource id=\"uart\" type=\"linux_serial_link\">"
+            "<Device path=\"/navigatr-test-missing/uart\"" + std::string(required) +
+            "/></Resource></Resources>";
+        ASSERT_TRUE(f.build(xml.c_str(), store, err)) << err;
+        EXPECT_TRUE(err.empty());
+        ASSERT_EQ(f.warnings.size(), 1u);
+        EXPECT_NE(f.warnings.front().find("/navigatr-test-missing/uart"), std::string::npos);
+        auto link = store.require<SerialLink>(ResourceId{"uart"}, err);
+        ASSERT_NE(link, nullptr) << err;
+        uint8_t byte = 0;
+        EXPECT_TRUE(link->readAvailable(MutableByteSpan{&byte, 1}).closed);
+    }
+}
+
+TEST(Resources, RequiredSerialOpenFailureStopsBuild) {
+    Fixture       f;
+    ResourceStore store;
+    std::string   err;
+    EXPECT_FALSE(f.build(R"(
+<Resources><Resource id="uart" type="linux_serial_link">
+    <Device path="/navigatr-test-missing/uart" required="true"/>
+</Resource></Resources>)", store, err));
+    EXPECT_NE(err.find("required serial device unavailable"), std::string::npos);
+    EXPECT_NE(err.find("/navigatr-test-missing/uart"), std::string::npos);
+    EXPECT_TRUE(f.warnings.empty());
+}
+
+TEST(Resources, SerialRequiredFlagRejectsInvalidBooleanBeforeOpening) {
+    Fixture       f;
+    ResourceStore store;
+    std::string   err;
+    EXPECT_FALSE(f.build(R"(
+<Resources><Resource id="uart" type="linux_serial_link">
+    <Device path="/navigatr-test-missing/uart" required="sometimes"/>
+</Resource></Resources>)", store, err));
+    EXPECT_NE(err.find("required"), std::string::npos);
+    EXPECT_NE(err.find("sometimes"), std::string::npos);
+    EXPECT_TRUE(f.warnings.empty());
+}

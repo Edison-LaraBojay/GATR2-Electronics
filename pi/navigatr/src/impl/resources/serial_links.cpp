@@ -100,14 +100,20 @@ ResourceInstance make_linux_serial_link(const ConfigNode& node,
         err = "linux_serial_link needs <Device path=.../>";
         return ResourceInstance{};
     }
+    bool required = false;
     long baud = 115200;
-    if (!node.child("Baud").getInt("value", 115200, baud, err)) {
+    if (!device.getBool("required", false, required, err) ||
+        !node.child("Baud").getInt("value", 115200, baud, err)) {
         return ResourceInstance{};
     }
 
     auto        link = std::make_shared<LinuxSerialLink>();
     std::string open_err;
     if (!link->port().open(path, static_cast<int>(baud), open_err)) {
+        if (required) {
+            err = device.path() + ": required serial device unavailable: " + open_err;
+            return ResourceInstance{};
+        }
         if (context.warnings != nullptr) {
             context.warnings->push_back(node.path() + ": " + open_err);
         }
@@ -144,10 +150,16 @@ ResourceInstance make_linux_serial_link(const ConfigNode& node,
         timing.margin_us     = margin;
 
         std::string gpio_err;
-        if (!link->enableHalfDuplex(static_cast<int>(gpio), timing, gpio_err) &&
-            context.warnings != nullptr) {
-            context.warnings->push_back(node.path() + ": " + gpio_err +
-                                        "; half-duplex writes will fail");
+        if (!link->enableHalfDuplex(static_cast<int>(gpio), timing, gpio_err)) {
+            if (required) {
+                err = driver_enable.path() + ": required serial driver enable unavailable: " +
+                      gpio_err;
+                return ResourceInstance{};
+            }
+            if (context.warnings != nullptr) {
+                context.warnings->push_back(node.path() + ": " + gpio_err +
+                                            "; half-duplex writes will fail");
+            }
         }
     }
     return ResourceInstance::asContract<SerialLink>(std::move(link));

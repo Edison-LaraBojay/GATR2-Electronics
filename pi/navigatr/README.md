@@ -19,6 +19,8 @@ build commands, camera calibration software, robot and camera geometry, complete
 three-wheel IMU + camera templates, launch commands, and output locations. The
 current robot's two parallel wheels + BNO08X profiles have their own
 [bring-up guide](docs/parallel_wheel_bringup.md).
+For the current VEX IMU bench test, [Pi setup and automatic startup](../../docs/pi_setup.md)
+covers Ethernet access, building, and starting naviGATR on every boot.
 
 These documents describe the implemented runtime and data contracts. Hardware
 integration still needs the checks recorded in the deployment documents.

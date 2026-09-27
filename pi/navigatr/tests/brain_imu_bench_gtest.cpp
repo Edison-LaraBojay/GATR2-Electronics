@@ -8,6 +8,7 @@
 #include "resources/brain_imu_bench.h"
 #include "runtime/register_all.h"
 #include "runtime/system.h"
+#include "tinyxml2/tinyxml2.h"
 
 using namespace navigatr;
 namespace {
@@ -34,7 +35,37 @@ struct BenchRig {
             const auto end = c.xml.find("/>", start);
             c.xml.erase(start, end + 2 - start);
         }
-        system = System::buildFromString(c.xml.c_str(), functions, err);
+        // The bench profile is user-editable. Keep the wire/configuration path,
+        // but give this test fixed geometry and encoder calibration.
+        tinyxml2::XMLDocument doc;
+        if (doc.Parse(c.xml.c_str()) != tinyxml2::XML_SUCCESS) return false;
+        auto* resources = doc.RootElement()->FirstChildElement("Resources");
+        auto* sensors = doc.RootElement()->FirstChildElement("Sensors");
+        if (!resources || !sensors) return false;
+        for (auto* resource = resources->FirstChildElement("Resource"); resource;
+             resource = resource->NextSiblingElement("Resource")) {
+            if (ConfigNode{resource}.attr("id") != "wheel_geometry") continue;
+            for (auto* wheel = resource->FirstChildElement("Wheel"); wheel;
+                 wheel = wheel->NextSiblingElement("Wheel")) {
+                wheel->SetAttribute("radius_m", 0.0254);
+                wheel->SetAttribute("position_x_m", 0.0);
+                wheel->SetAttribute("position_y_m",
+                    ConfigNode{wheel}.attr("id") == "forward_wheel_a" ? 0.15 : -0.15);
+                wheel->SetAttribute("measurement_angle_deg", 0.0);
+                wheel->SetAttribute("direction", "positive");
+            }
+        }
+        for (auto* sensor = sensors->FirstChildElement("Sensor"); sensor;
+             sensor = sensor->NextSiblingElement("Sensor")) {
+            if (ConfigNode{sensor}.attr("type") != "pico_encoder_channel") continue;
+            auto* calibration = sensor->FirstChildElement("Calibration");
+            if (!calibration) return false;
+            calibration->SetAttribute("counts_per_revolution", 4000);
+            calibration->SetAttribute("invert", "false");
+        }
+        tinyxml2::XMLPrinter printer;
+        doc.Print(&printer);
+        system = System::buildFromString(printer.CStr(), functions, err);
         if (!system) { ADD_FAILURE() << err; return false; }
         auto b = system->resources().require<SerialLink>(ResourceId{"brain_uart"}, err);
         auto p = system->resources().require<SerialLink>(ResourceId{"pico_uart"}, err);

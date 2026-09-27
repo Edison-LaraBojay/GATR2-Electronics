@@ -35,6 +35,10 @@ if the Pi link has not connected, so the two pieces can be checked separately.
 The Brain converts PROS clockwise-positive rotation to counterclockwise-positive
 rotation before sending it. The app never commands motors.
 
+USB text logging is off by default (`kUsbDebug = false`) so battery-only use
+does not depend on a terminal draining the Brain's debug output. The Brain
+screen and communiGATR link still run. Enable it only for USB terminal debugging.
+
 ## Pi
 
 From `pi/navigatr` on the Pi, using the updated source:
@@ -53,7 +57,7 @@ is runnable without completing the usual robot template. Edit its values:
 | Pico UART | `/dev/ttyAMA0`, 115200 |
 | Brain UART | `/dev/ttyAMA5`, 115200, driver-enable GPIO 6 |
 | Encoder counts/revolution | 4000 for each wheel |
-| Wheel radius | 0.0254 m: **unmeasured two-inch-diameter default** |
+| Wheel radius | `radius_m` in the XML; confirm against the actual wheel |
 | Wheel lateral offsets | +0.15 m and -0.15 m: **unmeasured defaults** |
 | Wheel direction | `positive` for both; change if forward rolling decreases counts |
 
@@ -68,6 +72,22 @@ If the initial connection window expires, press controller A or the screen's
 placement button after it connects. Stale/missing IMU or wheel data stops motion
 updates. A source restart or calibration change rebases measurement differences;
 it does not replay motion from the gap.
+
+## Start automatically at boot
+
+Follow [Pi setup and automatic startup](../../../docs/pi_setup.md) for the full
+internet provisioning, source transfer, UART setup, service installation, and
+direct Ethernet instructions. After building and confirming the device settings,
+run from `pi/navigatr` on the Pi:
+
+```sh
+sudo bash tools/install_service.sh --user "$USER"
+```
+
+Stop any manually running instance first. The service starts at boot without
+SSH, Ethernet, or internet, and restarts after a process exit. Both bench UART
+devices use `required="true"`: unavailable UART/GPIO access fails startup so the
+service can retry, rather than retaining an unusable connection.
 
 ## Viewer
 
