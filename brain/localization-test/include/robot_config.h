@@ -6,8 +6,12 @@
 
 namespace robot_config {
 
+// Temporary USB-A (Pi) to micro-USB (Brain) bench link. Pair with
+// bench_vex_imu_usb.xml on the Pi. False selects the existing Smart Port driver.
+constexpr bool kUseUsbBench = true;
+
 // V5 Smart Port connected to the Pi's RS-485 link (confirmed for this test).
-constexpr uint8_t kNavigatrPort = 10;
+constexpr uint8_t kNavigatrPort = 4;
 constexpr int32_t kNavigatrBaud = 115200;
 
 // Temporary VEX IMU bench fallback. Pair with bench_vex_imu.xml on the Pi.
@@ -33,7 +37,8 @@ constexpr double kMaxPoseAgeSeconds = 0.25;
 constexpr uint32_t kLoopPeriodMs = 20;
 constexpr uint32_t kDisplayPeriodMs = 100;
 // Leave off for battery-only operation: PROS stdout may wait for buffer space.
-// The Brain screen and Pi link stay active. Enable only for USB terminal debugging.
+// The Brain screen and Pi link stay active. USB bench transport reserves this
+// connection, so terminal logging is available only with kUseUsbBench = false.
 constexpr bool kUsbDebug = false;
 constexpr uint32_t kLogPeriodMs = 1000; // USB terminal, not the Pi serial link
 

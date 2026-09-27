@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- USB-A (Pi) to micro-USB (V5 Brain), using the localization-test USB adapter.
+     Temporary slow bench test: Pico encoders + Brain VEX IMU, paired by Pi
+     arrival time. Robot dimensions below are editable UNMEASURED defaults.
+     No camera, BNO08X dependency, or sideways-motion measurement. -->
+<Configuration id="bench_vex_imu_usb">
+    <ConfigurationName>USB BENCH: VEX IMU + two parallel wheels (approximate timing)</ConfigurationName>
+    <Loop rate_hz="100"/>
+    <Inspection enabled="true" bind="127.0.0.1" port="8765" snapshot_hz="20"/>
+    <Field file="../field.xml"/>
+    <Robot>
+        <Resources>
+            <Resource id="pico_uart" type="linux_serial_link">
+                <Device path="/dev/ttyAMA0" required="true"/>
+                <Baud value="115200"/>
+            </Resource>
+            <Resource id="pico_telemetry" type="pico_telemetry">
+                <Serial resource_id="pico_uart"/>
+                <Output id="encoder_a" channel="0"/>
+                <Output id="encoder_b" channel="1"/>
+            </Resource>
+            <Resource id="brain_usb" type="pros_usb_link">
+                <!-- Auto selects the sole VEX V5 USB user interface. An explicit /dev/serial/by-id/... path is also supported. -->
+                <Device path="auto"/>
+            </Resource>
+            <Resource id="brain_imu" type="brain_imu_bench"/>
+            <Resource id="wheel_geometry" type="wheel_geometry">
+                <!-- UNMEASURED BENCH DEFAULTS: 48 mm diameter, +/-150 mm
+                     lateral offsets. Edit to match the actual robot.
+                     direction is positive if forward travel increases counts. -->
+                <Wheel id="forward_wheel_a" sensor_id="tracking_encoder_a"
+                       radius_m="0.024" position_x_m="0" position_y_m="0.15"
+                       measurement_angle_deg="0" direction="positive"
+                       calibration_status="UNMEASURED_BENCH_DEFAULT"/>
+                <Wheel id="forward_wheel_b" sensor_id="tracking_encoder_b"
+                       radius_m="0.024" position_x_m="0" position_y_m="-0.15"
+                       measurement_angle_deg="0" direction="positive"
+                       calibration_status="UNMEASURED_BENCH_DEFAULT"/>
+            </Resource>
+        </Resources>
+        <Sensors>
+            <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
+                <Source resource_id="pico_telemetry" output_id="encoder_a"/>
+                <Calibration counts_per_revolution="4000" invert="false"/>
+            </Sensor>
+            <Sensor id="tracking_encoder_b" type="pico_encoder_channel">
+                <Source resource_id="pico_telemetry" output_id="encoder_b"/>
+                <Calibration counts_per_revolution="4000" invert="false"/>
+            </Sensor>
+        </Sensors>
+    </Robot>
+    <Pipeline>
+        <CommandCollection type="brain_link">
+            <Serial resource_id="brain_usb"/>
+            <BenchImu resource_id="brain_imu"/>
+        </CommandCollection>
+        <Localization>
+            <Observation id="tracking_motion" type="brain_imu_parallel_bench">
+                <Wheels resource_id="wheel_geometry">
+                    <Use wheel_id="forward_wheel_a"/>
+                    <Use wheel_id="forward_wheel_b"/>
+                </Wheels>
+                <Imu resource_id="brain_imu"/>
+                <Output observation_id="tracking_motion"/>
+            </Observation>
+            <Estimator type="planar_motion_integrator">
+                <Motion observation_id="tracking_motion"/>
+            </Estimator>
+            <History retention_s="5" capacity="1024" max_interpolation_gap_ms="150"/>
+        </Localization>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
+        <TargetResolution type="noop"/>
+        <Publishing type="brain_link">
+            <Serial resource_id="brain_usb"/>
+            <Health fresh_ms="150">
+                <Encoder sensor_id="tracking_encoder_a"/>
+                <Encoder sensor_id="tracking_encoder_b"/>
+            </Health>
+        </Publishing>
+    </Pipeline>
+</Configuration>

@@ -77,6 +77,7 @@ set(NAVIGATR_SOURCES
     src/transport/serial_port.cpp
     src/resources/resource_store.cpp
     src/impl/resources/serial_links.cpp
+    src/impl/resources/pros_usb_link.cpp
     src/impl/resources/pico_telemetry.cpp
     src/impl/resources/field_map_resource.cpp
     src/impl/resources/robot_frame_map.cpp

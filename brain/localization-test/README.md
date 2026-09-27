@@ -5,9 +5,16 @@ the bench or floor. It uses communiGATR to set the robot's field pose and
 read it back, shows live status on the Brain, and optionally logs to the USB terminal.
 Move the robot by hand; this app has no motor control or navigation commands.
 
+The current bench configuration selects USB (`kUseUsbBench = true`). Connect Pi USB-A to
+Brain micro-USB and follow the [USB bench guide](../../pi/navigatr/docs/usb_localization_bench.md)
+with `bench_vex_imu_usb.xml`. Set `kUseUsbBench = false` for the Smart Port
+connection described below. USB text logging is suppressed in USB mode.
+
 The current bench fallback is selected by `kUseVexImuBench = true`: VEX IMU on
-port 1, Pi link on port 10. Follow the [VEX IMU bench guide](../../pi/navigatr/docs/vex_imu_bench.md)
-and use `bench_vex_imu.xml` on the Pi. It uses approximate arrival timing and
+port 1. Use `bench_vex_imu_usb.xml` on the Pi for USB, or `bench_vex_imu.xml`
+for RS-485 with the Smart Port selected by `kNavigatrPort`. See the
+[VEX IMU bench guide](../../pi/navigatr/docs/vex_imu_bench.md) for sensor setup.
+It uses approximate arrival timing and
 editable, unmeasured wheel defaults. The Brain displays the VEX IMU reading
 even before its Pi link connects. For the original BNO08X setup described below,
 set `kUseVexImuBench = false` and rebuild.
@@ -16,7 +23,8 @@ set `kUseVexImuBench = false` and rebuild.
 
 Edit [include/robot_config.h](include/robot_config.h):
 
-- `kNavigatrPort = 10`: the confirmed V5 Smart Port connected to the Pi's RS-485 link.
+- `kUseUsbBench`: selects USB or the existing Smart Port driver.
+- `kNavigatrPort`: the V5 Smart Port connected to the Pi's RS-485 link (unused in USB mode).
 - `kNavigatrBaud = 115200`: must match the Pi's `brain_uart` resource.
 - `kStartX`, `kStartY`, `kStartHeadingDegrees`: where the robot is when you start
   the program. Defaults are `(0, 0, 0)` for a bench test. Position is meters;
@@ -85,7 +93,7 @@ pros terminal
 ## Run the test
 
 1. Place the robot at the configured starting pose and start the Brain program.
-   The app opens port 10 and polls in a background task, including while disabled.
+   The app opens the configured link and polls in a background task, including while disabled.
 2. It waits up to ten seconds for a connected session and submits the starting
    pose once. `Placement: applied` means the Pi acknowledged it and a subsequent
    state confirmed the anchor. Placement and valid sensor data are separate:

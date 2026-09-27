@@ -3,6 +3,7 @@
 #include "impl/resources/cameras.h"
 #include "impl/resources/field_map_resource.h"
 #include "impl/resources/pico_telemetry.h"
+#include "impl/resources/pros_usb_link.h"
 #include "impl/resources/robot_frame_map.h"
 #include "impl/resources/serial_links.h"
 #include "impl/resources/synthetic_rig.h"
@@ -23,6 +24,7 @@ void register_resources(FunctionRegistry& functions) {
         });
     registerOrDie<ResourceMakeFunction>(functions, "linux_serial_link",
                                         &make_linux_serial_link);
+    registerOrDie<ResourceMakeFunction>(functions, "pros_usb_link", &make_pros_usb_link);
     registerOrDie<ResourceMakeFunction>(functions, "memory_link", &make_memory_link);
     registerOrDie<ResourceMakeFunction>(functions, "file_replay_link",
                                         &make_file_replay_link);

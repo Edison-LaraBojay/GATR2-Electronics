@@ -6,14 +6,17 @@
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <type_traits>
 
 #include "communigatr/pros_driver.h"
+#include "usb_bench_driver.h"
 
 namespace {
 
 using communigatr::PlacementResult;
-using communigatr::ProsDriver;
 using communigatr::ProsDriverStatus;
+using BenchDriver = std::conditional_t<robot_config::kUseUsbBench,
+                                      communigatr::UsbBenchDriver, communigatr::ProsDriver>;
 
 constexpr int kButtonTop = 208;
 
@@ -62,7 +65,11 @@ void row(int index, const char* format, Args... args) {
 void display(const ProsDriverStatus& link, const investigatr::InputSnapshot& sample,
              const communigatr::PlacementStatus& placement, const char* message,
              int open_error) {
-    row(0, "Localization test | Smart Port %u", unsigned(robot_config::kNavigatrPort));
+    if constexpr (robot_config::kUseUsbBench) {
+        row(0, "Localization test | USB to Pi");
+    } else {
+        row(0, "Localization test | Smart Port %u", unsigned(robot_config::kNavigatrPort));
+    }
     if (!link.started) {
         row(1, "Serial open failed: errno %d (retrying)", open_error);
     } else if (link.error != communigatr::LinkError::kNone) {
@@ -131,11 +138,11 @@ void runTest() {
     if (vex_imu) {
         config.client.bench_imu = [vex_imu] { return readBenchImu(*vex_imu); };
     }
-    ProsDriver driver(config);
+    BenchDriver driver(config);
     pros::Controller controller(pros::E_CONTROLLER_MASTER);
 
     communigatr::PlacementTicket ticket = 0;
-    const double startup_end = ProsDriver::now() + robot_config::kStartupWaitSeconds;
+    const double startup_end = BenchDriver::now() + robot_config::kStartupWaitSeconds;
     bool startup_wait = true;
     double next_open = 0;
     int open_error = 0;
@@ -150,7 +157,7 @@ void runTest() {
     pros::screen::erase();
 
     while (true) {
-        const double now = ProsDriver::now();
+        const double now = BenchDriver::now();
         auto link = driver.status();
         if (!link.started && now >= next_open) {
             if (!driver.start()) {
@@ -201,7 +208,7 @@ void runTest() {
         }
 
         const auto placement = driver.placementStatus(ticket);
-        const auto sample = driver.latest(ProsDriver::now());
+        const auto sample = driver.latest(BenchDriver::now());
         if (placement.state == PlacementResult::kApplied) {
             message = livePose(sample) ? "Push / rotate robot to check pose"
                                        : "Waiting for fresh pose / link";
@@ -226,7 +233,8 @@ void runTest() {
             }
             last_display = tick;
         }
-        if (robot_config::kUsbDebug && tick - last_log >= robot_config::kLogPeriodMs) {
+        if (!robot_config::kUseUsbBench && robot_config::kUsbDebug &&
+            tick - last_log >= robot_config::kLogPeriodMs) {
             log(link, sample, placement);
             if (vex_imu) {
                 const auto imu_sample = readBenchImu(*vex_imu);
