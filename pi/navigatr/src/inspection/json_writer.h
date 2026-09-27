@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace navigatr
@@ -59,16 +60,12 @@ public:
         out_ += b ? "true" : "false";
         afterValue();
     }
-    void value(int v) { value(static_cast<int64_t>(v)); }
-    void value(unsigned v) { value(static_cast<uint64_t>(v)); }
-    void value(long v) { value(static_cast<int64_t>(v)); }
-    void value(unsigned long v) { value(static_cast<uint64_t>(v)); }
-    void value(int64_t v) {
-        separate();
-        out_ += std::to_string(v);
-        afterValue();
-    }
-    void value(uint64_t v) {
+    // Fixed-width integers may alias long or long long, depending on the ABI.
+    // One integral overload handles either without duplicate declarations.
+    template <typename Integer,
+              std::enable_if_t<std::is_integral_v<Integer> &&
+                                   !std::is_same_v<Integer, bool>, int> = 0>
+    void value(Integer v) {
         separate();
         out_ += std::to_string(v);
         afterValue();

@@ -326,6 +326,37 @@ TEST(JsonWriter, EscapesAndNeverEmitsNonFiniteNumbers) {
     EXPECT_EQ(out.find(",,"), std::string::npos);
 }
 
+TEST(JsonWriter, IntegralTypesAndAliasesPreserveExactValues) {
+    JsonWriter w;
+    w.beginArray();
+    w.value(static_cast<signed char>(-8));
+    w.value(static_cast<unsigned char>(250));
+    w.value(static_cast<short>(-32000));
+    w.value(static_cast<unsigned short>(65000));
+    w.value(-123);
+    w.value(4294967295U);
+    w.value(-123456L);
+    w.value(123456UL);
+    w.value(-9223372036854775807LL - 1);
+    w.value(18446744073709551615ULL);
+    w.value(std::numeric_limits<int64_t>::min());
+    w.value(std::numeric_limits<int64_t>::max());
+    w.value(std::numeric_limits<uint64_t>::max());
+    w.value(std::size_t{42});
+    w.value(true);
+    w.value(false);
+    w.value(1.5f);
+    w.value(2.5);
+    w.value("literal");
+    w.value(std::string("string"));
+    w.endArray();
+    EXPECT_EQ(w.str(),
+              "[-8,250,-32000,65000,-123,4294967295,-123456,123456,"
+              "-9223372036854775808,18446744073709551615,"
+              "-9223372036854775808,9223372036854775807,18446744073709551615,"
+              "42,true,false,1.5,2.5,\"literal\",\"string\"]");
+}
+
 TEST(InspectionDocuments, HelloCarriesConfigurationFieldAndCameras) {
     FunctionRegistry functions;
     registerAll(functions);
