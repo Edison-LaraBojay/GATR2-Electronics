@@ -7,7 +7,10 @@ or path planner is used.
 
 This mode pairs the latest readings by their arrival on the Pi. It does not
 synchronize the Brain and Pico clocks. Use slow translation and turns; delay
-and jitter can create position error. Sideways motion is assumed zero.
+and jitter can create position error. The RS-485 profile below describes two
+parallel wheels and assumes zero sideways motion. The
+[USB bench profile](usb_localization_bench.md) describes one forward wheel on
+port 0 and one sideways wheel on port 1, and measures both translation axes.
 
 ## Brain
 
@@ -16,7 +19,8 @@ Use the existing `brain/localization-test` PROS project. Its
 
 - `kUseVexImuBench = true`.
 - VEX IMU on Smart Port **1**.
-- Pi link on Smart Port **10**.
+- Pi link on the Smart Port selected by `kNavigatrPort` for RS-485, or USB when
+  `kUseUsbBench = true`.
 - Initial field position and heading in `kStartX`, `kStartY`, and
   `kStartHeadingDegrees`.
 

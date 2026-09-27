@@ -96,7 +96,7 @@ set(NAVIGATR_SOURCES
     src/impl/commands/brain_link_commands.cpp
     src/impl/commands/register_commands.cpp
     src/impl/localization/tracking_wheel_motion.cpp
-    src/impl/localization/brain_imu_parallel_bench.cpp
+    src/impl/localization/brain_imu_wheel_bench.cpp
     src/impl/localization/imu_heading_increment.cpp
     src/impl/localization/attitude_reference.cpp
     src/impl/localization/motion_step.cpp

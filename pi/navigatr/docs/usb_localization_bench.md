@@ -2,7 +2,8 @@
 
 Connect Pi USB-A to V5 Brain micro-USB with a data cable. Keep the Brain powered
 by its V5 battery. This bypasses the HAT's RS-485 circuit. The Pico still supplies
-two parallel tracking wheels over the existing UART; the VEX IMU stays on Brain
+one forward tracking wheel (port 0) and one sideways wheel (port 1) over the
+existing UART; the VEX IMU stays on Brain
 Smart Port 1. Placement, pose replies, localization, and the 3D viewer use the
 existing naviGATR flow. This test has no motor control.
 
@@ -62,10 +63,24 @@ Do not use the upload/system interface or assume `ttyACM0`/`ttyACM1` numbering i
 stable. This resource has no `DriverEnable`. After editing the XML, run
 `sudo systemctl restart navigatr`.
 
-The new profile retains `/dev/ttyAMA0` for the Pico. Its wheel radius, offsets,
-directions, and counts per revolution are editable bench defaults. Parallel
-wheels assume zero sideways motion; the VEX IMU bench path supplies heading,
-not live pitch/roll. See the [VEX IMU bench guide](vex_imu_bench.md) for calibration.
+The profile retains `/dev/ttyAMA0` for the Pico and uses `brain_imu_planar_bench`
+to resolve both translation axes using the configured wheel directions and IMU
+rotation. Port 0 measures forward (+robot x, angle 0 degrees); port 1 measures
+leftward (+robot y, angle 90 degrees). Both contribute full measured travel,
+without averaging the forward and sideways distances together.
+
+Wheel radius, offsets, directions, and counts per revolution are editable bench
+defaults. The current radius is 0.024 m, with the forward wheel 0.15 m left of
+the origin and the sideways wheel 0.15 m ahead. Measure actual wheel offsets
+before judging position during turns: the model removes wheel travel caused by
+rotation around the robot origin. `calibration_status` is only a reader annotation.
+Set a wheel's `direction="negative"` if counts decrease during its positive rolling
+direction. The VEX IMU bench path supplies heading, not live pitch/roll.
+
+With heading placed at zero and the IMU held still, spin only port 0: field x
+should change. Spin only port 1: field y should change. Reverse each wheel to
+check both signs. At other headings, these body directions rotate into the field
+axes. Test slowly: this bench adapter pairs sensor readings by Pi arrival time.
 
 ## Placement and viewer
 
@@ -100,4 +115,7 @@ make poses stale; reconnecting does not automatically reapply a previous placeme
 
 To return to RS-485, set `kUseUsbBench = false`, check `kNavigatrPort`, rebuild and
 upload the Brain, and install the service with `bench_vex_imu.xml` again. Preserve
-that profile's Pi-specific GPIO number and calibration values.
+that profile's Pi-specific GPIO number and calibration values. That supplied
+RS-485 profile describes two parallel wheels; for this perpendicular mounting,
+also select `brain_imu_planar_bench` and copy the USB profile's wheel geometry
+and wheel references. Transport selection does not change physical wheel geometry.

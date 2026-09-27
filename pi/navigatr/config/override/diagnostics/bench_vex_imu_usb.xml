@@ -2,9 +2,10 @@
 <!-- USB-A (Pi) to micro-USB (V5 Brain), using the localization-test USB adapter.
      Temporary slow bench test: Pico encoders + Brain VEX IMU, paired by Pi
      arrival time. Robot dimensions below are editable UNMEASURED defaults.
-     No camera, BNO08X dependency, or sideways-motion measurement. -->
+     Port 0 rolls forward/backward; port 1 rolls sideways.
+     No camera or BNO08X dependency. -->
 <Configuration id="bench_vex_imu_usb">
-    <ConfigurationName>USB BENCH: VEX IMU + two parallel wheels (approximate timing)</ConfigurationName>
+    <ConfigurationName>USB BENCH: VEX IMU + forward and sideways wheels (approximate timing)</ConfigurationName>
     <Loop rate_hz="100"/>
     <Inspection enabled="true" bind="127.0.0.1" port="8765" snapshot_hz="20"/>
     <Field file="../field.xml"/>
@@ -25,16 +26,19 @@
             </Resource>
             <Resource id="brain_imu" type="brain_imu_bench"/>
             <Resource id="wheel_geometry" type="wheel_geometry">
-                <!-- UNMEASURED BENCH DEFAULTS: 48 mm diameter, +/-150 mm
-                     lateral offsets. Edit to match the actual robot.
-                     direction is positive if forward travel increases counts. -->
+                <!-- UNMEASURED BENCH DEFAULTS: 48 mm diameter; forward wheel
+                     150 mm left of origin, sideways wheel 150 mm ahead of origin.
+                     Measure these offsets before evaluating in-place turns.
+                     Robot +x is forward, +y is left. Positive counts must mean
+                     forward for port 0 and leftward for port 1; otherwise use
+                     direction="negative" on the corresponding Wheel. -->
                 <Wheel id="forward_wheel_a" sensor_id="tracking_encoder_a"
                        radius_m="0.024" position_x_m="0" position_y_m="0.15"
                        measurement_angle_deg="0" direction="positive"
                        calibration_status="UNMEASURED_BENCH_DEFAULT"/>
-                <Wheel id="forward_wheel_b" sensor_id="tracking_encoder_b"
-                       radius_m="0.024" position_x_m="0" position_y_m="-0.15"
-                       measurement_angle_deg="0" direction="positive"
+                <Wheel id="sideways_wheel_b" sensor_id="tracking_encoder_b"
+                       radius_m="0.024" position_x_m="0.15" position_y_m="0"
+                       measurement_angle_deg="90" direction="positive"
                        calibration_status="UNMEASURED_BENCH_DEFAULT"/>
             </Resource>
         </Resources>
@@ -55,10 +59,10 @@
             <BenchImu resource_id="brain_imu"/>
         </CommandCollection>
         <Localization>
-            <Observation id="tracking_motion" type="brain_imu_parallel_bench">
+            <Observation id="tracking_motion" type="brain_imu_planar_bench">
                 <Wheels resource_id="wheel_geometry">
                     <Use wheel_id="forward_wheel_a"/>
-                    <Use wheel_id="forward_wheel_b"/>
+                    <Use wheel_id="sideways_wheel_b"/>
                 </Wheels>
                 <Imu resource_id="brain_imu"/>
                 <Output observation_id="tracking_motion"/>

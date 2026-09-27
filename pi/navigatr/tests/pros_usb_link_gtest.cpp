@@ -238,12 +238,13 @@ TEST(ProsUsbLink, UsbProfileHandshakeImuPlacementMotionAndInspectionUseExistingP
         return reply;
     };
     uint8_t sequence = 0;
-    const auto wheels = [&](int count) {
+    const auto wheels = [&](int forward, int sideways) {
         gatr2::SensorSample sample{};
         sample.seq = sequence++;
         sample.stamp_ms = static_cast<uint32_t>(now);
         sample.mask = gatr2::kSensorEnc0 | gatr2::kSensorEnc1;
-        sample.enc[0] = sample.enc[1] = count;
+        sample.enc[0] = forward;
+        sample.enc[1] = sideways;
         std::vector<uint8_t> frame(gatr2::kMaxFrameLen);
         frame.resize(gatr2::encodeSensorFrame(sample, frame.data(), gatr2::kMaxFrameLen));
         pico->input().feed(frame);
@@ -260,7 +261,7 @@ TEST(ProsUsbLink, UsbProfileHandshakeImuPlacementMotionAndInspectionUseExistingP
     imu.session = session;
     imu.imu_flags = gatr2::kBenchImuValid;
     imu.imu_stamp_ms = 100;
-    wheels(0);
+    wheels(0, 0);
     EXPECT_EQ(request(imu).result, gatr2::kResultOk);
     gatr2::BrainRequest place;
     place.op = gatr2::kOpSetPose;
@@ -268,17 +269,25 @@ TEST(ProsUsbLink, UsbProfileHandshakeImuPlacementMotionAndInspectionUseExistingP
     place.session = session;
     place.x_mm = 1000;
     request(place);
-    wheels(0);
+    wheels(0, 0);
     imu.request_id = 4;
     imu.imu_stamp_ms = 120;
     request(imu);
-    wheels(4000);
+    wheels(4000, 0);
     imu.request_id = 5;
     imu.imu_stamp_ms = 140;
     const auto state = request(imu);
     EXPECT_EQ(state.result, gatr2::kResultOk);
     EXPECT_NE(state.state.robot_flags & gatr2::kRobotPoseValid, 0);
     EXPECT_GT(state.state.x_mm, 1100);
+    EXPECT_EQ(state.state.y_mm, 0);
+    wheels(4000, 4000);
+    imu.request_id = 6;
+    imu.imu_stamp_ms = 160;
+    const auto sideways = request(imu);
+    EXPECT_EQ(sideways.result, gatr2::kResultOk);
+    EXPECT_EQ(sideways.state.x_mm, state.state.x_mm);
+    EXPECT_GT(sideways.state.y_mm, 100);
     const auto snapshot = snapshotDocument(*system, InspectionServiceStats{}, hostTime(now));
     EXPECT_NE(snapshot.find("arrival-time"), std::string::npos);
     EXPECT_NE(snapshot.find("brain_usb"), std::string::npos);
