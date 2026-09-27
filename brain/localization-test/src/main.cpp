@@ -226,7 +226,7 @@ void runTest() {
             }
             last_display = tick;
         }
-        if (tick - last_log >= robot_config::kLogPeriodMs) {
+        if (robot_config::kUsbDebug && tick - last_log >= robot_config::kLogPeriodMs) {
             log(link, sample, placement);
             if (vex_imu) {
                 const auto imu_sample = readBenchImu(*vex_imu);

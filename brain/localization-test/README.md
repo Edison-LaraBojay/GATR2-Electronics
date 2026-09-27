@@ -2,7 +2,7 @@
 
 A standalone PROS app for checking naviGATR localization with the robot on
 the bench or floor. It uses communiGATR to set the robot's field pose and
-read it back, shows live status on the Brain, and logs to the USB terminal.
+read it back, shows live status on the Brain, and optionally logs to the USB terminal.
 Move the robot by hand; this app has no motor control or navigation commands.
 
 The current bench fallback is selected by `kUseVexImuBench = true`: VEX IMU on
@@ -74,7 +74,9 @@ firmware libraries and build output are ignored by Git. The app compiles the
 shared Brain libraries directly from this repository, so keep its folder here.
 
 The example upload uses Brain program slot **2**; choose another slot if needed.
-Start `localization-test` on the Brain. For the text output over USB:
+Start `localization-test` on the Brain. USB logs default off for battery-only use;
+the Brain display and Pi link stay active. For text output, set `kUsbDebug = true`
+in `robot_config.h`, rebuild/upload, and connect a USB terminal:
 
 ```sh
 pros terminal
@@ -94,7 +96,7 @@ pros terminal
    **controller A** or tap the **bottom screen button**. This changes the Pi's
    field anchor; it does not recalibrate the IMU or reset encoder hardware.
 
-The USB terminal prints one status line per second. `LIVE` requires a connected
+When enabled, USB logging runs once per second. `LIVE` requires a connected
 link, valid pose and measurement age at most 250 ms. A cached pose can still be
 displayed as `STALE`; its numbers are not a current measurement. Missing poses
 show dashes, not fabricated zeroes.

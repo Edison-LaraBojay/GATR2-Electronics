@@ -32,6 +32,9 @@ constexpr double kMaxPoseAgeSeconds = 0.25;
 
 constexpr uint32_t kLoopPeriodMs = 20;
 constexpr uint32_t kDisplayPeriodMs = 100;
+// Leave off for battery-only operation: PROS stdout may wait for buffer space.
+// The Brain screen and Pi link stay active. Enable only for USB terminal debugging.
+constexpr bool kUsbDebug = false;
 constexpr uint32_t kLogPeriodMs = 1000; // USB terminal, not the Pi serial link
 
 static_assert(kNavigatrPort >= 1 && kNavigatrPort <= 21);
