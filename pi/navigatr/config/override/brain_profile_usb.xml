@@ -31,6 +31,10 @@
                 <Output id="encoder_1" channel="1"/>
                 <Output id="encoder_2" channel="2"/>
                 <Output id="imu_0" channel="imu"/>
+                <!-- optional Pico diagnostic frames (pins, IMU driver counters, link
+                     errors) for the viewer; older firmware answers UnknownOp and
+                     the viewer shows them unavailable. Never used by localization. -->
+                <Diagnostics hz="1"/>
             </Resource>
             <Resource id="brain_usb" type="pros_usb_link">
                 <!-- auto selects the sole V5 Brain USB user interface; an

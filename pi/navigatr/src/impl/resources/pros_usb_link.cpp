@@ -7,7 +7,8 @@
 #include <fstream>
 #include <thread>
 
-#include "common/frames.h"
+#include "diagnostics/hub.h"
+#include "translaGATR/frames.h"
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <cerrno>
@@ -22,7 +23,7 @@ namespace navigatr
 namespace
 {
 constexpr std::size_t kPrefixLength = 4;
-constexpr std::size_t kLineLimit = kPrefixLength + 2 * gatr2::kMaxFrameLen + 256;
+constexpr std::size_t kLineLimit = kPrefixLength + 2 * translagatr::kMaxFrameLen + 256;
 constexpr int64_t kRetryUs = 1'000'000;
 
 int hexDigit(char c) {
@@ -205,20 +206,33 @@ std::string findProsUsbUserPort(const std::string& tty_root, const std::string& 
     return error ? std::string{} : selected;
 }
 
+void ProsUsbLink::reject(const char* reason) {
+    ++rejected_lines_;
+    if (monitor_ != nullptr) {
+        monitor_->rejected(reason);
+    }
+}
+
 void ProsUsbLink::finishLine() {
     if (!line_.empty() && line_.back() == '\r') line_.pop_back();
     const std::size_t marker = line_.rfind("NG1:");
-    if (marker == std::string::npos) return;
+    if (marker == std::string::npos) {
+        if (!line_.empty()) ++console_lines_;
+        return;
+    }
     const std::size_t start = marker + kPrefixLength;
     const std::size_t digits = line_.size() - start;
-    if (digits == 0 || digits % 2 != 0 || digits > 2 * gatr2::kMaxFrameLen) return;
-    std::array<uint8_t, gatr2::kMaxFrameLen> bytes{};
+    if (digits == 0) return reject("NG1 line without bytes");
+    if (digits % 2 != 0) return reject("NG1 line with odd hex digits");
+    if (digits > 2 * translagatr::kMaxFrameLen) return reject("NG1 line longer than a frame");
+    std::array<uint8_t, translagatr::kMaxFrameLen> bytes{};
     for (std::size_t i = 0; i < digits; i += 2) {
         const int high = hexDigit(line_[start + i]);
         const int low = hexDigit(line_[start + i + 1]);
-        if (high < 0 || low < 0) return;
+        if (high < 0 || low < 0) return reject("NG1 line with a non-hex digit");
         bytes[i / 2] = static_cast<uint8_t>((high << 4) | low);
     }
+    ++framed_lines_;
     decoded_.insert(decoded_.end(), bytes.begin(), bytes.begin() + digits / 2);
 }
 
@@ -231,6 +245,7 @@ void ProsUsbLink::acceptByte(uint8_t byte) {
         if (line_.size() >= kLineLimit) {
             line_.clear();
             discarding_ = true;
+            reject("USB line over the length limit");
         } else {
             line_.push_back(static_cast<char>(byte));
         }
@@ -262,7 +277,7 @@ SerialReadResult ProsUsbLink::readAvailable(MutableByteSpan destination) {
 SerialWriteResult ProsUsbLink::write(ByteSpan source) { return write(source, TransmitWindow{}); }
 
 SerialWriteResult ProsUsbLink::write(ByteSpan source, const TransmitWindow& window) {
-    if (source.size == 0 || source.size > gatr2::kMaxFrameLen)
+    if (source.size == 0 || source.size > translagatr::kMaxFrameLen)
         return {false, false, false, false, "USB frame size invalid"};
     static constexpr char hex[] = "0123456789ABCDEF";
     std::string line = "NG1:";
@@ -277,7 +292,7 @@ SerialWriteResult ProsUsbLink::write(ByteSpan source, const TransmitWindow& wind
 
 bool ProsUsbLink::inputPending() { return !decoded_.empty() || transport_->inputPending(); }
 
-ResourceInstance make_pros_usb_link(const ConfigNode& node, ResourceInitializationContext&,
+ResourceInstance make_pros_usb_link(const ConfigNode& node, ResourceInitializationContext& context,
                                     std::string& err) {
     const std::string path = node.child("Device").attr("path");
     if (path.empty()) {
@@ -289,6 +304,10 @@ ResourceInstance make_pros_usb_link(const ConfigNode& node, ResourceInitializati
         return {};
     }
     auto transport = std::make_shared<ReconnectingUsbPort>(path);
-    return ResourceInstance::asContract<SerialLink>(std::make_shared<ProsUsbLink>(std::move(transport)));
+    auto link      = std::make_shared<ProsUsbLink>(std::move(transport));
+    if (context.diagnostics != nullptr && !node.attr("id").empty()) {
+        link->attachMonitor(context.diagnostics->links().monitor(node.attr("id"), "brain_usb"));
+    }
+    return ResourceInstance::asContract<SerialLink>(std::move(link));
 }
 } // namespace navigatr

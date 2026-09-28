@@ -12,8 +12,15 @@
 //       <Stillness window_ms="2000" samples="20" still_travel_m="0.001"
 //                  still_rate_dps="1" evidence_gap_ms="100"/>        optional
 //       <Freshness max_age_ms="200"/>                                 optional
+//       <Attitude observation_id="vex_attitude"/>                     optional
 //       <Output observation_id="tracking_motion"/>
 //   </Observation>
+//
+// Attitude publishes the Brain VEX IMU tilt from TELEMETRY (robot frame,
+// reference "gravity", no yaw) once per new report, measured at its Pi
+// arrival time, for an estimator's <Attitude> fold. It never changes the
+// motion output; without TELEMETRY, or for reports without the attitude
+// group, nothing is published and the fold ages the last tilt out.
 //
 // Latest wheels and the latest VEX rotation pair by Pi arrival time. One
 // step spans at most max_age_ms: a sample older than that, or two emitted
@@ -80,8 +87,12 @@ private:
                           const std::array<const EncoderSample*, 2>& samples, MonotonicTime now);
     void lostMotion(const std::string& why);
 
+    void publishAttitude(RobotObservationMap& out);
+
     ObservationFunctionId id_;
     ObservationId         output_;
+    ObservationId         attitude_output_;        // empty = no attitude output
+    uint64_t              attitude_sequence_ = 0;  // newest published report
     std::string           type_;
     std::string note_ = "bench: waiting for VEX IMU and encoders; arrival-time approximation";
     std::shared_ptr<BrainImuBench> imu_;

@@ -14,7 +14,7 @@ LinkSnapshot snapshotOf(const Client& client, Seconds now) {
     const StateSample& sample = client.state();
     s.state_valid             = sample.valid;
     if (sample.valid) {
-        s.localized       = (sample.state.robot_flags & gatr2::kRobotLocalized) != 0;
+        s.localized       = (sample.state.robot_flags & translagatr::kRobotLocalized) != 0;
         s.health          = sample.state.health;
         s.calibration     = sample.state.calibration;
         s.odometry_epoch  = sample.state.odometry_epoch;
@@ -62,8 +62,8 @@ namespace
 {
 
 bool calibrating(uint8_t c) {
-    return c == gatr2::kCalibrationRunning || c == gatr2::kCalibrationWaitingStill ||
-           c == gatr2::kCalibrationWaitingData;
+    return c == translagatr::kCalibrationRunning || c == translagatr::kCalibrationWaitingStill ||
+           c == translagatr::kCalibrationWaitingData;
 }
 
 } // namespace
@@ -126,15 +126,15 @@ void LinkEvents::compareStates(const LinkSnapshot& p, const LinkSnapshot& s, Sec
         add(LinkEvent::kOdometryReset, now);
     }
 
-    const bool pico_was = (p.health & gatr2::kHealthPicoLink) != 0;
-    const bool pico_is  = (s.health & gatr2::kHealthPicoLink) != 0;
+    const bool pico_was = (p.health & translagatr::kHealthPicoLink) != 0;
+    const bool pico_is  = (s.health & translagatr::kHealthPicoLink) != 0;
     if (pico_was && !pico_is) {
         add(LinkEvent::kPicoLost, now);
     } else if (!pico_was && pico_is) {
         add(LinkEvent::kPicoRestored, now);
     }
-    const bool failed_was = (p.health & gatr2::kHealthImuFailed) != 0;
-    const bool failed_is  = (s.health & gatr2::kHealthImuFailed) != 0;
+    const bool failed_was = (p.health & translagatr::kHealthImuFailed) != 0;
+    const bool failed_is  = (s.health & translagatr::kHealthImuFailed) != 0;
     if (!failed_was && failed_is) {
         add(LinkEvent::kImuFailed, now);
     } else if (failed_was && !failed_is) {
@@ -144,9 +144,9 @@ void LinkEvents::compareStates(const LinkSnapshot& p, const LinkSnapshot& s, Sec
     if (s.calibration != p.calibration) {
         if (calibrating(s.calibration) && !calibrating(p.calibration)) {
             add(LinkEvent::kCalibrating, now);
-        } else if (s.calibration == gatr2::kCalibrationDone) {
+        } else if (s.calibration == translagatr::kCalibrationDone) {
             add(LinkEvent::kCalibrated, now);
-        } else if (s.calibration == gatr2::kCalibrationFailed) {
+        } else if (s.calibration == translagatr::kCalibrationFailed) {
             add(LinkEvent::kCalibrationFailed, now);
         }
     }

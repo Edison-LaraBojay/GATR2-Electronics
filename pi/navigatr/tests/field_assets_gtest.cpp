@@ -497,7 +497,7 @@ TEST(FieldAssets, CheckedInFieldReferencesMatchTheField) {
     std::string      err;
     ASSERT_TRUE(loadFieldMapFile(kConfigDir + "/override/field.xml", map, err)) << err;
     ASSERT_TRUE(buildFieldMapDocument(map, doc, err)) << err;
-    ASSERT_TRUE(fieldReferencesHeader(doc, "pi/navigatr/config/override/field.xml", header, err))
+    ASSERT_TRUE(fieldReferencesHeader(doc, "pi/naviGATR/config/override/field.xml", header, err))
         << err;
 
     std::ifstream in(NAVIGATR_FIELD_REFERENCES_H, std::ios::binary);
@@ -505,7 +505,7 @@ TEST(FieldAssets, CheckedInFieldReferencesMatchTheField) {
     const std::string checked_in((std::istreambuf_iterator<char>(in)),
                                  std::istreambuf_iterator<char>());
     EXPECT_EQ(header, checked_in)
-        << "brain/testing/include/field_references.h is stale; run "
+        << "brain/operaGATR/include/field_references.h is stale; run "
            "cmake --build <build dir> --target field_references";
 
     for (const LandmarkDecl& l : map.landmarks) {

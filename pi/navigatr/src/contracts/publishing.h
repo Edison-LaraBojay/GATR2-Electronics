@@ -9,7 +9,7 @@
 #include <memory>
 #include <optional>
 
-#include "common/frames.h"
+#include "translaGATR/frames.h"
 #include "config/config_node.h"
 #include "contracts/slot_init.h"
 #include "core/diagnostics.h"
@@ -42,7 +42,7 @@ struct PublishingOutput {
 
     // The state block a Brain GET_STATE would read now, for inspection. The
     // brain_link publisher fills it every cycle; others leave it empty.
-    std::optional<gatr2::BrainState> brain_state;
+    std::optional<translagatr::BrainState> brain_state;
 };
 
 class Publishing

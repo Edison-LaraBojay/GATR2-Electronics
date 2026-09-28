@@ -84,6 +84,8 @@ struct ProsLinkStatus {
     bool                 heading_valid = false;
     investigatr::Radians heading       = 0;
 
+    bool telemetry_unsupported = false; // the Pi refused TELEMETRY this session
+
     FieldSyncStatus field_sync;
     uint32_t        field_generation = 0; // published map and estimate pairs, 0 = none
     uint32_t        map_id           = 0; // published map
@@ -125,7 +127,7 @@ public:
     PlacementTicket place(const investigatr::Pose& pose);
     PlacementStatus placement(PlacementTicket ticket) const;
 
-    // Pi control, see gatr2::ControlAction. 0 when refused or busy. The Pi
+    // Pi control, see translagatr::ControlAction. 0 when refused or busy. The Pi
     // checks the stationary condition.
     ControlTicket recalibrate();
     ControlTicket reinitialize();
@@ -147,6 +149,11 @@ public:
     bool         setProfile(const RobotProfile& profile);
     RobotProfile profile() const;
     bool         resubmitProfile();
+
+    // Robot telemetry for Pi display and recording, see
+    // Client::reportTelemetry. Copies it under the bounded lock; false when
+    // dropped or busy.
+    bool reportTelemetry(const translagatr::BrainTelemetry& telemetry);
 
 private:
     class Lock;

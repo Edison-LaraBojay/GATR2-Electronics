@@ -47,7 +47,7 @@ RobotProfile threeWheelPico() {
 }
 
 void expectReason(const RobotProfile& p, uint8_t reason, uint8_t detail = 0) {
-    gatr2::RobotProfileDoc doc;
+    translagatr::RobotProfileDoc doc;
     uint8_t                r = 0;
     uint8_t                d = 0;
     EXPECT_FALSE(toProfileDoc(p, doc, r, d));
@@ -62,12 +62,12 @@ void expectReason(const RobotProfile& p, uint8_t reason, uint8_t detail = 0) {
 } // namespace
 
 TEST(RobotProfile, PerpendicularWheelsWithVexImuConvertToWireUnits) {
-    gatr2::RobotProfileDoc doc;
+    translagatr::RobotProfileDoc doc;
     uint8_t                reason = 0xFF;
     uint8_t                detail = 0xFF;
     ASSERT_TRUE(toProfileDoc(perpendicularVex(), doc, reason, detail));
-    EXPECT_EQ(reason, gatr2::kProfileReasonNone);
-    EXPECT_EQ(doc.topology, gatr2::kTopologyTwoWheelImu);
+    EXPECT_EQ(reason, translagatr::kProfileReasonNone);
+    EXPECT_EQ(doc.topology, translagatr::kTopologyTwoWheelImu);
     ASSERT_EQ(doc.wheel_count, 2);
     EXPECT_EQ(doc.wheels[0].encoder_port, 0);
     EXPECT_EQ(doc.wheels[0].radius_um, 24000u);
@@ -79,7 +79,7 @@ TEST(RobotProfile, PerpendicularWheelsWithVexImuConvertToWireUnits) {
     EXPECT_EQ(doc.wheels[1].x_um, -80000);
     EXPECT_EQ(doc.wheels[1].angle_mdeg, 90000);
     EXPECT_EQ(doc.wheels[1].flags, 0);
-    EXPECT_EQ(doc.imu_source, gatr2::kImuSourceBrainVex);
+    EXPECT_EQ(doc.imu_source, translagatr::kImuSourceBrainVex);
     EXPECT_EQ(doc.vex_smart_port, 1);
     EXPECT_EQ(doc.imu_port, 0);
     EXPECT_EQ(doc.imu_flags, 0);
@@ -97,7 +97,7 @@ TEST(RobotProfile, RoundsAndWrapsAnglesAndSetsFlags) {
     p.wheels[1].angle       = 2 * kPi;    // 0
     p.wheels[2].angle       = 1.5 * kPi;  // -90 deg
     p.cameras[0].yaw        = -kPi;
-    gatr2::RobotProfileDoc doc;
+    translagatr::RobotProfileDoc doc;
     uint8_t                reason = 0;
     uint8_t                detail = 0;
     ASSERT_TRUE(toProfileDoc(p, doc, reason, detail)) << profileReasonName(reason);
@@ -105,10 +105,10 @@ TEST(RobotProfile, RoundsAndWrapsAnglesAndSetsFlags) {
     EXPECT_EQ(doc.wheels[0].y_um, 0);
     EXPECT_EQ(doc.wheels[0].angle_mdeg, 180000);
     EXPECT_EQ(doc.wheels[1].angle_mdeg, 0);
-    EXPECT_EQ(doc.wheels[1].flags, gatr2::kWheelReversed);
+    EXPECT_EQ(doc.wheels[1].flags, translagatr::kWheelReversed);
     EXPECT_EQ(doc.wheels[2].angle_mdeg, -90000);
-    EXPECT_EQ(doc.imu_flags, gatr2::kImuInvert);
-    EXPECT_EQ(doc.imu_source, gatr2::kImuSourcePico);
+    EXPECT_EQ(doc.imu_flags, translagatr::kImuInvert);
+    EXPECT_EQ(doc.imu_source, translagatr::kImuSourcePico);
     ASSERT_EQ(doc.camera_count, 1);
     EXPECT_EQ(doc.cameras[0].z_um, 300000);
     EXPECT_EQ(doc.cameras[0].pitch_mdeg, static_cast<int32_t>(std::lround(-0.2 * 180000 / kPi)));
@@ -122,13 +122,13 @@ TEST(RobotProfile, EncoderGeometryAndEmpiricalValuesStaySeparate) {
     p.calibration.window        = 3.0;
     p.calibration.still_rate    = 0.5 * kPi / 180.0; // 0.5 deg/s
     p.calibration.still_travel  = 0.0004;
-    gatr2::RobotProfileDoc doc;
+    translagatr::RobotProfileDoc doc;
     uint8_t                reason = 0;
     uint8_t                detail = 0;
     ASSERT_TRUE(toProfileDoc(p, doc, reason, detail)) << profileReasonName(reason);
     EXPECT_EQ(doc.wheels[0].gear_micro, 2500000u);
-    EXPECT_EQ(doc.wheels[0].travel_scale_ppm, gatr2::kUnitMicro);
-    EXPECT_EQ(doc.wheels[1].gear_micro, gatr2::kUnitMicro);
+    EXPECT_EQ(doc.wheels[0].travel_scale_ppm, translagatr::kUnitMicro);
+    EXPECT_EQ(doc.wheels[1].gear_micro, translagatr::kUnitMicro);
     EXPECT_EQ(doc.wheels[1].travel_scale_ppm, 1012346u);
     // Radius and counts stay as given: the correction is not folded into them.
     EXPECT_EQ(doc.wheels[1].radius_um, 24000u);
@@ -139,8 +139,8 @@ TEST(RobotProfile, EncoderGeometryAndEmpiricalValuesStaySeparate) {
 
     // Defaults: unit gearing and scale, Pi calibration defaults.
     ASSERT_TRUE(toProfileDoc(perpendicularVex(), doc, reason, detail));
-    EXPECT_EQ(doc.wheels[1].gear_micro, gatr2::kUnitMicro);
-    EXPECT_EQ(doc.wheels[1].travel_scale_ppm, gatr2::kUnitMicro);
+    EXPECT_EQ(doc.wheels[1].gear_micro, translagatr::kUnitMicro);
+    EXPECT_EQ(doc.wheels[1].travel_scale_ppm, translagatr::kUnitMicro);
     EXPECT_EQ(doc.calibration_window_ms, 0);
     EXPECT_EQ(doc.still_rate_cdps, 0);
     EXPECT_EQ(doc.still_travel_um, 0);
@@ -152,36 +152,36 @@ TEST(RobotProfile, EncoderGeometryAndEmpiricalValuesStaySeparate) {
 TEST(RobotProfile, GearingScaleAndCalibrationRanges) {
     RobotProfile p           = perpendicularVex();
     p.wheels[1].travel_scale = 1.2;
-    expectReason(p, gatr2::kProfileReasonWheelGeometry, 1);
+    expectReason(p, translagatr::kProfileReasonWheelGeometry, 1);
     p.wheels[1].travel_scale = kNan;
-    expectReason(p, gatr2::kProfileReasonWheelGeometry, 1);
+    expectReason(p, translagatr::kProfileReasonWheelGeometry, 1);
     p.wheels[1].travel_scale = 1.1;
-    gatr2::RobotProfileDoc doc;
+    translagatr::RobotProfileDoc doc;
     uint8_t                reason = 0;
     uint8_t                detail = 0;
     EXPECT_TRUE(toProfileDoc(p, doc, reason, detail));
 
     p                      = perpendicularVex();
     p.wheels[0].gear_ratio = 0.05;
-    expectReason(p, gatr2::kProfileReasonWheelGeometry, 0);
+    expectReason(p, translagatr::kProfileReasonWheelGeometry, 0);
     p.wheels[0].gear_ratio = -1.0;
-    expectReason(p, gatr2::kProfileReasonWheelGeometry, 0);
+    expectReason(p, translagatr::kProfileReasonWheelGeometry, 0);
 
     p                    = perpendicularVex();
     p.calibration.window = 0.2;
-    expectReason(p, gatr2::kProfileReasonCalibration);
+    expectReason(p, translagatr::kProfileReasonCalibration);
     p.calibration.window = 100.0; // over u16 ms
-    expectReason(p, gatr2::kProfileReasonCalibration);
+    expectReason(p, translagatr::kProfileReasonCalibration);
     p.calibration.window     = 1.0;
     p.calibration.still_rate = -0.1;
-    expectReason(p, gatr2::kProfileReasonCalibration);
+    expectReason(p, translagatr::kProfileReasonCalibration);
     p.calibration.still_rate   = 0.0;
     p.calibration.still_travel = 0.01; // 10 mm per window
-    expectReason(p, gatr2::kProfileReasonCalibration);
+    expectReason(p, translagatr::kProfileReasonCalibration);
 }
 
 TEST(RobotProfile, SupportedTopologiesValidate) {
-    gatr2::RobotProfileDoc doc;
+    translagatr::RobotProfileDoc doc;
     uint8_t                reason = 0;
     uint8_t                detail = 0;
     EXPECT_TRUE(toProfileDoc(perpendicularVex(), doc, reason, detail));
@@ -201,7 +201,7 @@ TEST(RobotProfile, SupportedTopologiesValidate) {
     forward.topology     = LocalizationTopology::kTwoForwardWheelImu;
     forward.wheels[1]    = {1, 0.024, 2048, 0.0, -0.10, kPi, false};
     EXPECT_TRUE(toProfileDoc(forward, doc, reason, detail)) << profileReasonName(reason);
-    EXPECT_EQ(doc.topology, gatr2::kTopologyTwoForwardWheelImu);
+    EXPECT_EQ(doc.topology, translagatr::kTopologyTwoForwardWheelImu);
     EXPECT_EQ(doc.wheels[1].angle_mdeg, 180000);
 }
 
@@ -209,92 +209,92 @@ TEST(RobotProfile, LocalRejectionsUseThePiReasonCodes) {
     RobotProfile p = perpendicularVex();
     p.wheels.push_back(p.wheels[0]);
     p.wheels.push_back(p.wheels[0]);
-    expectReason(p, gatr2::kProfileReasonWheelCount);
+    expectReason(p, translagatr::kProfileReasonWheelCount);
 
     p = perpendicularVex();
     p.wheels.pop_back();
-    expectReason(p, gatr2::kProfileReasonWheelCount);
+    expectReason(p, translagatr::kProfileReasonWheelCount);
 
     p                        = perpendicularVex();
     p.wheels[1].encoder_port = 0;
-    expectReason(p, gatr2::kProfileReasonEncoderPort, 1);
+    expectReason(p, translagatr::kProfileReasonEncoderPort, 1);
 
     p                  = perpendicularVex();
     p.wheels[1].radius = kNan;
-    expectReason(p, gatr2::kProfileReasonWheelGeometry, 1);
+    expectReason(p, translagatr::kProfileReasonWheelGeometry, 1);
     p.wheels[1].radius = 0.0;
-    expectReason(p, gatr2::kProfileReasonWheelGeometry, 1);
+    expectReason(p, translagatr::kProfileReasonWheelGeometry, 1);
     p.wheels[1].radius = -0.024;
-    expectReason(p, gatr2::kProfileReasonWheelGeometry, 1);
+    expectReason(p, translagatr::kProfileReasonWheelGeometry, 1);
 
     p                          = perpendicularVex();
     p.wheels[0].counts_per_rev = 0;
-    expectReason(p, gatr2::kProfileReasonWheelGeometry, 0);
+    expectReason(p, translagatr::kProfileReasonWheelGeometry, 0);
 
     p             = perpendicularVex();
     p.wheels[0].x = 1e300;
-    expectReason(p, gatr2::kProfileReasonWheelGeometry, 0);
+    expectReason(p, translagatr::kProfileReasonWheelGeometry, 0);
 
     p                 = perpendicularVex();
     p.wheels[1].angle = 0.0; // parallel to wheel 0
-    expectReason(p, gatr2::kProfileReasonObservability);
+    expectReason(p, translagatr::kProfileReasonObservability);
 
     p                = perpendicularVex();
     p.vex_smart_port = 0;
-    expectReason(p, gatr2::kProfileReasonImuPort);
+    expectReason(p, translagatr::kProfileReasonImuPort);
     p.vex_smart_port = 22;
-    expectReason(p, gatr2::kProfileReasonImuPort);
+    expectReason(p, translagatr::kProfileReasonImuPort);
 
     p            = perpendicularVex();
     p.imu_source = ImuSource::kNone;
     p.vex_smart_port = 0;
-    expectReason(p, gatr2::kProfileReasonImuCombination);
+    expectReason(p, translagatr::kProfileReasonImuCombination);
 
     p                = threeWheelPico();
     p.imu_source     = ImuSource::kBrainVex;
     p.imu_invert     = false;
     p.vex_smart_port = 1;
-    expectReason(p, gatr2::kProfileReasonImuCombination);
+    expectReason(p, translagatr::kProfileReasonImuCombination);
 
     p            = perpendicularVex();
     p.imu_invert = true; // only the Pico IMU takes it
-    expectReason(p, gatr2::kProfileReasonImuSource);
+    expectReason(p, translagatr::kProfileReasonImuSource);
 
     p                = perpendicularVex();
     p.footprint.left = kNan;
-    expectReason(p, gatr2::kProfileReasonFootprint);
+    expectReason(p, translagatr::kProfileReasonFootprint);
     p.footprint.left  = 0.0;
     p.footprint.right = 0.0;
-    expectReason(p, gatr2::kProfileReasonFootprint);
+    expectReason(p, translagatr::kProfileReasonFootprint);
 
     p         = threeWheelPico();
     p.cameras = {{0, 0, 0, 0, 0, 0, 0}, {1, 0, 0, 0, 0, 0, kNan}};
-    expectReason(p, gatr2::kProfileReasonCamera, 1);
+    expectReason(p, translagatr::kProfileReasonCamera, 1);
     p.cameras = {{0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0}};
-    expectReason(p, gatr2::kProfileReasonCamera, 1);
+    expectReason(p, translagatr::kProfileReasonCamera, 1);
     p.cameras.assign(5, CameraMount{});
-    expectReason(p, gatr2::kProfileReasonCamera, gatr2::kProfileMaxCameras);
+    expectReason(p, translagatr::kProfileReasonCamera, translagatr::kProfileMaxCameras);
 }
 
 TEST(RobotProfile, DocumentBytesIdAndRoundTrip) {
     const ProfileDocument doc = makeProfileDocument(threeWheelPico());
-    ASSERT_EQ(doc.reason, gatr2::kProfileReasonNone);
+    ASSERT_EQ(doc.reason, translagatr::kProfileReasonNone);
     EXPECT_TRUE(doc.configured());
-    EXPECT_EQ(doc.len, gatr2::kProfileHeaderLen + 3 * gatr2::kProfileWheelLen +
-                           1 * gatr2::kProfileCameraLen);
-    EXPECT_EQ(profileId(doc), gatr2::crc32(doc.bytes, doc.len));
+    EXPECT_EQ(doc.len, translagatr::kProfileHeaderLen + 3 * translagatr::kProfileWheelLen +
+                           1 * translagatr::kProfileCameraLen);
+    EXPECT_EQ(profileId(doc), translagatr::crc32(doc.bytes, doc.len));
     EXPECT_NE(profileId(doc), 0u);
 
-    gatr2::RobotProfileDoc decoded;
-    ASSERT_TRUE(gatr2::decodeRobotProfile(doc.bytes, doc.len, decoded));
-    gatr2::RobotProfileDoc direct;
+    translagatr::RobotProfileDoc decoded;
+    ASSERT_TRUE(translagatr::decodeRobotProfile(doc.bytes, doc.len, decoded));
+    translagatr::RobotProfileDoc direct;
     uint8_t                reason = 0;
     uint8_t                detail = 0;
     ASSERT_TRUE(toProfileDoc(threeWheelPico(), direct, reason, detail));
-    uint8_t again[gatr2::kProfileMaxLen];
-    ASSERT_EQ(gatr2::encodeRobotProfile(decoded, again, sizeof(again)), doc.len);
+    uint8_t again[translagatr::kProfileMaxLen];
+    ASSERT_EQ(translagatr::encodeRobotProfile(decoded, again, sizeof(again)), doc.len);
     EXPECT_EQ(std::memcmp(again, doc.bytes, doc.len), 0);
-    EXPECT_EQ(gatr2::encodeRobotProfile(direct, again, sizeof(again)), doc.len);
+    EXPECT_EQ(translagatr::encodeRobotProfile(direct, again, sizeof(again)), doc.len);
     EXPECT_EQ(std::memcmp(again, doc.bytes, doc.len), 0);
 
     // Any change of geometry is a different profile id.
@@ -309,7 +309,7 @@ TEST(RobotProfile, FailedDocumentsCarryTheirReason) {
     parallel.wheels[1].angle  = 0.0;
     const ProfileDocument bad = makeProfileDocument(parallel);
     EXPECT_GT(bad.len, 0u);
-    EXPECT_EQ(bad.reason, gatr2::kProfileReasonObservability);
+    EXPECT_EQ(bad.reason, translagatr::kProfileReasonObservability);
 
     // Does not convert: no bytes.
     RobotProfile nan         = perpendicularVex();
@@ -317,7 +317,7 @@ TEST(RobotProfile, FailedDocumentsCarryTheirReason) {
     const ProfileDocument no = makeProfileDocument(nan);
     EXPECT_EQ(no.len, 0u);
     EXPECT_EQ(profileId(no), 0u);
-    EXPECT_EQ(no.reason, gatr2::kProfileReasonFootprint);
+    EXPECT_EQ(no.reason, translagatr::kProfileReasonFootprint);
     EXPECT_TRUE(no.configured());
 
     const ProfileDocument none;
@@ -326,9 +326,9 @@ TEST(RobotProfile, FailedDocumentsCarryTheirReason) {
 
 TEST(RobotProfile, ReasonNamesAreDistinct) {
     std::set<std::string> names;
-    for (uint8_t r = gatr2::kProfileReasonNone; r <= gatr2::kProfileReasonCalibration; ++r) {
+    for (uint8_t r = translagatr::kProfileReasonNone; r <= translagatr::kProfileReasonCalibration; ++r) {
         names.insert(profileReasonName(r));
     }
-    EXPECT_EQ(names.size(), static_cast<std::size_t>(gatr2::kProfileReasonCalibration + 1));
+    EXPECT_EQ(names.size(), static_cast<std::size_t>(translagatr::kProfileReasonCalibration + 1));
     EXPECT_STREQ(profileReasonName(200), "?");
 }

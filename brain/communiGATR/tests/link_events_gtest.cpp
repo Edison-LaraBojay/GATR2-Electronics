@@ -18,8 +18,8 @@ LinkSnapshot up(uint32_t session = 1, uint32_t pi = 7) {
     s.profile     = ProfileSync::kApplied;
     s.state_valid = true;
     s.localized   = true;
-    s.health      = gatr2::kHealthPicoLink;
-    s.calibration = gatr2::kCalibrationNone;
+    s.health      = translagatr::kHealthPicoLink;
+    s.calibration = translagatr::kCalibrationNone;
     return s;
 }
 
@@ -86,11 +86,11 @@ TEST(LinkEvents, PicoAndImuHealth) {
     s.health = 0;
     e.update(s, 1.0);
     EXPECT_EQ(e.at(0).event, LinkEvent::kPicoLost);
-    s.health = gatr2::kHealthPicoLink | gatr2::kHealthImuFailed;
+    s.health = translagatr::kHealthPicoLink | translagatr::kHealthImuFailed;
     e.update(s, 2.0);
     EXPECT_EQ(e.at(0).event, LinkEvent::kImuFailed);
     EXPECT_EQ(e.at(1).event, LinkEvent::kPicoRestored);
-    s.health = gatr2::kHealthPicoLink;
+    s.health = translagatr::kHealthPicoLink;
     e.update(s, 3.0);
     EXPECT_EQ(e.at(0).event, LinkEvent::kImuReady);
 }
@@ -99,19 +99,19 @@ TEST(LinkEvents, CalibrationProgressWithoutRepeatsForWaiting) {
     LinkEvents   e;
     LinkSnapshot s = up();
     e.update(s, 0.0);
-    s.calibration = gatr2::kCalibrationRunning;
+    s.calibration = translagatr::kCalibrationRunning;
     e.update(s, 1.0);
     EXPECT_EQ(e.at(0).event, LinkEvent::kCalibrating);
     const uint32_t before = e.total();
-    s.calibration         = gatr2::kCalibrationWaitingStill;
+    s.calibration         = translagatr::kCalibrationWaitingStill;
     e.update(s, 1.5);
-    s.calibration = gatr2::kCalibrationRunning;
+    s.calibration = translagatr::kCalibrationRunning;
     e.update(s, 2.0);
     EXPECT_EQ(e.total(), before);
-    s.calibration = gatr2::kCalibrationDone;
+    s.calibration = translagatr::kCalibrationDone;
     e.update(s, 4.0);
     EXPECT_EQ(e.at(0).event, LinkEvent::kCalibrated);
-    s.calibration = gatr2::kCalibrationFailed;
+    s.calibration = translagatr::kCalibrationFailed;
     e.update(s, 5.0);
     EXPECT_EQ(e.at(0).event, LinkEvent::kCalibrationFailed);
 }
@@ -181,21 +181,21 @@ TEST(LinkEvents, SessionGapHidesNothing) {
 TEST(LinkEvents, CalibratingEntersThroughAnyWaitingState) {
     LinkEvents   e;
     LinkSnapshot s = up();
-    s.calibration  = gatr2::kCalibrationDone;
+    s.calibration  = translagatr::kCalibrationDone;
     e.update(s, 0.0);
-    s.calibration = gatr2::kCalibrationWaitingData;
+    s.calibration = translagatr::kCalibrationWaitingData;
     e.update(s, 1.0);
     EXPECT_EQ(e.at(0).event, LinkEvent::kCalibrating);
-    s.calibration = gatr2::kCalibrationDone;
+    s.calibration = translagatr::kCalibrationDone;
     e.update(s, 2.0);
-    s.calibration = gatr2::kCalibrationWaitingStill;
+    s.calibration = translagatr::kCalibrationWaitingStill;
     e.update(s, 3.0);
     EXPECT_EQ(e.at(0).event, LinkEvent::kCalibrating);
 
     // The first state already calibrating counts as the start.
     LinkEvents   f;
     LinkSnapshot first = up();
-    first.calibration  = gatr2::kCalibrationWaitingStill;
+    first.calibration  = translagatr::kCalibrationWaitingStill;
     f.update(first, 0.0);
     ASSERT_GE(f.size(), 1u);
     EXPECT_EQ(f.at(0).event, LinkEvent::kCalibrating);

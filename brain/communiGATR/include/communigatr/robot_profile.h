@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "common/link_documents.h"
+#include "translaGATR/link_documents.h"
 #include "investigatr/geometry.h"
 #include "investigatr/motion_model.h"
 
@@ -79,20 +79,20 @@ struct RobotProfile {
 
 // Converts to wire units (micrometers, millidegrees) and runs the shared
 // validateRobotProfile. False on the first problem, with reason a
-// gatr2::ProfileReason and detail the wheel or camera index. Values that do
+// translagatr::ProfileReason and detail the wheel or camera index. Values that do
 // not fit the wire report the reason of their group.
-bool toProfileDoc(const RobotProfile& in, gatr2::RobotProfileDoc& out, uint8_t& reason,
+bool toProfileDoc(const RobotProfile& in, translagatr::RobotProfileDoc& out, uint8_t& reason,
                   uint8_t& detail);
 
 // Encoded profile for ClientConfig::profile. A document that failed the
 // Brain side check keeps its reason; the client reports it and never sends.
 struct ProfileDocument {
     uint16_t len    = 0; // 0 = no document
-    uint8_t  reason = gatr2::kProfileReasonNone;
+    uint8_t  reason = translagatr::kProfileReasonNone;
     uint8_t  detail = 0;
-    uint8_t  bytes[gatr2::kProfileMaxLen] = {};
+    uint8_t  bytes[translagatr::kProfileMaxLen] = {};
 
-    bool configured() const { return len != 0 || reason != gatr2::kProfileReasonNone; }
+    bool configured() const { return len != 0 || reason != translagatr::kProfileReasonNone; }
 };
 
 ProfileDocument makeProfileDocument(const RobotProfile& in);
@@ -100,7 +100,7 @@ ProfileDocument makeProfileDocument(const RobotProfile& in);
 // profile_id: crc32 of the document, 0 when there is none.
 uint32_t profileId(const ProfileDocument& doc);
 
-// Short name of a gatr2::ProfileReason for status displays.
+// Short name of a translagatr::ProfileReason for status displays.
 const char* profileReasonName(uint8_t reason);
 
 } // namespace communigatr

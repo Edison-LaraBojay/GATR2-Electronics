@@ -12,11 +12,26 @@
 //       <Output id="encoder_a" channel="0"/>
 //       <Output id="encoder_b" channel="1"/>
 //       <Output id="imu" channel="imu"/>
+//       <Diagnostics hz="1"/>        optional, 1..5: diagnostic frames
 //   </Resource>
 //
 // channel is 0..2 for an encoder counter (pico.encoder_counts) or imu for
 // the yaw gyro (pico.gyro_rate). Output ids are configuration; sensors
 // bind to them by name.
+//
+// Diagnostics asks every Pico boot, through a DIAGNOSTICS command, for the
+// optional diagnostic frame (0x14) at hz; the latest is kept for live
+// instrumentation. Firmware that answers UnknownOp marks diagnostics
+// unavailable ("firmware") until the Pico reboots. A Pico keeps its rate
+// until it reboots, so without the element the Pi asks for nothing, except
+// that diagnostic frames of the current boot (asked for by an earlier Pi
+// process) are turned off once with DIAGNOSTICS 0. Diagnostic frames never
+// feed localization.
+//
+// Instrumentation: with the System's DiagnosticsHub the resource posts
+// every decoded status and diagnostic frame, sensor frames only while a
+// consumer wants them, and feeds the link's LinkMonitor from the reads and
+// writes it already makes (never a second reader).
 //
 // Identity. v2 sensor frames carry boot_id, acq_epoch and imu_epoch. A new
 // boot or acquisition moves the encoder epoch, a new boot or IMU
@@ -32,13 +47,14 @@
 // The PicoControl part is safe from any thread.
 
 #pragma once
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
 
-#include "common/frame_codec.h"
+#include "translaGATR/frame_codec.h"
 #include "core/execution_context.h"
 #include "core/time.h"
 #include "resources/pico_control.h"
@@ -50,6 +66,55 @@ namespace navigatr
 
 struct Diagnostics;
 struct LinkStats;
+class DiagnosticsHub;
+class LinkMonitor;
+class ReopeningLink;
+
+// Why Pico diagnostic frames are or are not arriving.
+enum class PicoDiagState : uint8_t {
+    kNotRequested, // no <Diagnostics>: nothing asked
+    kNoLink,       // no fresh Pico frames
+    kNoIdentity,   // v1 frames: the firmware takes no commands
+    kRequesting,   // DIAGNOSTICS sent, not answered yet (retried)
+    kActive,       // the Pico accepted the rate
+    kFirmware,     // the Pico answered UnknownOp: firmware without diagnostics
+    kRefused,      // the Pico refused the rate (BadBody or another failure)
+};
+
+const char* picoDiagStateName(PicoDiagState s);
+
+// One encoder channel as instrumentation shows it: raw counts before any
+// profile polarity. No change over the window cannot tell a stationary
+// encoder from a disconnected one.
+struct PicoEncoderView {
+    bool    present   = false; // the channel bit was in a decoded frame
+    int32_t counts    = 0;     // newest value; old once fresh is false
+    int64_t updated_host_us = -1; // HostClock of the newest update, -1 never
+    bool    fresh       = false;  // updated within kFrameFreshMs of the refresh
+    bool    delta_known = false;  // fresh, and two samples of one encoder epoch
+    int32_t delta     = 0;        // counts change over span_ms
+    int64_t span_ms   = 0;        // about 1000 once a second of samples exists
+};
+
+struct PicoInstrumentation {
+    uint8_t       diag_hz    = 0;  // configured rate, 0 not requested
+    PicoDiagState diag_state = PicoDiagState::kNotRequested;
+    bool          have_diag  = false;
+    translagatr::PicoDiag diag;          // newest diagnostic frame, any boot
+    int64_t       diag_host_us  = -1;    // HostClock at its decode
+    uint64_t      diag_frames   = 0;
+    uint64_t      sensor_frames = 0;
+    uint64_t      status_frames = 0;
+    std::array<PicoEncoderView, 3> encoders;
+
+    // The serial device under the link, when it is a reopening device link.
+    bool        serial_reopening = false;
+    bool        serial_open      = false;
+    uint64_t    serial_attempts  = 0;   // reopen attempts, not the first open
+    uint64_t    serial_reopens   = 0;
+    uint64_t    serial_closes    = 0;
+    std::string serial_error;           // why the last open failed
+};
 
 // Consumers of the Pico link require<PicoTelemetry> by resource id and use
 // it through PicoControl.
@@ -113,6 +178,20 @@ public:
     uint32_t          submit(uint8_t op, uint8_t arg, MonotonicTime now, double timeout_s) override;
     PicoRequestStatus request(uint32_t handle) const override;
 
+    // Instrumentation, set at build before the first refresh. hub may be
+    // null (outside a System): nothing is posted or monitored then.
+    void attachDiagnostics(DiagnosticsHub* hub);
+    // 0 off (the default), 1..5 Hz; larger values are clamped to 5.
+    void setDiagnosticsRate(uint8_t hz);
+
+    static constexpr uint8_t kMaxDiagHz        = 5;
+    static constexpr double  kDiagTimeoutS     = 2.0;  // per DIAGNOSTICS attempt
+    static constexpr int64_t kDiagRetryMs      = 5000; // after an unanswered attempt
+    static constexpr int64_t kEncoderWindowMs  = 1000; // delta window
+
+    // Live view for the instrumentation panel; any thread.
+    PicoInstrumentation instrumentation() const;
+
 private:
     struct Request {
         uint32_t          handle = 0;
@@ -123,12 +202,19 @@ private:
         MonotonicTime     deadline;   // host clock
         MonotonicTime     last_sent;  // unset until first sent
         bool              reported = false; // a status frame named it
+        uint8_t           pico_detail = 0;  // Pico detail of a reported failure
         PicoRequestStatus status;
     };
 
-    void applyPacket(const gatr2::SensorSample& s, MonotonicTime now, LinkStats* stats);
-    void applyStatus(const gatr2::PicoStatus& s, MonotonicTime now);
+    void applyPacket(const translagatr::SensorSample& s, MonotonicTime now, LinkStats* stats);
+    void applyStatus(const translagatr::PicoStatus& s, MonotonicTime now);
+    void applyDiag(const translagatr::PicoDiag& d, const uint8_t* payload);
     void sendDue(MonotonicTime now, LinkStats* stats);
+    void requestDiagnostics(MonotonicTime now);
+    void driveDiagnostics(MonotonicTime now);
+    void noteEncoders(MonotonicTime now, uint16_t mask, bool rebase);
+    void noteFrame(const char* name, const std::string& fields);
+    void postSensor(const translagatr::SensorSample& s);
 
     // Callers hold state_mutex_.
     void failStale(bool identity, uint16_t boot_id);
@@ -137,8 +223,9 @@ private:
     void publishLinkState(MonotonicTime now);
 
     std::shared_ptr<SerialLink> link_;
+    ReopeningLink*              reopening_ = nullptr;   // link_ itself, when it is one
     std::string                 diagnostics_id_;
-    gatr2::FrameReader          reader_;
+    translagatr::FrameReader          reader_;
 
     Channel encoders_[kEncoderChannels];
     Channel gyro_;
@@ -175,12 +262,34 @@ private:
     mutable std::mutex  state_mutex_;
     PicoLinkState       link_state_; // published at the end of each refresh
     bool                have_status_ = false;
-    gatr2::PicoStatus   status_;     // newest status frame, any boot
+    translagatr::PicoStatus   status_;     // newest status frame, any boot
     MonotonicTime       status_at_;  // host clock
     std::deque<Request> requests_;   // oldest first, at most kRequestsKept
     uint32_t            next_handle_ = 1;
     uint16_t            next_request_id_ = 1;
     MonotonicTime       last_command_at_; // host clock, unset before the first
+    PicoInstrumentation view_;            // published at the end of each refresh
+
+    // Instrumentation, pipeline thread only.
+    DiagnosticsHub*              hub_       = nullptr;
+    uint16_t                     source_id_ = 0;
+    std::shared_ptr<LinkMonitor> monitor_;
+    uint8_t                      diag_hz_     = 0;
+    uint32_t                     diag_handle_ = 0;     // DIAGNOSTICS in flight, 0 none
+    uint16_t                     diag_boot_   = 0;     // boot it was sent to
+    bool                         diag_settled_ = false; // answered for diag_boot_
+    MonotonicTime                diag_retry_at_;
+    PicoDiagState                diag_state_ = PicoDiagState::kNotRequested;
+    bool                         have_diag_  = false;
+    translagatr::PicoDiag        diag_;
+    int64_t                      diag_host_us_ = -1;
+    uint64_t                     diag_frames_ = 0, sensor_frames_ = 0, status_frames_ = 0;
+    struct EncoderHistory {
+        std::deque<std::pair<int64_t, int32_t>> samples; // (host ms, counts), oldest first
+        int64_t updated_ms      = -1;  // pipeline host ms of the newest update
+        int64_t updated_host_us = -1;
+    };
+    std::array<EncoderHistory, kEncoderChannels> encoder_history_;
 };
 
 ResourceInstance make_pico_telemetry(const ConfigNode& node,

@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "common/frame_codec.h"
+#include "translaGATR/frame_codec.h"
 #include "impl/resources/serial_links.h"
 #include "impl/sensors/attitude_channel.h"
 #include "math/angles.h"
@@ -46,16 +46,16 @@ std::string systemXml(const std::string& resources, const std::string& sensors,
 
 std::vector<uint8_t> packet(uint8_t seq, uint32_t stamp, int32_t enc0, int32_t enc1,
                             int32_t gyro) {
-    gatr2::SensorSample s{};
+    translagatr::SensorSample s{};
     s.seq      = seq;
     s.stamp_ms = stamp;
-    s.mask     = gatr2::kSensorEnc0 | gatr2::kSensorEnc1 | gatr2::kSensorGyroZ;
+    s.mask     = translagatr::kSensorEnc0 | translagatr::kSensorEnc1 | translagatr::kSensorGyroZ;
     s.enc[0]   = enc0;
     s.enc[1]   = enc1;
     s.gyro_z   = gyro;
 
-    std::vector<uint8_t> buf(gatr2::kMaxFrameLen);
-    buf.resize(gatr2::encodeSensorFrame(s, buf.data(), gatr2::kMaxFrameLen));
+    std::vector<uint8_t> buf(translagatr::kMaxFrameLen);
+    buf.resize(translagatr::encodeSensorFrame(s, buf.data(), translagatr::kMaxFrameLen));
     return buf;
 }
 

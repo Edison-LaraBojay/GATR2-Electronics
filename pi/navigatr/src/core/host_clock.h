@@ -6,6 +6,7 @@
 
 #pragma once
 #include <chrono>
+#include <cstdint>
 
 #include "core/time.h"
 
@@ -19,6 +20,12 @@ public:
     static MonotonicTime now() {
         const auto elapsed = std::chrono::steady_clock::now() - origin();
         return hostTime(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+    }
+
+    // Microseconds since the same origin, for timing and latency figures.
+    static int64_t nowUs() {
+        const auto elapsed = std::chrono::steady_clock::now() - origin();
+        return std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
     }
 
 private:

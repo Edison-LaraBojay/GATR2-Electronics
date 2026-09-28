@@ -40,6 +40,10 @@ struct DriveStatus {
     ChassisCommand command;        // last applied, after desaturation
     WheelSpeeds    wheels;         // last targets, m/s
     double         saturation = 1; // desaturation factor of the last command
+
+    // Motor velocity targets sent per wheel group (wheels.count of them),
+    // positive driving forward; 0 while stopped.
+    double motor_rpm[kMaxWheelGroups] = {};
 };
 
 class Drive {

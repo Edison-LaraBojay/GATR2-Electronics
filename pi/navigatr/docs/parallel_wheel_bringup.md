@@ -66,14 +66,14 @@ BNO08X, by the module's printed labels:
 
 The Pico-Pi UART is unchanged: Pico TX GP16 (pin 21), RX GP17 (pin 22), 115200
 baud, `/dev/ttyAMA0` on the Pi. Pin definitions live in
-[pico/src/board.h](../../../pico/src/board.h).
+[pico/aggreGATR/src/board.h](../../../pico/aggreGATR/src/board.h).
 
 ## 2. Build and flash the Pico
 
 From the repository on the development computer:
 
 ```sh
-cd pico
+cd pico/aggreGATR
 pio run -e hat2_bno08x
 ```
 
@@ -97,7 +97,7 @@ pitch is sent, and the fixed axis does not compensate dynamic rocking.
 
 ## 3. Fill in the robot description
 
-On the Pi, from `pi/navigatr`:
+On the Pi, from `pi/naviGATR`:
 
 ```sh
 cp -n config/shared/robots/gatr2_parallel_wheels_bno08x.xml.in config/shared/robots/gatr2_parallel_wheels_bno08x.xml
@@ -125,7 +125,7 @@ already establishes positive counterclockwise yaw.
 
 ## 4. Build and run profile A
 
-On the Pi, from `pi/navigatr`:
+On the Pi, from `pi/naviGATR`:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNAVIGATR_WITH_LIBCAMERA=ON

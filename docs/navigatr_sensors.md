@@ -52,7 +52,7 @@ The registry and code are the source of truth; this file catalogs them.
 - Brain-profiled configs generate one per profile wheel (`profile_encoder_<port>`),
   with the profile's counts per revolution, gearing and polarity (`invert`
   is the profile wheel's reversed flag); see
-  [Brain robot profiles](../pi/navigatr/docs/brain_profile.md#corrections-each-applied-once).
+  [Brain robot profiles](../pi/naviGATR/docs/brain_profile.md#corrections-each-applied-once).
 
 ## pico_imu_channel
 

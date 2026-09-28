@@ -1,31 +1,39 @@
 // inspection_service.h
 // The optional read-only inspection service: one thread that serves the
-// bundled viewer over HTTP on the configured (loopback) address, pushes
-// navigatr.inspect/1 snapshot documents over a WebSocket at snapshot_hz,
-// and streams JPEG previews of the detection frames the field worker
-// published, each preceded by a header naming the exact frame identity.
+// bundled viewer over HTTP on the configured (loopback) address and pushes
+// the navigatr.inspect/2 live feed over a WebSocket: small frequent state
+// messages, slower diagnostics, the trail history, events, capture status,
+// Brain telemetry, link instrumentation, and JPEG previews of the detection
+// frames the field worker published, each preceded by a header naming the
+// exact frame identity.
 //
 // It reads System snapshots only (shared immutable pointers and
 // synchronized lookups), encodes and serializes on its own thread, and
-// bounds every client: a browser that cannot keep up has frames and
-// snapshots skipped, never queued without limit, and disconnecting it
-// changes nothing in estimation. Stopping the service before the System
-// keeps the shutdown order explicit; the service holds a reference, not
-// ownership.
+// bounds every client: replaceable messages keep only the newest unsent
+// one per channel, reliable ones share a bounded FIFO whose overflow closes
+// the client, and disconnecting a browser changes nothing in estimation.
+// Stopping the service before the System keeps the shutdown order
+// explicit; the service holds a reference, not ownership.
 //
-// Client messages (JSON text):
+// Client messages (JSON text), docs/inspection.md:
 //   {"type":"preview","hz":5,"quality":70,"max_width":640}
-//       per-client preview budget, clamped to sane bounds
+//   {"type":"subscribe","state_hz":30,"diag":true,"instrumentation":false,
+//    "raw":false,"decoded":false,"telemetry":true}     missing fields keep
+//   {"type":"ping","id":1,"client_ms":123.4}            answered with pong
+//   {"type":"history"}                                  answered with history
 //
 // HTTP routes:
-//   GET /                          viewer index
-//   GET /app.js /style.css         viewer files
-//   GET /vendor/<file>             pinned three.js module and OrbitControls
-//   GET /api/hello                 hello document
-//   GET /api/snapshot              snapshot document
-//   GET /api/frame.jpg[?camera=id] newest preview for one camera
-//   GET /api/health                {"ok":true,...}
-//   GET /ws                        WebSocket upgrade
+//   GET  /                          viewer index
+//   GET  /app.js /style.css         viewer files
+//   GET  /vendor/<file>             pinned three.js module and OrbitControls
+//   GET  /api/hello                 hello document
+//   GET  /api/snapshot              full snapshot (inspect/1 shape, with trail)
+//   GET  /api/frame.jpg[?camera=id] newest preview for one camera
+//   GET  /api/health                {"ok":true,...}
+//   POST /api/capture/start|cancel  capture control (capture/capture_http.h)
+//   GET  /api/capture/status        capture status
+//   GET  /api/capture/<id>.zip      finished capture bundle
+//   GET  /ws                        WebSocket upgrade
 
 #pragma once
 #include <memory>

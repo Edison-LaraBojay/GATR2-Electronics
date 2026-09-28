@@ -20,13 +20,14 @@ check the software, not the hardware.
 | Tracking wheels: encoder port, counts per revolution, polarity, gearing, radius, mounting position, measuring direction, travel scale | [brain/robot/gatr2_robot.h](../brain/robot/gatr2_robot.h) |
 | Localization setup (two wheels + VEX IMU, two wheels + Pico IMU, three wheels + Pico IMU) | `gatr2_robot.h`, `kSetup` |
 | IMU source, VEX Smart Port, IMU calibration settings | `gatr2_robot.h` |
+| Telemetry to the Pi viewer on or off, its period, the VEX IMU mounting for the viewer's tilt | `gatr2_robot.h`, `kSendTelemetry`, `kTelemetryPeriodMs`, `kVexImuMountYawDeg` (section 10) |
 | Robot footprint, start pose | `gatr2_robot.h` |
 | Pi link: USB or RS-485 (Smart Port, baud) | `gatr2_robot.h`, `kUseUsb` |
-| Drivetrain (tank or mecanum): motor ports, reversal, cartridge, gearing, wheel size, track and wheelbase | [brain/testing/include/robot_config.h](../brain/testing/include/robot_config.h) |
-| Speed limits, clearance, follower gains, manual speeds, test destinations, startup placement | `brain/testing/include/robot_config.h` |
-| Bench settings: startup placement policy, calibration reference distance and limits | [brain/localization-test/include/robot_config.h](../brain/localization-test/include/robot_config.h) |
-| Pi devices, field, cameras, service | the Pi config, `pi/navigatr/config/override/brain_profile_usb.xml` or `brain_profile_rs485.xml` |
-| Pico pins and IMU driver | `pico/src/board.h`, the PlatformIO environment |
+| Drivetrain (tank or mecanum): motor ports, reversal, cartridge, gearing, wheel size, track and wheelbase | [brain/operaGATR/include/robot_config.h](../brain/operaGATR/include/robot_config.h) |
+| Speed limits, clearance, follower gains, manual speeds, test destinations, startup placement | `brain/operaGATR/include/robot_config.h` |
+| Bench settings: startup placement policy, calibration reference distance and limits | [brain/locaGATR/include/robot_config.h](../brain/locaGATR/include/robot_config.h) |
+| Pi devices, field, cameras, service | the Pi config, `pi/naviGATR/config/override/brain_profile_usb.xml` or `brain_profile_rs485.xml` |
+| Pico pins and IMU driver | `pico/aggreGATR/src/board.h`, the PlatformIO environment |
 
 Values marked UNMEASURED or PLACEHOLDER are guesses; measure them before
 trusting the results. The tracking wheel radius, 0.024 m, is provisional.
@@ -51,7 +52,7 @@ The program checks port conflicts: drive motors, the VEX IMU and the RS-485 port
 **Brain (Windows, PROS CLI from the VS Code PROS extension terminal).** The first time, in each program folder:
 
 ```sh
-cd brain/localization-test
+cd brain/locaGATR
 pros c apply kernel@4.2.2 --force-apply --no-download
 git checkout -- .gitignore
 ```
@@ -60,21 +61,21 @@ Then build and upload:
 
 ```sh
 pros make
-pros upload --slot 2 --name localization-test --after screen
+pros upload --slot 2 --name locaGATR --after screen
 ```
 
 The drive program goes in its own slot:
 
 ```sh
-cd brain/testing
+cd brain/operaGATR
 pros make
-pros upload --slot 1 --name testing --after screen
+pros upload --slot 1 --name operaGATR --after screen
 ```
 
 **Pi (Raspberry Pi OS).** Copy the source from Windows, build and install the service. See [Pi setup](pi_setup.md) for access and the copy step. On the Pi:
 
 ```sh
-cd ~/navigatr/pi/navigatr
+cd ~/navigatr/pi/naviGATR
 cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DNAVIGATR_BUILD_TESTS=OFF -DNAVIGATR_WITH_LIBCAMERA=OFF
 cmake --build build-bench -j2
 sudo bash tools/install_service.sh --user "$USER" --binary build-bench/navigatr --config config/override/brain_profile_usb.xml
@@ -83,7 +84,7 @@ sudo bash tools/install_service.sh --user "$USER" --binary build-bench/navigatr 
 **Pico (PlatformIO, Windows or Linux).** Build, then flash when the Pico is connected over USB:
 
 ```sh
-cd pico
+cd pico/aggreGATR
 pio run -e hat2_bno08x                 # or -e hat2_asm330
 pio run -e hat2_bno08x -t upload       # flashes the Pico
 ```
@@ -94,7 +95,7 @@ The Pi and the Brain work with the older Pico firmware too, but only the new fir
 
 ## 3. Localization test program
 
-`localization-test` never drives motors. Move the robot by hand.
+`locaGATR` never drives motors. Move the robot by hand.
 
 **Startup**
 1. Start the Pi service and the program, with the robot still.
@@ -108,7 +109,7 @@ The Pi and the Brain work with the older Pico firmware too, but only the new fir
 
 | Page | Controls |
 |---|---|
-| Status | pose, readiness, sensors, calibration. A places at the start pose. X recalibrates the IMU. Y reinitializes the Pico IMU. Hold L1+R1 and press A to reinitialize localization. |
+| Status | pose, readiness, sensors, calibration, and with the VEX IMU its robot-frame tilt (`r`, `p`, section 10). A places at the start pose. X recalibrates the IMU. Y reinitializes the Pico IMU. Hold L1+R1 and press A to reinitialize localization. |
 | Wheel calibration | see section 4 |
 | Recovery | the last link, session, Pi, Pico and calibration events, with times and outage lengths |
 
@@ -200,7 +201,7 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
   - `kAlways` (default): place at program start.
   - `kIfUnplaced`: keep a placement the Pi still holds, for example after a Brain restart mid-match.
   - `kNever`: you place explicitly.
-- **Explicit placement:** A (localization-test) or UP (testing) places at the start pose. Put the robot there first.
+- **Explicit placement:** A (locaGATR) or UP (testing) places at the start pose. Put the robot there first.
 - **The Brain never re-places the robot on its own** after:
   - a reconnect;
   - a Pi restart;
@@ -211,14 +212,14 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 
 ## 7. Drive test program
 
-`testing` drives the robot with actuGATR.
+`operaGATR` drives the robot with actuGATR.
 
 **Controls**
 - Left stick Y drives forward and right stick X turns; left stick X strafes on mecanum.
 - A runs the direct test, X the avoiding test, Y the landmark test.
 - B cancels. Moving a stick also takes over from a running test.
 - UP places at the start pose.
-- DOWN recalibrates the IMU, only while no movement runs and after the Pi's stillness check (as X in localization-test). While it calibrates, the tests are refused and the sticks do nothing.
+- DOWN recalibrates the IMU, only while no movement runs and after the Pi's stillness check (as X in locaGATR). While it calibrates, the tests are refused and the sticks do nothing.
 - LEFT/RIGHT changes the speed scale.
 
 **Tests**
@@ -232,6 +233,7 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 - autonomous() runs the direct test, then the avoiding test.
 - disabled() stops the drive.
 - The screen shows the command state and reason, errors, cross-track, segment and plan count, which is what you tune by.
+- The last row shows the VEX IMU tilt and whether telemetry is on, off or refused by the Pi. The same movement status, commanded speeds and wheel targets go to the Pi viewer as telemetry every 100 ms (section 10).
 
 **Tuning:** see [actuGATR tuning](actugatr.md#tuning). Start at speed scale 0.3.
 
@@ -267,7 +269,7 @@ A quadrature encoder whose cable is pulled keeps its last count, which looks the
 | Serial device missing at Pi start | Retried once a second. |
 
 **What needs you:**
-- a placement after any sensor loss, a Pi restart, a profile change, a recalibration or a reinitialization: put the robot at the start pose and press A (localization-test) or UP (testing);
+- a placement after any sensor loss, a Pi restart, a profile change, a recalibration or a reinitialization: put the robot at the start pose and press A (locaGATR) or UP (testing);
 - IMU recalibration after moving the robot during calibration;
 - wheel calibration values made permanent in `gatr2_robot.h`;
 - fixing a rejected profile;
@@ -290,4 +292,77 @@ The final report lists the exact counts. Not validated until tried on the robot:
 - IMU behavior;
 - motor directions and gains;
 - the collision boxes against a real field;
-- planning times on the V5.
+- planning times on the V5;
+- the VEX IMU roll and pitch conventions and the mount yaw (section 10);
+- the cost of telemetry on the V5 link timing.
+
+## 10. Telemetry and attitude
+
+Both programs send TELEMETRY to the Pi every 100 ms for the browser viewer and
+its recordings:
+
+- locaGATR: the robot tilt (roll and pitch) from the VEX IMU, when the profile uses it.
+- operaGATR: the tilt, plus the movement command's state, reason, destination, commanded speeds, errors and drive fault, and the motor velocity targets.
+
+The Pi only shows and records it. Localization, placement and the profile
+never use it, and a missing or refused telemetry changes nothing else. Only
+tilt is sent: no height or vertical position.
+
+**Settings** (`brain/robot/gatr2_robot.h`, then rebuild and upload the Brain
+programs; nothing on the Pi or the Pico changes):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `kSendTelemetry` | true | false sends nothing |
+| `kTelemetryPeriodMs` | 100 | period of both programs and the link's limit |
+| `kVexImuMountYawDeg` | 0, PLACEHOLDER | direction the VEX IMU's +x axis points in the robot frame, CCW from forward: 0 forward, 90 left, 180 backward, 270 right. The IMU must lie flat. It affects only the tilt shown, never the heading |
+
+**Pi version.** Showing it needs the Pi software with TELEMETRY support. An
+older Pi answers "unsupported"; the Brain then stops sending for that session
+and keeps working. The screens show it: operaGATR "Telemetry refused by the
+Pi", locaGATR "(no TM)" after the tilt.
+
+**Cost.** Each telemetry exchange uses the one request slot of the link and
+can push the next state poll back by about 10 to 15 ms (one exchange plus the
+5 ms gap), more on a slow link. In host simulations at 100 ms, state polls
+fell by 6 to 11 percent at the default timing and by up to 20 percent on
+slow links (see [communiGATR telemetry](communigatr.md#telemetry)). It was
+not measured on the robot. If pose updates to the Brain matter more, set
+`kSendTelemetry = false` or a longer period.
+
+**Slow link.** When a state request and its reply take about 15 ms or more,
+the poll is due at every turn. That is plausible on the V5 USB console (its
+transmit task idles 2 ms and its receive task waits 5 ms after an empty
+read, and the Pi answers once per 10 ms loop) but not measured.
+Telemetry then goes half a period late, taking one poll's turn at most every
+150 ms: about 6 reports a second instead of 10, each wait under 250 ms
+in the host runs. The Pi still shows the tilt as measured; it shows it as
+stale if no report arrives for 250 ms. `ClientStats::telemetry_overdue`
+(`ProsLinkStatus::stats`) counts these late sends.
+
+**Sign conventions.** Robot frame +x forward, +y left, +z up. Roll is about
++x: positive when the left side is up. Pitch is about +y: positive when the
+nose is down. The Brain assumes the VEX IMU reports roll and pitch with the
+same convention in its own frame and turns them into the robot frame with the
+mount yaw, exactly (not a small angle approximation). The VEX convention is
+UNVERIFIED: check it once on the bench.
+
+**Bench check** (not yet done on hardware):
+
+1. Set `kVexImuMountYawDeg` to your best guess, build and upload locaGATR.
+2. Start it with the robot level and still. Wait until the VEX IMU shows `ok`
+   on the Status page; the row then reads `VEX P1 ok <heading> deg r <roll> p <pitch>`.
+3. Level: `r` and `p` should be near 0. A degree or two is the mounting and the
+   floor, not a sign error.
+4. Lift the front about 10 to 15 degrees (a block under the front): expect `p`
+   **negative** (nose up) and `r` near 0.
+5. Lift the left side instead: expect `r` **positive** and `p` near 0.
+6. The viewer should show the model tilted the same way, marked as measured.
+
+| You see | Fix |
+|---|---|
+| lifting the front moves `r`, lifting the left moves `p` | the mount yaw is off by 90: try 90 or 270 |
+| both signs wrong | the mount yaw is off by 180 |
+| one sign wrong at every mount value | the VEX convention differs from the assumed one: note what you saw and report it; the fix is a sign in `brain/communiGATR/src/attitude.cpp` and its tests |
+
+After a change, upload again and repeat steps 3 to 5.

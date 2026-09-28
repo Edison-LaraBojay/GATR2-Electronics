@@ -14,7 +14,7 @@
 #include <array>
 #include <cstdint>
 
-#include "common/frames.h"
+#include "translaGATR/frames.h"
 #include "core/time.h"
 #include "math/transforms.h"
 #include "resources/serial_link.h"
@@ -49,10 +49,10 @@ struct BrainReplyContext {
     uint8_t  doc_max_len = 0;
 
     uint8_t action         = 0;   // CONTROL echo
-    uint8_t control_detail = 0;   // CONTROL: gatr2::ControlDetail
+    uint8_t control_detail = 0;   // CONTROL: translagatr::ControlDetail
 
     uint8_t wheel_count = 0;   // READ_WHEELS Ok
-    std::array<gatr2::WheelReading, gatr2::kWheelReadingsMax> wheels{};
+    std::array<translagatr::WheelReading, translagatr::kWheelReadingsMax> wheels{};
 
     TransmitWindow window;
 };
@@ -61,8 +61,8 @@ struct BrainReplyContext {
 // profile; the reported id may be newer (applying, or rejected while
 // applied_id keeps running).
 struct ProfileStatus {
-    uint8_t  state      = 0;   // gatr2::ProfileState
-    uint8_t  reason     = 0;   // gatr2::ProfileReason
+    uint8_t  state      = 0;   // translagatr::ProfileState
+    uint8_t  reason     = 0;   // translagatr::ProfileReason
     uint8_t  detail     = 0;
     uint32_t id         = 0;
     uint32_t applied_id = 0;   // 0 = none
@@ -77,9 +77,9 @@ struct PathReport {
 
     uint32_t      session    = 0;
     uint32_t      command_id = 0;
-    uint8_t       mode       = 0;   // gatr2::PathMode, 0 = no path
+    uint8_t       mode       = 0;   // translagatr::PathMode, 0 = no path
     uint8_t       count      = 0;
-    std::array<Point, gatr2::kPathReportMaxPoints> points{};
+    std::array<Point, translagatr::kPathReportMaxPoints> points{};
     MonotonicTime received;
 };
 

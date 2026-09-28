@@ -50,9 +50,11 @@
 //   two wheel, pico           tracking_wheel_motion + HeadingConstraint,
 //                             planar_motion_integrator
 //   two wheel, brain_vex      brain_imu_planar_bench, planar_motion_integrator
+//                             with the VEX attitude fold
 //   two forward, pico         tracking_wheel_motion + HeadingConstraint +
 //                             LateralMotion zero, planar_motion_integrator
 //   two forward, brain_vex    brain_imu_parallel_bench, planar_motion_integrator
+//                             with the VEX attitude fold
 //   three wheel, none         tracking_wheel_motion, planar_motion_integrator
 //   three wheel, pico         tracking_wheel_motion (no constraint) +
 //                             imu_heading_increment, weighted_planar_fusion
@@ -67,7 +69,7 @@
 #include <cstdint>
 #include <string>
 
-#include "common/link_documents.h"
+#include "translaGATR/link_documents.h"
 #include "config/config_node.h"
 #include "contracts/brain_profile.h"
 #include "core/ids.h"
@@ -86,6 +88,13 @@ constexpr uint8_t kProfileEncoderPorts = 3;
 
 // Generated sensor ids start with this; configured sensors may not.
 constexpr const char* kProfileSensorPrefix = "profile_";
+
+// Brain VEX profiles: the tilt TELEMETRY carries is the robot attitude,
+// measured while at most this old by Pi arrival time, then stale (assumed
+// level). Pico IMU profiles carry no attitude: the Pico sends yaw rate only
+// and no profile holds an IMU-to-robot mounting rotation.
+constexpr const char* kProfileAttitudeId       = "profile_attitude";
+constexpr long        kProfileAttitudeMaxAgeMs = 250;
 
 struct BrainProfileConfig {
     ResourceId encoder_resource;
@@ -133,22 +142,22 @@ bool parseBrainProfileConfig(const ConfigNode& node, const ResourceStore& resour
                              std::string& err);
 
 // This Pi's capability checks, after validateRobotProfile. False: reason is
-// a gatr2::ProfileReason, detail the wheel or camera index.
+// a translagatr::ProfileReason, detail the wheel or camera index.
 bool checkProfileCapabilities(const BrainProfileConfig& config,
-                              const gatr2::RobotProfileDoc& profile, uint8_t& reason,
+                              const translagatr::RobotProfileDoc& profile, uint8_t& reason,
                               uint8_t& detail);
 
 // The waiting Localization: noop estimator, the configured History.
 void writeWaitingLocalization(const BrainProfileConfig& config, tinyxml2::XMLDocument& doc);
 
-// Display names of a gatr2::LocalizationTopology and a gatr2::ProfileReason.
+// Display names of a translagatr::LocalizationTopology and a translagatr::ProfileReason.
 const char* profileTopologyName(uint8_t topology);
 const char* profileReasonName(uint8_t reason);
 
 // <Profile><Sensors/><Localization/></Profile> for a checked profile, and the
 // binding ids it generated (encoders, imu, bias_function, summary; the
 // caller fills id, profile, generation and bench_imu).
-void writeProfileSubtrees(const BrainProfileConfig& config, const gatr2::RobotProfileDoc& profile,
+void writeProfileSubtrees(const BrainProfileConfig& config, const translagatr::RobotProfileDoc& profile,
                           tinyxml2::XMLDocument& doc, ProfileBinding& binding);
 
 } // namespace navigatr

@@ -8,8 +8,12 @@
 #include <map>
 #include <set>
 
-#include "common/link_documents.h"
+#include "translaGATR/frame_codec.h"
+#include "translaGATR/link_documents.h"
+#include "capture/capture_service.h"
 #include "config/field_map.h"
+#include "diagnostics/hub.h"
+#include "diagnostics/instrumentation.h"
 #include "impl/publishing/field_documents.h"
 #include "impl/resources/tag_detectors.h"
 #include "inspection/json_writer.h"
@@ -42,27 +46,34 @@ std::string hex64(uint64_t v) {
     return buf;
 }
 
+// Times, ages and stamps are varying: a diag identity check leaves them out.
+
 // host_ms or null when the time is not on the host clock
 void hostMs(JsonWriter& w, const char* key, MonotonicTime t) {
+    const std::size_t from = w.mark();
     w.key(key);
     if (t.domain == ClockDomain::kHost) {
         w.value(static_cast<int64_t>(t.ms));
     } else {
         w.null();
     }
+    w.varying(from);
 }
 
 // age in ms against now, null when not comparable
 void ageMs(JsonWriter& w, const char* key, MonotonicTime t, MonotonicTime now) {
+    const std::size_t from = w.mark();
     w.key(key);
     if (t.domain == ClockDomain::kHost && now.domain == ClockDomain::kHost) {
         w.value(static_cast<int64_t>(now.ms - t.ms));
     } else {
         w.null();
     }
+    w.varying(from);
 }
 
 void stamp(JsonWriter& w, const char* key, MonotonicTime t) {
+    const std::size_t from = w.mark();
     w.key(key);
     w.beginObject();
     w.field("clock", clockName(t.domain));
@@ -73,6 +84,7 @@ void stamp(JsonWriter& w, const char* key, MonotonicTime t) {
         w.null();
     }
     w.endObject();
+    w.varying(from);
 }
 
 void pose2(JsonWriter& w, const char* key, const Pose2D& p) {
@@ -136,6 +148,8 @@ void attitude(JsonWriter& w, const char* key, const Attitude& a, MonotonicTime n
     w.beginObject();
     w.field("valid", a.valid);
     w.field("assumed_level", a.assumed_level);
+    // measured, stale, assumed_level or unavailable
+    w.field("status", attitudeStatus(a, now));
     w.field("reference", a.reference);
     w.field("source", a.source);
     w.field("epoch", a.epoch);
@@ -181,98 +195,98 @@ void wireId16(JsonWriter& w, const char* key, uint16_t id) {
 
 const char* profileStateName(uint8_t s) {
     switch (s) {
-    case gatr2::kProfileNone: return "none";
-    case gatr2::kProfileApplying: return "applying";
-    case gatr2::kProfileApplied: return "applied";
-    case gatr2::kProfileRejected: return "rejected";
+    case translagatr::kProfileNone: return "none";
+    case translagatr::kProfileApplying: return "applying";
+    case translagatr::kProfileApplied: return "applied";
+    case translagatr::kProfileRejected: return "rejected";
     default: return "unknown";
     }
 }
 
 const char* calibrationName(uint8_t s) {
-    return s <= gatr2::kCalibrationFailed ? toString(static_cast<BiasCalibration>(s)) : "unknown";
+    return s <= translagatr::kCalibrationFailed ? toString(static_cast<BiasCalibration>(s)) : "unknown";
 }
 
 const char* imuSourceName(uint8_t s) {
     switch (s) {
-    case gatr2::kImuSourceNone: return "none";
-    case gatr2::kImuSourcePico: return "pico";
-    case gatr2::kImuSourceBrainVex: return "brain_vex";
+    case translagatr::kImuSourceNone: return "none";
+    case translagatr::kImuSourcePico: return "pico";
+    case translagatr::kImuSourceBrainVex: return "brain_vex";
     default: return "unknown";
     }
 }
 
 const char* controlActionName(uint8_t a) {
     switch (a) {
-    case gatr2::kControlRecalibrate: return "recalibrate";
-    case gatr2::kControlReinitialize: return "reinitialize";
-    case gatr2::kControlReinitImu: return "reinit_imu";
-    case gatr2::kControlRestartAcquisition: return "restart_acquisition";
+    case translagatr::kControlRecalibrate: return "recalibrate";
+    case translagatr::kControlReinitialize: return "reinitialize";
+    case translagatr::kControlReinitImu: return "reinit_imu";
+    case translagatr::kControlRestartAcquisition: return "restart_acquisition";
     default: return "unknown";
     }
 }
 
 const char* resultName(uint8_t r) {
     switch (r) {
-    case gatr2::kResultOk: return "ok";
-    case gatr2::kResultPending: return "pending";
-    case gatr2::kResultNotReady: return "not_ready";
-    case gatr2::kResultNotStationary: return "not_stationary";
-    case gatr2::kResultFailed: return "failed";
-    case gatr2::kResultInvalidArgument: return "invalid_argument";
+    case translagatr::kResultOk: return "ok";
+    case translagatr::kResultPending: return "pending";
+    case translagatr::kResultNotReady: return "not_ready";
+    case translagatr::kResultNotStationary: return "not_stationary";
+    case translagatr::kResultFailed: return "failed";
+    case translagatr::kResultInvalidArgument: return "invalid_argument";
     default: return "other";
     }
 }
 
 const char* controlDetailName(uint8_t d) {
     switch (d) {
-    case gatr2::kControlDetailNone: return "none";
-    case gatr2::kControlDetailPicoLink: return "pico_link";
-    case gatr2::kControlDetailImuAbsent: return "imu_absent";
-    case gatr2::kControlDetailImuUnused: return "imu_unused";
-    case gatr2::kControlDetailPicoRefused: return "pico_refused";
-    case gatr2::kControlDetailTimedOut: return "timed_out";
-    case gatr2::kControlDetailCalibration: return "calibration";
+    case translagatr::kControlDetailNone: return "none";
+    case translagatr::kControlDetailPicoLink: return "pico_link";
+    case translagatr::kControlDetailImuAbsent: return "imu_absent";
+    case translagatr::kControlDetailImuUnused: return "imu_unused";
+    case translagatr::kControlDetailPicoRefused: return "pico_refused";
+    case translagatr::kControlDetailTimedOut: return "timed_out";
+    case translagatr::kControlDetailCalibration: return "calibration";
     default: return "unknown";
     }
 }
 
 const char* pathModeName(uint8_t m) {
     switch (m) {
-    case gatr2::kPathNone: return "none";
-    case gatr2::kPathDirect: return "direct";
-    case gatr2::kPathAvoiding: return "avoiding";
+    case translagatr::kPathNone: return "none";
+    case translagatr::kPathDirect: return "direct";
+    case translagatr::kPathAvoiding: return "avoiding";
     default: return "unknown";
     }
 }
 
 const char* picoImuStateName(uint8_t s) {
     switch (s) {
-    case gatr2::kPicoImuDisabled: return "disabled";
-    case gatr2::kPicoImuInitializing: return "initializing";
-    case gatr2::kPicoImuAligning: return "aligning";
-    case gatr2::kPicoImuReady: return "ready";
-    case gatr2::kPicoImuRetrying: return "retrying";
-    case gatr2::kPicoImuFailed: return "failed";
+    case translagatr::kPicoImuDisabled: return "disabled";
+    case translagatr::kPicoImuInitializing: return "initializing";
+    case translagatr::kPicoImuAligning: return "aligning";
+    case translagatr::kPicoImuReady: return "ready";
+    case translagatr::kPicoImuRetrying: return "retrying";
+    case translagatr::kPicoImuFailed: return "failed";
     default: return "unknown";
     }
 }
 
 const char* picoImuReasonName(uint8_t r) {
     switch (r) {
-    case gatr2::kPicoImuReasonNone: return "none";
-    case gatr2::kPicoImuReasonNoResponse: return "no_response";
-    case gatr2::kPicoImuReasonBoot: return "boot";
-    case gatr2::kPicoImuReasonFeatures: return "features";
-    case gatr2::kPicoImuReasonStream: return "stream";
+    case translagatr::kPicoImuReasonNone: return "none";
+    case translagatr::kPicoImuReasonNoResponse: return "no_response";
+    case translagatr::kPicoImuReasonBoot: return "boot";
+    case translagatr::kPicoImuReasonFeatures: return "features";
+    case translagatr::kPicoImuReasonStream: return "stream";
     default: return "unknown";
     }
 }
 
 const char* picoFirmwareName(uint8_t f) {
     switch (f) {
-    case gatr2::kPicoFirmwareBno08x: return "bno08x";
-    case gatr2::kPicoFirmwareAsm330: return "asm330";
+    case translagatr::kPicoFirmwareBno08x: return "bno08x";
+    case translagatr::kPicoFirmwareAsm330: return "asm330";
     default: return "unknown";
     }
 }
@@ -280,32 +294,32 @@ const char* picoFirmwareName(uint8_t f) {
 const char* picoOpName(uint8_t op) {
     switch (op) {
     case 0: return "none";
-    case gatr2::kPicoOpConfigure: return "configure";
-    case gatr2::kPicoOpReinitImu: return "reinit_imu";
-    case gatr2::kPicoOpRestartAcquisition: return "restart_acquisition";
+    case translagatr::kPicoOpConfigure: return "configure";
+    case translagatr::kPicoOpReinitImu: return "reinit_imu";
+    case translagatr::kPicoOpRestartAcquisition: return "restart_acquisition";
     default: return "unknown";
     }
 }
 
 const char* picoCommandStatusName(uint8_t s) {
     switch (s) {
-    case gatr2::kPicoCommandNone: return "none";
-    case gatr2::kPicoCommandRunning: return "running";
-    case gatr2::kPicoCommandCompleted: return "completed";
-    case gatr2::kPicoCommandFailed: return "failed";
+    case translagatr::kPicoCommandNone: return "none";
+    case translagatr::kPicoCommandRunning: return "running";
+    case translagatr::kPicoCommandCompleted: return "completed";
+    case translagatr::kPicoCommandFailed: return "failed";
     default: return "unknown";
     }
 }
 
 const char* picoDetailName(uint8_t d) {
     switch (d) {
-    case gatr2::kPicoDetailNone: return "none";
-    case gatr2::kPicoDetailWrongTarget: return "wrong_target";
-    case gatr2::kPicoDetailUnknownOp: return "unknown_op";
-    case gatr2::kPicoDetailBadBody: return "bad_body";
-    case gatr2::kPicoDetailImuAbsent: return "imu_absent";
-    case gatr2::kPicoDetailImuDisabled: return "imu_disabled";
-    case gatr2::kPicoDetailNoSuchPort: return "no_such_port";
+    case translagatr::kPicoDetailNone: return "none";
+    case translagatr::kPicoDetailWrongTarget: return "wrong_target";
+    case translagatr::kPicoDetailUnknownOp: return "unknown_op";
+    case translagatr::kPicoDetailBadBody: return "bad_body";
+    case translagatr::kPicoDetailImuAbsent: return "imu_absent";
+    case translagatr::kPicoDetailImuDisabled: return "imu_disabled";
+    case translagatr::kPicoDetailNoSuchPort: return "no_such_port";
     default: return "unknown";
     }
 }
@@ -333,13 +347,14 @@ void stillness(JsonWriter& w, const char* key, const StillnessStatus& s) {
     w.field("stationary", s.stationary);
     w.field("calibration", toString(s.calibration));
     w.field("reason", s.reason);
-    w.field("progress_ms", static_cast<int64_t>(s.progress_ms));
+    // progress counters move every cycle while the robot moves
+    w.varyingField("progress_ms", static_cast<int64_t>(s.progress_ms));
     w.field("window_ms", static_cast<int64_t>(s.window_ms));
-    w.field("windows", s.windows);
-    w.field("restarts", s.restarts);
-    w.field("movements", s.movements);
-    w.field("attempts", static_cast<uint64_t>(s.attempts));
-    w.field("steps", static_cast<uint64_t>(s.steps));
+    w.varyingField("windows", s.windows);
+    w.varyingField("restarts", s.restarts);
+    w.varyingField("movements", s.movements);
+    w.varyingField("attempts", static_cast<uint64_t>(s.attempts));
+    w.varyingField("steps", static_cast<uint64_t>(s.steps));
     w.key("bias_dps");
     if (s.has_bias) {
         w.value(radToDeg(s.bias_rad_s));
@@ -351,7 +366,7 @@ void stillness(JsonWriter& w, const char* key, const StillnessStatus& s) {
 
 // The running profile as the Pi applied it: SI units, degrees.
 void runningProfile(JsonWriter& w, const ProfileBinding& b) {
-    const gatr2::RobotProfileDoc& p = b.profile;
+    const translagatr::RobotProfileDoc& p = b.profile;
     w.beginObject();
     wireId32(w, "id", b.id);
     w.field("generation", b.generation);
@@ -359,19 +374,19 @@ void runningProfile(JsonWriter& w, const ProfileBinding& b) {
     w.field("summary", b.summary);
     w.key("wheels");
     w.beginArray();
-    for (uint8_t i = 0; i < p.wheel_count && i < gatr2::kProfileMaxWheels; ++i) {
-        const gatr2::ProfileWheel& wh = p.wheels[i];
+    for (uint8_t i = 0; i < p.wheel_count && i < translagatr::kProfileMaxWheels; ++i) {
+        const translagatr::ProfileWheel& wh = p.wheels[i];
         w.beginObject();
         w.field("port", static_cast<int64_t>(wh.encoder_port));
         w.field("sensor_id", i < b.encoders.size() ? b.encoders[i].value : std::string());
         w.field("counts_per_rev", static_cast<uint64_t>(wh.counts_per_rev));
-        w.field("gear", wh.gear_micro / static_cast<double>(gatr2::kUnitMicro));
-        w.field("reversed", (wh.flags & gatr2::kWheelReversed) != 0);
+        w.field("gear", wh.gear_micro / static_cast<double>(translagatr::kUnitMicro));
+        w.field("reversed", (wh.flags & translagatr::kWheelReversed) != 0);
         w.field("radius_m", wh.radius_um * 1e-6);
         w.field("x_m", wh.x_um * 1e-6);
         w.field("y_m", wh.y_um * 1e-6);
         w.field("angle_deg", wh.angle_mdeg / 1000.0);
-        w.field("travel_scale", wh.travel_scale_ppm / static_cast<double>(gatr2::kUnitMicro));
+        w.field("travel_scale", wh.travel_scale_ppm / static_cast<double>(translagatr::kUnitMicro));
         w.endObject();
     }
     w.endArray();
@@ -380,7 +395,7 @@ void runningProfile(JsonWriter& w, const ProfileBinding& b) {
     w.field("source", imuSourceName(p.imu_source));
     w.field("port", static_cast<int64_t>(p.imu_port));
     w.field("vex_smart_port", static_cast<int64_t>(p.vex_smart_port));
-    w.field("inverted", (p.imu_flags & gatr2::kImuInvert) != 0);
+    w.field("inverted", (p.imu_flags & translagatr::kImuInvert) != 0);
     w.field("bias_function", b.bias_function);
     w.endObject();
     w.key("footprint");
@@ -401,34 +416,34 @@ void runningProfile(JsonWriter& w, const ProfileBinding& b) {
 }
 
 // The state block a Brain GET_STATE would read now.
-void brainState(JsonWriter& w, const gatr2::BrainState& s) {
+void brainState(JsonWriter& w, const translagatr::BrainState& s) {
     const auto bit = [](uint8_t v, uint8_t b) { return (v & b) != 0; };
     w.key("state");
     w.beginObject();
     w.key("flags");
     w.beginObject();
-    w.field("pose_valid", bit(s.robot_flags, gatr2::kRobotPoseValid));
-    w.field("localized", bit(s.robot_flags, gatr2::kRobotLocalized));
-    w.field("age_known", bit(s.robot_flags, gatr2::kRobotAgeKnown));
-    w.field("anchor_command", bit(s.robot_flags, gatr2::kRobotAnchorCommand));
-    w.field("anchor_configured", bit(s.robot_flags, gatr2::kRobotAnchorConfigured));
+    w.field("pose_valid", bit(s.robot_flags, translagatr::kRobotPoseValid));
+    w.field("localized", bit(s.robot_flags, translagatr::kRobotLocalized));
+    w.field("age_known", bit(s.robot_flags, translagatr::kRobotAgeKnown));
+    w.field("anchor_command", bit(s.robot_flags, translagatr::kRobotAnchorCommand));
+    w.field("anchor_configured", bit(s.robot_flags, translagatr::kRobotAnchorConfigured));
     w.endObject();
     w.key("health");
     w.beginObject();
-    w.field("encoders_fresh", bit(s.health, gatr2::kHealthEncodersFresh));
-    w.field("gyro_fresh", bit(s.health, gatr2::kHealthGyroFresh));
-    w.field("vision_alive", bit(s.health, gatr2::kHealthVisionAlive));
-    w.field("bias_calibrated", bit(s.health, gatr2::kHealthBiasCalibrated));
-    w.field("pico_link", bit(s.health, gatr2::kHealthPicoLink));
-    w.field("imu_initializing", bit(s.health, gatr2::kHealthImuInitializing));
-    w.field("imu_failed", bit(s.health, gatr2::kHealthImuFailed));
-    w.field("stationary", bit(s.health, gatr2::kHealthStationary));
+    w.field("encoders_fresh", bit(s.health, translagatr::kHealthEncodersFresh));
+    w.field("gyro_fresh", bit(s.health, translagatr::kHealthGyroFresh));
+    w.field("vision_alive", bit(s.health, translagatr::kHealthVisionAlive));
+    w.field("bias_calibrated", bit(s.health, translagatr::kHealthBiasCalibrated));
+    w.field("pico_link", bit(s.health, translagatr::kHealthPicoLink));
+    w.field("imu_initializing", bit(s.health, translagatr::kHealthImuInitializing));
+    w.field("imu_failed", bit(s.health, translagatr::kHealthImuFailed));
+    w.field("stationary", bit(s.health, translagatr::kHealthStationary));
     w.endObject();
     w.field("calibration", calibrationName(s.calibration));
     w.field("profile_state", profileStateName(s.profile_state));
     wireId32(w, "profile_id", s.profile_id);
     wireId32(w, "map_id", s.map_id);
-    w.field("estimate_id", static_cast<uint64_t>(s.estimate_id));
+    w.varyingField("estimate_id", static_cast<uint64_t>(s.estimate_id));
     w.field("odometry_epoch", static_cast<uint64_t>(s.odometry_epoch));
     w.field("anchor_revision", static_cast<uint64_t>(s.anchor_revision));
     w.endObject();
@@ -451,13 +466,13 @@ void picoLink(JsonWriter& w, const std::string& resource_id, const PicoLinkState
     ageMs(w, "last_frame_age_ms", l.last_frame, now);
     w.field("status_known", l.status_known);
     if (l.status_known) {
-        const gatr2::PicoStatus& s = l.status;
+        const translagatr::PicoStatus& s = l.status;
         ageMs(w, "last_status_age_ms", l.last_status, now);
         w.field("firmware", picoFirmwareName(s.firmware));
-        w.field("uptime_ms", static_cast<uint64_t>(s.uptime_ms));
+        w.varyingField("uptime_ms", static_cast<uint64_t>(s.uptime_ms));
         w.key("imu");
         w.beginObject();
-        w.field("enabled", (s.flags & gatr2::kPicoImuEnabled) != 0);
+        w.field("enabled", (s.flags & translagatr::kPicoImuEnabled) != 0);
         w.field("state", picoImuStateName(s.imu_state));
         w.field("reason", picoImuReasonName(s.imu_reason));
         w.field("attempts", static_cast<int64_t>(s.imu_attempts));
@@ -516,42 +531,48 @@ bool findRobotFrame(const System& system, const FrameId& frame, Transform3& out)
     return false;
 }
 
+// Timing and throughput are varying; running and overruns are content.
+// dropped is the field worker's latest-frame policy, normal with a camera.
 void workerStats(JsonWriter& w, const char* key, const WorkerStatsSnapshot& s) {
     w.key(key);
     w.beginObject();
     w.field("running", s.running);
-    w.field("cycles", s.cycles);
-    w.field("rate_hz", s.rate_hz);
-    w.field("last_cycle_ms", s.last_cycle_ms);
-    w.field("mean_cycle_ms", s.mean_cycle_ms);
-    w.field("max_cycle_ms", s.max_cycle_ms);
+    w.varyingField("cycles", s.cycles);
+    w.varyingField("rate_hz", s.rate_hz);
+    w.varyingField("last_cycle_ms", s.last_cycle_ms);
+    w.varyingField("mean_cycle_ms", s.mean_cycle_ms);
+    w.varyingField("max_cycle_ms", s.max_cycle_ms);
     w.field("period_target_ms", s.period_target_ms);
     w.field("overruns", s.overruns);
-    w.field("dropped", s.dropped);
-    w.field("pending", s.pending);
+    w.varyingField("dropped", s.dropped);
+    w.varyingField("pending", s.pending);
+    const std::size_t from = w.mark();
     w.key("last_cycle_host_ms");
     if (s.last_cycle_host_ms >= 0) {
         w.value(static_cast<int64_t>(s.last_cycle_host_ms));
     } else {
         w.null();
     }
+    w.varying(from);
     w.endObject();
 }
 
+// Run and traffic counts are varying; faults and error counts are content.
 void diagnostics(JsonWriter& w, const char* key, const Diagnostics& d) {
     w.key(key);
     w.beginObject();
-    w.field("cycles", d.cycles);
+    w.varyingField("cycles", d.cycles);
     w.key("functions");
     w.beginArray();
     for (const auto& kv : d.functions) {
         w.beginObject();
         w.field("label", kv.first);
-        w.field("runs", kv.second.runs);
-        w.field("ok", kv.second.ok);
-        w.field("no_data", kv.second.no_data);
+        w.varyingField("runs", kv.second.runs);
+        w.varyingField("ok", kv.second.ok);
+        w.varyingField("no_data", kv.second.no_data);
         w.field("fault", kv.second.fault);
-        w.field("last", functionStatusName(kv.second.last));
+        // flips between ok and no_data as sensors arrive at their own rates
+        w.varyingField("last", functionStatusName(kv.second.last));
         w.endObject();
     }
     w.endArray();
@@ -560,17 +581,17 @@ void diagnostics(JsonWriter& w, const char* key, const Diagnostics& d) {
     for (const auto& kv : d.links) {
         w.beginObject();
         w.field("id", kv.first);
-        w.field("bytes", kv.second.bytes);
-        w.field("packets", kv.second.packets);
+        w.varyingField("bytes", kv.second.bytes);
+        w.varyingField("packets", kv.second.packets);
         w.field("decode_errors", kv.second.decode_errors);
         w.field("seq_gaps", kv.second.seq_gaps);
-        w.field("requests", kv.second.requests);
+        w.varyingField("requests", kv.second.requests);
         w.field("duplicates", kv.second.duplicates);
-        w.field("superseded", kv.second.superseded);
+        w.varyingField("superseded", kv.second.superseded);
         w.field("stale", kv.second.stale);
         w.field("unknown_session", kv.second.unknown_session);
         w.field("unanswered", kv.second.unanswered);
-        w.field("replies", kv.second.replies);
+        w.varyingField("replies", kv.second.replies);
         w.field("expired", kv.second.expired);
         w.field("input_pending", kv.second.input_pending);
         w.field("late_release", kv.second.late_release);
@@ -587,7 +608,7 @@ void detectionFrame(JsonWriter& w, const System& system, const DetectionFrameSna
     w.field("camera", f.camera.value);
     w.field("frame_id", f.engineering_frame.value);
     w.field("epoch", f.frame_epoch);
-    w.field("sequence", static_cast<uint64_t>(f.frame_sequence));
+    w.varyingField("sequence", static_cast<uint64_t>(f.frame_sequence));
     hostMs(w, "exposure_host_ms", f.exposureAt);
     hostMs(w, "received_host_ms", f.receivedAt);
     hostMs(w, "processed_host_ms", f.processedAt);
@@ -606,20 +627,27 @@ void detectionFrame(JsonWriter& w, const System& system, const DetectionFrameSna
     } else {
         w.fieldNull("T_robot_camera");
     }
-    w.field("field_invocation", f.field_invocation);
+    w.varyingField("field_invocation", f.field_invocation);
 
+    // the robot's pose and tilt at each exposure: varying like robot itself
     w.key("pose_at_exposure");
     w.beginObject();
     w.field("status", lookupStatusName(f.pose_at_exposure.status));
+    std::size_t from = w.mark();
     w.field("exact", f.pose_at_exposure.exact);
+    w.varying(from);
     w.field("odometry_epoch", f.pose_at_exposure.odometry_epoch);
+    from = w.mark();
     pose2(w, "odom", f.pose_at_exposure.odom_pose);
     pose2(w, "field", compose(f.field_from_odom, f.pose_at_exposure.odom_pose));
+    w.varying(from);
     w.endObject();
     w.key("attitude_at_exposure");
     w.beginObject();
     w.field("status", lookupStatusName(f.attitude_at_exposure.status));
+    from = w.mark();
     attitude(w, "attitude", f.attitude_at_exposure.attitude, now);
+    w.varying(from);
     w.endObject();
     pose2(w, "field_from_odom", f.field_from_odom);
     w.field("anchor_revision", f.anchor_revision);
@@ -627,8 +655,8 @@ void detectionFrame(JsonWriter& w, const System& system, const DetectionFrameSna
     // false: preview only, detection did not run on this frame
     w.field("has_observations", f.has_observations);
     w.field("has_trace", f.has_trace);
-    w.field("detector_processing_ms",
-            f.has_observations ? f.observations.detector_processing_ms : 0.0);
+    w.varyingField("detector_processing_ms",
+                   f.has_observations ? f.observations.detector_processing_ms : 0.0);
     w.field("frame_note", f.has_trace ? f.trace.frame_note : std::string());
     w.key("tags");
     w.beginArray();
@@ -716,7 +744,7 @@ void detectionFrame(JsonWriter& w, const System& system, const DetectionFrameSna
 
 } // namespace
 
-std::string helloDocument(const System& system, MonotonicTime now) {
+std::string helloDocument(const System& system, MonotonicTime now, uint64_t client_id) {
     // one consistent binding, safe while a profile boundary runs
     const std::shared_ptr<const BindingView> binding = system.bindingView();
     JsonWriter                               w;
@@ -724,6 +752,10 @@ std::string helloDocument(const System& system, MonotonicTime now) {
     w.field("type", "hello");
     w.field("contract", kInspectionContract);
     w.field("host_ms", static_cast<int64_t>(now.ms));
+    if (client_id != 0) {
+        // this client's row in diag.inspection.clients
+        w.field("client_id", client_id);
+    }
     w.key("session");
     w.beginObject();
     w.field("id", system.sessionId());
@@ -743,9 +775,24 @@ std::string helloDocument(const System& system, MonotonicTime now) {
     w.key("inspection");
     w.beginObject();
     w.field("snapshot_hz", ic.snapshot_hz);
+    w.field("state_hz", ic.state_hz);
+    w.field("diag_hz", ic.diag_hz);
     w.field("preview_hz", ic.preview_hz);
     w.field("preview_quality", static_cast<int64_t>(ic.preview_quality));
     w.field("preview_max_width", static_cast<int64_t>(ic.preview_max_width));
+    w.endObject();
+    // what this server can send; a client subscribes to the optional parts
+    w.key("features");
+    w.beginObject();
+    w.field("state_hz", ic.state_hz);
+    w.field("max_state_hz", kMaxStateHz);
+    w.field("diag_hz", ic.diag_hz);
+    w.field("capture", captureAvailable(system));
+    w.field("instrumentation", true);
+    // TELEMETRY arrives only over a Brain link
+    w.field("telemetry", system.commandsType() == "brain_link");
+    w.field("history_max", static_cast<uint64_t>(kHistoryMaxEntries));
+    w.field("attitude_fresh_ms", static_cast<int64_t>(kAttitudeFreshMs));
     w.endObject();
     w.key("robot_body");
     w.beginObject();
@@ -982,26 +1029,48 @@ std::string helloDocument(const System& system, MonotonicTime now) {
     return w.take();
 }
 
-std::string snapshotDocument(const System& system, const InspectionServiceStats& service,
-                             MonotonicTime now, std::size_t trail_max_entries) {
-    JsonWriter w;
-    w.beginObject();
-    w.field("type", "snapshot");
-    w.field("contract", kInspectionContract);
-    w.field("host_ms", static_cast<int64_t>(now.ms));
+namespace
+{
+
+// reset_count is the count the document's data was read under (see
+// underOneReset), not a fresh read.
+void session(JsonWriter& w, const System& system, uint64_t reset_count) {
     w.key("session");
     w.beginObject();
     w.field("id", system.sessionId());
-    w.field("reset_count", system.resetCount());
+    w.field("reset_count", reset_count);
     w.endObject();
-    w.field("cycle", system.cycle());
-    w.field("running", system.running());
+}
 
-    const std::shared_ptr<RobotStateFeed> feed   = system.robotFeed();
-    const LocalizationSnapshot localization = feed->snapshot(trail_max_entries);
-    const RobotState& robot = localization.robot;
-    const LocalizationStatus& status = localization.status;
+// System::reset publishes the power-on state (invalid, the next odometry
+// epoch) and only then counts the reset, with the workers paused between.
+// So the count is read before the data and checked after: when it held, the
+// document carries nothing of an earlier session, at most the power-on
+// state of the next one. A reset between the reads builds it again; stable
+// is false when resets kept landing, and the last build is returned.
+constexpr int kResetAttempts = 3;
 
+template <typename Build>
+std::string underOneReset(const System& system, Build build, bool* stable = nullptr) {
+    std::string doc;
+    for (int attempt = 0; attempt < kResetAttempts; ++attempt) {
+        const uint64_t reset = system.resetCount();
+        doc                  = build(reset);
+        if (system.resetCount() == reset) {
+            if (stable != nullptr) {
+                *stable = true;
+            }
+            return doc;
+        }
+    }
+    if (stable != nullptr) {
+        *stable = false;
+    }
+    return doc;
+}
+
+// Snapshot robot fields; the state message carries exactly these.
+void writeRobot(JsonWriter& w, const RobotState& robot, MonotonicTime now) {
     w.key("robot");
     w.beginObject();
     w.field("valid", robot.valid);
@@ -1038,14 +1107,55 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
     ageMs(w, "age_ms", robot.measuredAtHost, now);
     attitude(w, "attitude", robot.attitude, now);
     w.endObject();
+}
+
+// Trail entries oldest first; the snapshot holds them newest first.
+void writeTrail(JsonWriter& w, const std::vector<PoseHistoryEntry>& recent) {
+    w.key("trail");
+    w.beginArray();
+    for (auto it = recent.rbegin(); it != recent.rend(); ++it) {
+        w.beginObject();
+        w.field("host_ms", static_cast<int64_t>(it->at.ms));
+        w.field("x_m", it->odom_pose.x_m);
+        w.field("y_m", it->odom_pose.y_m);
+        w.field("heading_deg", radToDeg(it->odom_pose.heading_rad));
+        w.field("epoch", it->odometry_epoch);
+        w.field("attitude_valid", it->attitude.valid);
+        if (it->attitude.valid) {
+            double roll = 0.0, pitch = 0.0, yaw = 0.0;
+            attitudeEuler(it->attitude, roll, pitch, yaw);
+            w.field("roll_deg", radToDeg(roll));
+            w.field("pitch_deg", radToDeg(pitch));
+        }
+        w.endObject();
+    }
+    w.endArray();
+}
+
+// Everything of the snapshot after its header. The trail only when asked.
+// Values that change on every build (clocks, ages, counters, the robot,
+// which state carries anyway) are marked varying for the diag identity
+// check (JsonWriter::recordVarying).
+void writeSnapshotBody(JsonWriter& w, const System& system, const InspectionServiceStats& service,
+                       MonotonicTime now, const LocalizationSnapshot& localization,
+                       uint64_t reset_count, bool with_trail) {
+    const RobotState&         robot  = localization.robot;
+    const LocalizationStatus& status = localization.status;
+
+    session(w, system, reset_count);
+    w.varyingField("cycle", system.cycle());
+    w.field("running", system.running());
+    std::size_t from = w.mark();
+    writeRobot(w, robot, now);
+    w.varying(from);
 
     w.key("localization");
     w.beginObject();
     w.field("estimator_type", status.estimator_type);
-    w.field("updates", status.updates);
-    w.field("history_size", status.history_size);
+    w.varyingField("updates", status.updates);
+    w.varyingField("history_size", status.history_size);
     w.field("clock_mapped", status.clock_mapped);
-    w.field("publication", localization.publication);
+    w.varyingField("publication", localization.publication);
     w.field("all_ready", status.allReady());
     // gated stationary handling: velocity reported zero, the pose untouched
     w.field("stationary", status.stationary());
@@ -1059,7 +1169,9 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
         w.field("type", f.type);
         w.field("ready", f.ready);
         w.field("note", f.note);
-        w.field("dropped_intervals", f.dropped_intervals);
+        // rises every cycle while the robot moves during a bias calibration;
+        // dropped_why names the reason and is content
+        w.varyingField("dropped_intervals", f.dropped_intervals);
         w.field("dropped_why", f.dropped_why);
         stillness(w, "stillness", f.stillness);
         w.endObject();
@@ -1068,33 +1180,14 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
     w.endObject();
 
     // oldest first, bounded
-    w.key("trail");
-    w.beginArray();
-    {
-        const auto& recent = localization.trail;
-        for (auto it = recent.rbegin(); it != recent.rend(); ++it) {
-            w.beginObject();
-            w.field("host_ms", static_cast<int64_t>(it->at.ms));
-            w.field("x_m", it->odom_pose.x_m);
-            w.field("y_m", it->odom_pose.y_m);
-            w.field("heading_deg", radToDeg(it->odom_pose.heading_rad));
-            w.field("epoch", it->odometry_epoch);
-            w.field("attitude_valid", it->attitude.valid);
-            if (it->attitude.valid) {
-                double roll = 0.0, pitch = 0.0, yaw = 0.0;
-                attitudeEuler(it->attitude, roll, pitch, yaw);
-                w.field("roll_deg", radToDeg(roll));
-                w.field("pitch_deg", radToDeg(pitch));
-            }
-            w.endObject();
-        }
+    if (with_trail) {
+        writeTrail(w, localization.trail);
     }
-    w.endArray();
 
     const std::shared_ptr<const FieldSnapshot> field = system.fieldSnapshot();
     w.key("field_snapshot");
     w.beginObject();
-    w.field("invocation", field->invocation);
+    w.varyingField("invocation", field->invocation);
     hostMs(w, "at_host_ms", field->at);
     ageMs(w, "age_ms", field->at, now);
     w.field("status", functionStatusName(field->status));
@@ -1152,7 +1245,7 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
             ageMs(w, "age_ms", o.lastObservedAt, now);
             w.field("last_source", o.last_source);
             w.field("last_feature", o.last_feature);
-            w.field("last_source_sequence", static_cast<uint64_t>(o.last_source_sequence));
+            w.varyingField("last_source_sequence", static_cast<uint64_t>(o.last_source_sequence));
             w.endObject();
         }
     }
@@ -1266,8 +1359,8 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
         w.key("wheels");
         w.beginArray();
         if (reporting != nullptr) {
-            for (const gatr2::WheelReading& r : reporting->wheels) {
-                const gatr2::ProfileWheel* p = nullptr;
+            for (const translagatr::WheelReading& r : reporting->wheels) {
+                const translagatr::ProfileWheel* p = nullptr;
                 for (uint8_t i = 0; running != nullptr && i < running->profile.wheel_count; ++i) {
                     if (running->profile.wheels[i].encoder_port == r.port) {
                         p = &running->profile.wheels[i];
@@ -1275,19 +1368,20 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
                 }
                 w.beginObject();
                 w.field("port", static_cast<int64_t>(r.port));
-                w.field("valid", (r.flags & gatr2::kWheelValid) != 0);
-                w.field("fresh", (r.flags & gatr2::kWheelFresh) != 0);
-                w.field("counts", static_cast<int64_t>(r.counts));
-                w.field("travel_m", r.travel_um * 1e-6);
+                w.field("valid", (r.flags & translagatr::kWheelValid) != 0);
+                w.field("fresh", (r.flags & translagatr::kWheelFresh) != 0);
+                // readings move with the robot; flags and discontinuities are content
+                w.varyingField("counts", static_cast<int64_t>(r.counts));
+                w.varyingField("travel_m", r.travel_um * 1e-6);
                 w.field("discontinuity", static_cast<int64_t>(r.discontinuity));
-                w.field("age_ms", static_cast<int64_t>(r.age_ms));
+                w.varyingField("age_ms", static_cast<int64_t>(r.age_ms));
                 if (p != nullptr) {
                     w.field("counts_per_rev", static_cast<uint64_t>(p->counts_per_rev));
-                    w.field("gear", p->gear_micro / static_cast<double>(gatr2::kUnitMicro));
-                    w.field("reversed", (p->flags & gatr2::kWheelReversed) != 0);
+                    w.field("gear", p->gear_micro / static_cast<double>(translagatr::kUnitMicro));
+                    w.field("reversed", (p->flags & translagatr::kWheelReversed) != 0);
                     w.field("radius_m", p->radius_um * 1e-6);
                     w.field("travel_scale",
-                            p->travel_scale_ppm / static_cast<double>(gatr2::kUnitMicro));
+                            p->travel_scale_ppm / static_cast<double>(translagatr::kUnitMicro));
                 }
                 w.endObject();
             }
@@ -1311,7 +1405,7 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
         // the Brain's latest PATH_REPORT, field frame, inspection only
         w.key("path");
         const PathReport* path = reporting != nullptr ? &reporting->command.path : nullptr;
-        if (path == nullptr || path->mode == gatr2::kPathNone || path->count == 0) {
+        if (path == nullptr || path->mode == translagatr::kPathNone || path->count == 0) {
             w.null();
         } else {
             w.beginObject();
@@ -1371,11 +1465,11 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
             hostMs(w, "received_host_ms", e.receivedAt);
             ageMs(w, "receipt_age_ms", e.receivedAt, now);
             hostMs(w, "last_polled_host_ms", e.lastPolledAt);
-            w.field("sequence", e.sequence);
+            w.varyingField("sequence", e.sequence);
             w.field("epoch", e.epoch);
             w.field("upstream_source", e.upstream_source);
             w.field("upstream_clock", e.upstream_clock);
-            w.field("upstream_sequence", e.upstream_sequence);
+            w.varyingField("upstream_sequence", e.upstream_sequence);
             w.field("upstream_epoch", e.upstream_epoch);
             w.endObject();
         }
@@ -1386,6 +1480,8 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
     w.beginObject();
     workerStats(w, "estimation", system.estimationStats());
     workerStats(w, "field", system.fieldStats());
+    // transport counters: they change with every message sent
+    const std::size_t inspection_begin = w.mark();
     w.key("inspection");
     w.beginObject();
     w.field("running", service.running);
@@ -1403,7 +1499,28 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
     w.field("mean_encode_ms", service.mean_encode_ms);
     w.field("snapshot_rate_hz", service.snapshot_rate_hz);
     w.field("frame_rate_hz", service.frame_rate_hz);
+    w.field("diag_rate_hz", service.diag_rate_hz);
+    w.field("states_queued", service.states_queued);
+    w.field("states_replaced", service.states_replaced);
+    w.field("diags_queued", service.diags_queued);
+    w.field("diags_replaced", service.diags_replaced);
+    w.field("diags_skipped", service.diags_skipped);
+    w.field("hellos_queued", service.hellos_queued);
+    w.field("histories_queued", service.histories_queued);
+    w.field("events_queued", service.events_queued);
+    w.field("captures_queued", service.captures_queued);
+    w.field("pongs_queued", service.pongs_queued);
+    w.field("telemetry_queued", service.telemetry_queued);
+    w.field("instrumentation_queued", service.instrumentation_queued);
+    w.field("messages_replaced", service.messages_replaced);
+    w.field("messages_refused", service.messages_refused);
+    w.field("closed_stalled", service.closed_stalled);
+    w.field("closed_reliable_overflow", service.closed_reliable_overflow);
+    w.field("closed_protocol", service.closed_protocol);
+    w.field("closed_peer", service.closed_peer);
+    w.field("flow_control_clients", service.flow_control_clients);
     w.endObject();
+    w.varying(inspection_begin);
     w.endObject();
 
     const std::shared_ptr<const DiagnosticsSnapshot> diag = system.diagnosticsSnapshot();
@@ -1416,13 +1533,482 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
         diagnostics(w, "field", diag->field);
         w.endObject();
     }
+}
+
+void buildStats(JsonWriter& w, const char* key, const DocBuildStats& s) {
+    w.key(key);
+    w.beginObject();
+    w.field("count", s.count);
+    w.field("last_us", s.last_us);
+    w.field("mean_us", s.mean_us);
+    w.field("recent_mean_us", s.recent_mean_us);
+    w.field("max_us", s.max_us);
+    w.field("last_bytes", s.last_bytes);
+    w.field("mean_bytes", s.mean_bytes);
+    w.endObject();
+}
+
+// A duration, null when never measured (negative).
+void optionalMs(JsonWriter& w, const char* key, double ms) {
+    w.key(key);
+    if (ms >= 0.0) {
+        w.value(ms);
+    } else {
+        w.null();
+    }
+}
+
+// diag.inspection: per-client queues and document costs.
+void feedStats(JsonWriter& w, const InspectionServiceStats& service,
+               const InspectionFeedStats& feed) {
+    w.key("inspection");
+    w.beginObject();
+    w.field("contract", kInspectionContract);
+    w.field("state_hz", feed.state_hz);
+    w.field("diag_hz", feed.diag_hz);
+    w.key("build");
+    w.beginObject();
+    buildStats(w, "state", feed.state);
+    buildStats(w, "diag", feed.diag);
+    buildStats(w, "history", feed.history);
+    buildStats(w, "instrumentation", feed.instrumentation);
+    w.endObject();
+    w.key("closed");
+    w.beginObject();
+    w.field("stalled", service.closed_stalled);
+    w.field("reliable_overflow", service.closed_reliable_overflow);
+    w.field("protocol", service.closed_protocol);
+    w.field("peer", service.closed_peer);
+    w.endObject();
+    w.field("messages_replaced", service.messages_replaced);
+    w.field("messages_refused", service.messages_refused);
+    w.key("recent_closes");
+    w.beginArray();
+    for (const WsCloseRecord& c : feed.recent_closes) {
+        w.beginObject();
+        w.field("id", c.id);
+        w.field("reason", c.reason);
+        w.field("host_ms", c.host_ms);
+        w.endObject();
+    }
+    w.endArray();
+    w.key("clients");
+    w.beginArray();
+    for (const FeedClientStats& c : feed.clients) {
+        const WsClientStats& q = c.queue;
+        w.beginObject();
+        w.field("id", q.id);
+        w.field("connected_ms", q.connected_ms);
+        w.field("queued_bytes", static_cast<uint64_t>(q.queued_bytes));
+        w.field("in_flight_bytes", static_cast<uint64_t>(q.in_flight_bytes));
+        w.field("reliable_backlog", static_cast<uint64_t>(q.reliable_backlog));
+        w.field("reliable_bytes", static_cast<uint64_t>(q.reliable_bytes));
+        w.field("slots_pending", static_cast<uint64_t>(q.slots_pending));
+        w.field("diag_skipped", c.diag_skipped);
+        w.field("flow_control", q.flow_control);
+        w.field("unacked_bytes", q.unacked_bytes);
+        optionalMs(w, "ack_rtt_ms", q.ack_rtt_ms);
+        optionalMs(w, "ack_rtt_min_ms", q.ack_rtt_min_ms);
+        w.field("pace_gap_ms", q.pace_gap_ms);
+        w.key("subscription");
+        w.beginObject();
+        w.field("state_hz", c.subscription.state_hz);
+        w.field("diag", c.subscription.diag);
+        w.field("instrumentation", c.subscription.instrumentation);
+        w.field("raw", c.subscription.raw);
+        w.field("decoded", c.subscription.decoded);
+        w.field("telemetry", c.subscription.telemetry);
+        w.field("preview_hz", c.subscription.preview_hz);
+        w.endObject();
+        w.key("channels");
+        w.beginObject();
+        for (const WsChannelStats& ch : q.channels) {
+            w.key(ch.name);
+            w.beginObject();
+            w.field("replaceable", ch.replaceable);
+            w.field("queued", ch.queued);
+            w.field("sent", ch.sent);
+            w.field("replaced", ch.replaced);
+            w.field("refused", ch.refused);
+            w.field("dropped", ch.dropped);
+            w.field("bytes", ch.bytes);
+            optionalMs(w, "last_latency_ms", ch.last_latency_ms);
+            optionalMs(w, "last_acked_ms", ch.last_acked_ms);
+            w.endObject();
+        }
+        w.endObject();
+        w.endObject();
+    }
+    w.endArray();
+    w.endObject();
+}
+
+void hubStats(JsonWriter& w, const DiagnosticsHub& hub) {
+    const DiagHubStats s = hub.stats();
+    w.key("hub");
+    w.beginObject();
+    // posted, queued and drained move with every record; drops are content
+    std::size_t from = w.mark();
+    w.key("posted");
+    w.beginObject();
+    for (int k = 0; k < kDiagKindCount; ++k) {
+        w.field(diagKindName(static_cast<DiagKind>(k)), s.posted[static_cast<std::size_t>(k)]);
+    }
+    w.endObject();
+    w.varying(from);
+    w.key("dropped");
+    w.beginObject();
+    for (int k = 0; k < kDiagKindCount; ++k) {
+        w.field(diagKindName(static_cast<DiagKind>(k)), s.dropped[static_cast<std::size_t>(k)]);
+    }
+    w.endObject();
+    w.varyingField("queued", static_cast<uint64_t>(s.queued));
+    w.field("capacity", static_cast<uint64_t>(s.capacity));
+    w.varyingField("drained", s.drained);
+    w.endObject();
+}
+
+// FNV-1a over the document, leaving out the spans. Spans nest (a varying
+// age inside the varying robot), so they are sorted by start first.
+uint64_t contentHash(const std::string& s, JsonSpans spans) {
+    std::sort(spans.begin(), spans.end());
+    uint64_t    h   = 1469598103934665603ull;
+    std::size_t pos = 0;
+    auto        mix = [&](std::size_t from, std::size_t to) {
+        for (std::size_t i = from; i < to; ++i) {
+            h ^= static_cast<unsigned char>(s[i]);
+            h *= 1099511628211ull;
+        }
+    };
+    for (const auto& span : spans) {
+        mix(pos, std::min(span.first, s.size()));
+        pos = std::max(pos, std::min(span.second, s.size()));
+    }
+    mix(pos, s.size());
+    return h;
+}
+
+// Wire enum names of the Brain's motion telemetry (actuGATR MotionState,
+// MotionReason, DriveFault; investiGATR PlanMode). Keep in step with
+// brain/actuGATR/include/actugatr/{motion,drive}.h; unknown values print
+// "unknown" next to the number.
+const char* motionStateName(uint8_t v) {
+    static const char* const kNames[] = {"idle",      "waiting",   "running", "settling",
+                                         "completed", "cancelled", "failed"};
+    return v < sizeof(kNames) / sizeof(kNames[0]) ? kNames[v] : "unknown";
+}
+
+const char* motionReasonName(uint8_t v) {
+    static const char* const kNames[] = {
+        "none",           "invalid_command",       "invalid_config",     "input_unavailable",
+        "no_profile",     "calibrating",           "placement_required", "input_lost",
+        "frame_changed",  "field_unavailable",     "map_mismatch",       "unknown_reference",
+        "not_reference",  "reference_unavailable", "unsupported_model",  "start_out_of_bounds",
+        "start_blocked",  "goal_out_of_bounds",    "goal_blocked",       "no_path",
+        "tracking_error", "plan_limit",            "timed_out",          "source_changed",
+        "cancelled_by_caller"};
+    return v < sizeof(kNames) / sizeof(kNames[0]) ? kNames[v] : "unknown";
+}
+
+const char* planModeName(uint8_t v) {
+    switch (v) {
+    case 0: return "direct";
+    case 1: return "avoiding";
+    default: return "unknown";
+    }
+}
+
+const char* driveFaultName(uint8_t v) {
+    static const char* const kNames[] = {"none", "wrong_frame", "non_finite", "unsupported_motion",
+                                         "stale"};
+    return v < sizeof(kNames) / sizeof(kNames[0]) ? kNames[v] : "unknown";
+}
+
+void codeAndName(JsonWriter& w, const char* key, const char* name_key, uint8_t v,
+                 const char* name) {
+    w.field(key, static_cast<int64_t>(v));
+    w.field(name_key, name);
+}
+
+// A document an object writer produced, with the message header in front:
+// {"type":...,"seq":...,"host_ms":..., <the object's own fields>}.
+std::string flatMessage(const char* type, uint64_t seq, MonotonicTime now,
+                        const std::string& object) {
+    JsonWriter w;
+    w.beginObject();
+    w.field("type", type);
+    w.field("seq", seq);
+    w.field("host_ms", static_cast<int64_t>(now.ms));
+    std::string out = w.take();
+    if (object.size() > 2 && object.front() == '{' && object.back() == '}') {
+        out += ',';
+        out.append(object, 1, std::string::npos);
+    } else {
+        out += '}';
+    }
+    return out;
+}
+
+} // namespace
+
+const char* attitudeStatus(const Attitude& a, MonotonicTime now) {
+    if (a.valid) {
+        const bool fresh = a.measuredAt.domain == ClockDomain::kHost &&
+                           now.domain == ClockDomain::kHost &&
+                           now.ms - a.measuredAt.ms <= kAttitudeFreshMs;
+        return fresh ? "measured" : "stale";
+    }
+    return a.assumed_level ? "assumed_level" : "unavailable";
+}
+
+bool captureAvailable(const System& system) {
+    const CaptureService* capture = system.capture();
+    if (capture == nullptr) {
+        return false;
+    }
+    JsonWriter w;
+    capture->writeStatus(w);
+    return w.str().find("\"available\":true") != std::string::npos;
+}
+
+std::string snapshotDocument(const System& system, const InspectionServiceStats& service,
+                             MonotonicTime now, std::size_t trail_max_entries) {
+    return underOneReset(system, [&](uint64_t reset) {
+        const LocalizationSnapshot localization = system.robotFeed()->snapshot(trail_max_entries);
+        JsonWriter                 w;
+        w.beginObject();
+        w.field("type", "snapshot");
+        w.field("contract", kSnapshotContract);
+        w.field("host_ms", static_cast<int64_t>(now.ms));
+        writeSnapshotBody(w, system, service, now, localization, reset, true);
+        w.endObject();
+        return w.take();
+    });
+}
+
+std::string stateDocument(const System& system, uint64_t seq, MonotonicTime now, int64_t now_us,
+                          uint64_t* publication) {
+    uint64_t          doc_publication = 0;
+    bool              stable          = false;
+    const std::string doc             = underOneReset(
+        system,
+        [&](uint64_t reset) {
+            const LocalizationSnapshot localization = system.robotFeed()->snapshot(0);
+            const LocalizationStatus&  status       = localization.status;
+            doc_publication                         = localization.publication;
+            JsonWriter w;
+            w.beginObject();
+            w.field("type", "state");
+            w.field("seq", seq);
+            w.field("host_ms", static_cast<int64_t>(now.ms));
+            w.field("host_us", now_us);
+            session(w, system, reset);
+            w.field("publication", localization.publication);
+            writeRobot(w, localization.robot, now);
+            w.key("localization");
+            w.beginObject();
+            w.field("all_ready", status.allReady());
+            w.field("stationary", status.stationary());
+            w.field("continuity_breaks", status.continuity_breaks);
+            w.field("last_break", status.last_break);
+            w.endObject();
+            w.endObject();
+            return w.take();
+        },
+        &stable);
+    if (!stable) {
+        return {};   // the next tick sends a state under one reset count
+    }
+    if (publication != nullptr) {
+        *publication = doc_publication;
+    }
+    return doc;
+}
+
+std::string historyDocument(const System& system, uint64_t seq, MonotonicTime now,
+                            std::size_t max_entries) {
+    // unstable only when resets keep landing; a new hello and history follow each
+    return underOneReset(system, [&](uint64_t reset) {
+        const LocalizationSnapshot localization = system.robotFeed()->snapshot(max_entries);
+        JsonWriter                 w;
+        w.beginObject();
+        w.field("type", "history");
+        w.field("seq", seq);
+        w.field("host_ms", static_cast<int64_t>(now.ms));
+        session(w, system, reset);
+        w.field("publication", localization.publication);
+        w.field("max_entries", static_cast<uint64_t>(max_entries));
+        writeTrail(w, localization.trail);
+        w.endObject();
+        return w.take();
+    });
+}
+
+std::string diagDocument(const System& system, const InspectionServiceStats& service,
+                         const InspectionFeedStats& feed, uint64_t seq, MonotonicTime now,
+                         uint64_t* content_hash) {
+    JsonSpans         spans;
+    bool              stable = false;
+    const std::string doc    = underOneReset(
+        system,
+        [&](uint64_t reset) {
+            spans.clear();
+            const LocalizationSnapshot localization = system.robotFeed()->snapshot(0);
+            JsonWriter                 w;
+            w.recordVarying(&spans);
+            w.beginObject();
+            w.field("type", "diag");
+            w.field("contract", kInspectionContract);
+            w.varyingField("seq", seq);
+            w.varyingField("host_ms", static_cast<int64_t>(now.ms));
+            writeSnapshotBody(w, system, service, now, localization, reset, false);
+            const std::size_t from = w.mark();
+            feedStats(w, service, feed);
+            w.varying(from);
+            hubStats(w, system.diagHub());
+            w.endObject();
+            return w.take();
+        },
+        &stable);
+    if (!stable) {
+        return {};   // the next scheduled diag goes under one reset count
+    }
+    if (content_hash != nullptr) {
+        *content_hash = contentHash(doc, spans);
+    }
+    return doc;
+}
+
+std::string eventDocument(const RuntimeEvent& e) {
+    JsonWriter w;
+    w.beginObject();
+    w.field("type", "event");
+    w.field("seq", e.sequence);
+    hostMs(w, "host_ms", e.at);
+    w.field("text", e.text);
     w.endObject();
     return w.take();
 }
 
+std::string pongDocument(const std::string& id_token, const std::string& client_ms_token,
+                         MonotonicTime now, int64_t now_us) {
+    JsonWriter w;
+    w.beginObject();
+    w.field("type", "pong");
+    w.key("id");
+    if (id_token.empty()) {
+        w.null();
+    } else {
+        w.raw(id_token);
+    }
+    w.key("client_ms");
+    if (client_ms_token.empty()) {
+        w.null();
+    } else {
+        w.raw(client_ms_token);
+    }
+    w.field("host_ms", static_cast<int64_t>(now.ms));
+    w.field("host_us", now_us);
+    w.endObject();
+    return w.take();
+}
+
+bool decodeTelemetryRecord(const DiagBrainTelemetry& rec, translagatr::BrainTelemetry& out) {
+    if (rec.len > sizeof(rec.body)) {
+        return false;
+    }
+    return translagatr::decodeTelemetryBody(rec.body, rec.len, out);
+}
+
+std::string telemetryDocument(uint64_t seq, MonotonicTime now, const DiagRecord& record,
+                              const DiagBrainTelemetry& rec,
+                              const translagatr::BrainTelemetry& t) {
+    using namespace translagatr;
+    JsonWriter w;
+    w.beginObject();
+    w.field("type", "telemetry");
+    w.field("seq", seq);
+    w.field("host_ms", static_cast<int64_t>(now.ms));
+    // Pi arrival of the report; stamp_ms is the Brain clock
+    const int64_t received_ms = record.host_us / 1000;
+    w.field("received_host_ms", received_ms);
+    w.field("age_ms", static_cast<int64_t>(now.ms) - received_ms);
+    w.field("session", static_cast<uint64_t>(rec.session));
+    w.field("stamp_ms", static_cast<uint64_t>(t.stamp_ms));
+    w.field("flags", static_cast<int64_t>(t.flags));
+    w.key("attitude");
+    if ((t.flags & kTelemetryAttitude) != 0) {
+        w.beginObject();
+        w.field("roll_deg", t.roll_cdeg / 100.0);
+        w.field("pitch_deg", t.pitch_cdeg / 100.0);
+        w.endObject();
+    } else {
+        w.null();
+    }
+    w.key("motion");
+    if ((t.flags & kTelemetryMotion) != 0) {
+        w.beginObject();
+        w.field("command_id", static_cast<uint64_t>(t.command_id));
+        codeAndName(w, "state", "state_name", t.motion_state, motionStateName(t.motion_state));
+        codeAndName(w, "reason", "reason_name", t.motion_reason,
+                    motionReasonName(t.motion_reason));
+        codeAndName(w, "mode", "mode_name", t.plan_mode, planModeName(t.plan_mode));
+        w.field("segment", static_cast<int64_t>(t.segment));
+        w.field("segment_count", static_cast<int64_t>(t.segment_count));
+        w.key("target");
+        w.beginObject();
+        w.field("x_m", t.target_x_mm / 1000.0);
+        w.field("y_m", t.target_y_mm / 1000.0);
+        w.field("heading_deg", t.target_heading_cdeg / 100.0);
+        w.endObject();
+        w.key("cmd");
+        w.beginObject();
+        w.field("vx_m_s", t.cmd_vx_mm_s / 1000.0);
+        w.field("vy_m_s", t.cmd_vy_mm_s / 1000.0);
+        w.field("omega_deg_s", t.cmd_omega_cdeg_s / 100.0);
+        w.endObject();
+        w.field("cross_track_m", t.cross_track_mm / 1000.0);
+        w.field("distance_error_m", t.distance_error_mm / 1000.0);
+        w.field("heading_error_deg", t.heading_error_cdeg / 100.0);
+        codeAndName(w, "drive_fault", "drive_fault_name", t.drive_fault,
+                    driveFaultName(t.drive_fault));
+        w.endObject();
+    } else {
+        w.null();
+    }
+    w.key("wheels");
+    if ((t.flags & kTelemetryWheels) != 0) {
+        w.beginObject();
+        w.key("rpm");
+        w.beginArray();
+        for (uint8_t i = 0; i < t.wheel_count && i < kTelemetryWheelsMax; ++i) {
+            w.value(t.wheel_rpm_x10[i] / 10.0);
+        }
+        w.endArray();
+        w.endObject();
+    } else {
+        w.null();
+    }
+    w.endObject();
+    return w.take();
+}
+
+std::string instrumentationDocument(const System& system, uint64_t seq, MonotonicTime now,
+                                    const InstrumentationOptions& options) {
+    JsonWriter w;
+    writeInstrumentation(w, system, options);
+    return flatMessage("instrumentation", seq, now, w.str());
+}
+
+std::string captureDocument(const CaptureService& capture, uint64_t seq, MonotonicTime now) {
+    JsonWriter w;
+    capture.writeStatus(w);
+    return flatMessage("capture", seq, now, w.str());
+}
+
 std::string frameHeaderDocument(const DetectionFrameSnapshot& frame, int preview_width_px,
                                 int preview_height_px, long quality, double encode_ms,
-                                MonotonicTime now) {
+                                MonotonicTime now, const System* system) {
     JsonWriter w;
     w.beginObject();
     w.field("type", "frame");
@@ -1439,6 +2025,12 @@ std::string frameHeaderDocument(const DetectionFrameSnapshot& frame, int preview
     w.field("quality", static_cast<int64_t>(quality));
     w.field("encode_ms", encode_ms);
     w.field("format", "image/jpeg");
+    if (system != nullptr) {
+        // the detection_frames entry of exactly this frame, so overlays bind
+        // without waiting for a diag that names it
+        w.key("detection");
+        detectionFrame(w, *system, frame, now);
+    }
     w.endObject();
     return w.take();
 }

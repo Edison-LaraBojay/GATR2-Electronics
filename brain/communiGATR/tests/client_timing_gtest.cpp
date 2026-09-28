@@ -27,17 +27,18 @@ uint8_t opOf(const Transmission& t) { return t.bytes.size() > 5 ? t.bytes[5] : 0
 
 // Largest reply frame for a request op.
 int maxReplyFrame(uint8_t op) {
-    return gatr2::brainReplyMaxLen(op, gatr2::kResultOk) + gatr2::kLinkEnvelopeLen;
+    return translagatr::brainReplyMaxLen(op, translagatr::kResultOk) + translagatr::kLinkEnvelopeLen;
 }
 
 // Largest request frame per op.
 int maxRequestFrame(uint8_t op) {
-    return gatr2::brainRequestMaxLen(op) + gatr2::kLinkEnvelopeLen;
+    return translagatr::brainRequestMaxLen(op) + translagatr::kLinkEnvelopeLen;
 }
 
-const uint8_t kOps[] = {gatr2::kOpHello,        gatr2::kOpSetPose,  gatr2::kOpGetState,
-                        gatr2::kOpProfileWrite, gatr2::kOpProfileApply, gatr2::kOpReadDoc,
-                        gatr2::kOpControl,      gatr2::kOpPathReport};
+const uint8_t kOps[] = {translagatr::kOpHello,        translagatr::kOpSetPose,  translagatr::kOpGetState,
+                        translagatr::kOpProfileWrite, translagatr::kOpProfileApply, translagatr::kOpReadDoc,
+                        translagatr::kOpControl,      translagatr::kOpPathReport,
+                        translagatr::kOpTelemetry};
 
 ClientConfig withProfile() {
     RobotProfile p;
@@ -71,13 +72,13 @@ TEST(ClientTiming, EveryOpTimeoutMeetsBudget) {
         EXPECT_GE(timeout, config.response_timeout);
     }
     // The v3 pair needs no allowance; 128 byte frames do.
-    EXPECT_DOUBLE_EQ(client.responseTimeout(gatr2::kOpSetPose, 26), config.response_timeout);
-    EXPECT_NEAR(client.responseTimeout(gatr2::kOpReadDoc, 22),
+    EXPECT_DOUBLE_EQ(client.responseTimeout(translagatr::kOpSetPose, 26), config.response_timeout);
+    EXPECT_NEAR(client.responseTimeout(translagatr::kOpReadDoc, 22),
                 config.response_timeout + (22 + 128 - 85) * kByte, 1e-12);
-    EXPECT_NEAR(client.responseTimeout(gatr2::kOpProfileWrite, 128),
+    EXPECT_NEAR(client.responseTimeout(translagatr::kOpProfileWrite, 128),
                 config.response_timeout + (128 + 25 - 85) * kByte, 1e-12);
-    EXPECT_EQ(maxReplyFrame(gatr2::kOpReadDoc), 128);
-    EXPECT_EQ(maxRequestFrame(gatr2::kOpProfileWrite), 128);
+    EXPECT_EQ(maxReplyFrame(translagatr::kOpReadDoc), 128);
+    EXPECT_EQ(maxRequestFrame(translagatr::kOpProfileWrite), 128);
     EXPECT_GE(config.request_gap, 0.005);
     EXPECT_GT(config.link_timeout, config.state_period + config.response_timeout);
 }
@@ -101,8 +102,8 @@ TEST(ClientTiming, ReplyAnywhereInWindowIsAccepted) {
 
         const PlacementTicket ticket = rig.client().submitPlacement(10, 20, 30);
         const ControlTicket   recal  = rig.client().recalibrate();
-        const gatr2::PathPoint points[13] = {};
-        rig.client().reportPath(1, gatr2::kPathAvoiding, points, 13);
+        const translagatr::PathPoint points[13] = {};
+        rig.client().reportPath(1, translagatr::kPathAvoiding, points, 13);
         rig.run(1.0);
 
         SCOPED_TRACE(delay);
@@ -131,7 +132,7 @@ TEST(ClientTiming, RetryStartsAfterLatestPossibleReply) {
     rig.bus.setPiPresent(false);
     const std::size_t first = rig.bus.log().size();
     rig.client().submitPlacement(1, 2, 3);
-    rig.client().reportPath(1, gatr2::kPathDirect, nullptr, 0);
+    rig.client().reportPath(1, translagatr::kPathDirect, nullptr, 0);
     rig.run(1.5);
 
     const auto& log = rig.bus.log();
@@ -139,7 +140,7 @@ TEST(ClientTiming, RetryStartsAfterLatestPossibleReply) {
     bool read_doc = false;
     for (std::size_t i = first + 1; i < log.size(); ++i) {
         ASSERT_TRUE(log[i].brain && log[i - 1].brain);
-        read_doc      = read_doc || opOf(log[i - 1]) == gatr2::kOpReadDoc;
+        read_doc      = read_doc || opOf(log[i - 1]) == translagatr::kOpReadDoc;
         const int max = maxReplyFrame(opOf(log[i - 1]));
         EXPECT_GE(log[i].start, log[i - 1].end + kPiWindow + max * kByte + kPiRelease)
             << "after op " << int(opOf(log[i - 1]));
@@ -168,12 +169,12 @@ TEST(ClientTiming, GapAfterReplyPollPeriodAndTransfersOnlyWhenPollNotDue) {
             EXPECT_GE(t.start, reply_readable + config.request_gap - kEps);
         }
         const uint8_t op = opOf(t);
-        if (op == gatr2::kOpGetState) {
+        if (op == translagatr::kOpGetState) {
             if (last_poll >= 0) {
                 EXPECT_GE(t.start - last_poll, config.state_period - kEps);
             }
             last_poll = t.start;
-        } else if (op == gatr2::kOpReadDoc || op == gatr2::kOpPathReport) {
+        } else if (op == translagatr::kOpReadDoc || op == translagatr::kOpPathReport) {
             ++transfers;
             ASSERT_GE(last_poll, 0.0);
             EXPECT_LT(t.start, last_poll + config.state_period) << "transfer with the poll due";
@@ -204,7 +205,7 @@ TEST(ClientTiming, StatePollingStaysResponsiveDuringTransfers) {
         }
         const auto& log = rig.bus.log();
         for (; seen < log.size(); ++seen) {
-            if (log[seen].brain && opOf(log[seen]) == gatr2::kOpGetState) {
+            if (log[seen].brain && opOf(log[seen]) == translagatr::kOpGetState) {
                 if (last >= 0) {
                     worst = std::max(worst, log[seen].start - last);
                 }

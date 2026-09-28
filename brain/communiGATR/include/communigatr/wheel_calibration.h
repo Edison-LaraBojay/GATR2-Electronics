@@ -22,7 +22,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "common/frames.h"
+#include "translaGATR/frames.h"
 #include "communigatr/robot_profile.h"
 #include "investigatr/geometry.h"
 
@@ -52,7 +52,7 @@ struct CalibrationSnapshot {
     Radians                  heading       = 0;
 };
 
-WheelSample fromReading(const gatr2::WheelReading& reading);
+WheelSample fromReading(const translagatr::WheelReading& reading);
 
 struct WheelCalibrationConfig {
     Meters  min_reference  = 0.5;   // shorter pushes are too sensitive to the tape measure

@@ -11,18 +11,18 @@ only attitude source in the repository today.
 
 ## What the live path has
 
-`common/frames.h` defines these optional Pico sensor-frame fields:
+`translaGATR/frames.h` defines these optional Pico sensor-frame fields:
 
 | Field | Meaning | Used for |
 |---|---|---|
 | `gyro_z` | mdeg/s, bias not removed; BNO08X projects gyro XYZ onto startup up, ASM330 sends physical gyro Z | planar heading increment (`imu_heading_increment`, `HeadingConstraint`) |
 | `accel[2]` | mg, two axes | supported by the decoder, not emitted by current firmware or exposed as a Pi resource output |
 
-The BNO08X driver (`pico/src/imu_bno08x.cpp`) reads acceleration XYZ at 100 Hz
+The BNO08X driver (`pico/aggreGATR/src/imu_bno08x.cpp`) reads acceleration XYZ at 100 Hz
 and uncalibrated gyro XYZ at 200 Hz. Its stationary, level startup alignment
 learns a fixed up axis, allowing arbitrary fixed mounting for yaw projection.
 That axis stays fixed while driving; it supplies neither live tilt nor dynamic
-rocking compensation. The ASM330LHHG1 driver (`pico/src/imu_asm330.cpp`) reads
+rocking compensation. The ASM330LHHG1 driver (`pico/aggreGATR/src/imu_asm330.cpp`) reads
 physical gyro Z with its accelerometer disabled.
 
 Both paths send yaw only. Live profiles report attitude unavailable, draw the

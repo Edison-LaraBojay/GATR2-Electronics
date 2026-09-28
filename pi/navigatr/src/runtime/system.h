@@ -93,6 +93,8 @@
 #include <thread>
 #include <vector>
 
+#include "capture/capture_config.h"
+#include "capture/capture_recorder.h"
 #include "contracts/brain_profile.h"
 #include "contracts/commands.h"
 #include "contracts/field_estimation.h"
@@ -102,6 +104,7 @@
 #include "core/diagnostics.h"
 #include "core/function_registry.h"
 #include "core/records.h"
+#include "diagnostics/hub.h"
 #include "resources/pico_control.h"
 #include "resources/resource_store.h"
 #include "runtime/brain_profile_builder.h"
@@ -141,13 +144,13 @@ struct FieldSnapshot {
 // A CONTROL 3 or 4 running on the Pico, wire codes.
 struct PicoOperation {
     bool          active = false;
-    uint8_t       action = 0;   // gatr2::ControlAction
+    uint8_t       action = 0;   // translagatr::ControlAction
     uint32_t      handle = 0;
     MonotonicTime started;
     uint8_t       acq_epoch = 0;   // at submit, RestartAcquisition
     uint64_t      restarts  = 0;
-    uint8_t       result    = 0;   // gatr2::BrainResult, Pending until settled
-    uint8_t       detail    = 0;   // gatr2::ControlDetail
+    uint8_t       result    = 0;   // translagatr::BrainResult, Pending until settled
+    uint8_t       detail    = 0;   // translagatr::ControlDetail
 };
 
 // Command and target state as the estimation worker last left them, and
@@ -158,8 +161,8 @@ struct ReportingSnapshot {
     MonotonicTime at;
     uint64_t      cycle = 0;
 
-    std::optional<gatr2::BrainState> brain_state;   // GET_STATE now; brain_link only
-    std::vector<gatr2::WheelReading> wheels;        // READ_WHEELS now, profile order
+    std::optional<translagatr::BrainState> brain_state;   // GET_STATE now; brain_link only
+    std::vector<translagatr::WheelReading> wheels;        // READ_WHEELS now, profile order
     PicoOperation                    pico_operation;
 };
 
@@ -273,6 +276,17 @@ public:
     const CommandState& command() const { return command_; }
     const TargetState&  target() const { return target_; }
     Diagnostics&        diagnostics() { return diagnostics_; }
+
+    // Diagnostic records for capture and live instrumentation. Internally
+    // synchronized; kept across reset() and profile swaps. The feed posts
+    // every publication, noteEvent every event.
+    DiagnosticsHub& diagHub() const { return *diag_hub_; }
+    // Bounded diagnostic capture (<Capture>, docs/capture.md), built after
+    // the pipeline; never null after a successful build. It keeps recording
+    // across reset() and profile swaps; the System feeds it reset
+    // boundaries and fault triggers. Stopped before the workers.
+    CaptureService*      capture() const { return capture_.get(); }
+    const CaptureConfig& captureConfig() const { return capture_config_; }
     Diagnostics&        fieldDiagnostics() { return field_diagnostics_; }
 
     // Thread-safe readers, for the other worker and inspection. The feed
@@ -324,11 +338,11 @@ private:
     LocalizationRequests requestsFrom(const CommandState& command) const;
 
     // BrainProfileHost, on the estimation worker.
-    bool    prepareProfile(const gatr2::RobotProfileDoc& profile, uint32_t id, uint8_t& reason,
+    bool    prepareProfile(const translagatr::RobotProfileDoc& profile, uint32_t id, uint8_t& reason,
                            uint8_t& detail);
     uint8_t controlProfile(uint8_t action, uint8_t arg, MonotonicTime now, uint8_t& detail);
     uint8_t controlProgress(uint8_t action, MonotonicTime now, uint8_t& detail);
-    uint8_t readWheels(MonotonicTime now, uint8_t& count, gatr2::WheelReading* wheels) const;
+    uint8_t readWheels(MonotonicTime now, uint8_t& count, translagatr::WheelReading* wheels) const;
 
     // Pico commands and recovery bookkeeping, on the estimation worker.
     uint32_t submitPico(uint8_t op, uint8_t arg, MonotonicTime now, uint8_t& detail);
@@ -345,6 +359,7 @@ private:
     void resumeWorkers(bool was_running);
     void publishBindingView();
     void noteEvent(MonotonicTime at, std::string text);
+    void noteFault(CaptureFault fault, const std::string& text);   // automatic capture trigger
 
     void resetStages();
     bool startWorkers(std::string& err);   // lifecycle mutex held
@@ -387,6 +402,10 @@ private:
     FunctionKey                       commands_type_;
 
     std::shared_ptr<RobotStateFeed> feed_;   // the one feed, kept across profile boundaries
+    std::shared_ptr<DiagnosticsHub> diag_hub_ = std::make_shared<DiagnosticsHub>();
+    uint16_t                        event_source_ = 0;   // hub source id of noteEvent
+    CaptureConfig                    capture_config_;
+    std::unique_ptr<CaptureRecorder> capture_;   // set last in build; stopped first
 
     // estimation worker state
     std::atomic<uint64_t>    cycle_{0};

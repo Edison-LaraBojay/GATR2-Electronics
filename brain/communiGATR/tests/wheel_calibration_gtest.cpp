@@ -53,9 +53,9 @@ TrackingWheel sidewaysWheel() {
 } // namespace
 
 TEST(WheelCalibration, ReadingConversion) {
-    gatr2::WheelReading r;
+    translagatr::WheelReading r;
     r.port          = 2;
-    r.flags         = gatr2::kWheelFresh | gatr2::kWheelValid;
+    r.flags         = translagatr::kWheelFresh | translagatr::kWheelValid;
     r.discontinuity = 9;
     r.counts        = -123;
     r.travel_um     = 1234567;

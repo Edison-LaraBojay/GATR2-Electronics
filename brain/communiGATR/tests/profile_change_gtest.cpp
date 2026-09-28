@@ -35,7 +35,7 @@ RobotProfile benchProfile() {
 // Two PROFILE_WRITE chunks: four camera mounts.
 RobotProfile largeProfile() {
     RobotProfile p = benchProfile();
-    for (uint8_t slot = 0; slot < gatr2::kProfileMaxCameras; ++slot) {
+    for (uint8_t slot = 0; slot < translagatr::kProfileMaxCameras; ++slot) {
         CameraMount c;
         c.slot = slot;
         c.x    = 0.05 * slot;
@@ -53,7 +53,7 @@ class ProfileChange : public testing::TestWithParam<RigTransport> {
 protected:
     ProfileChange() : rig(config(), FakeBusConfig{}, GetParam()) {
         rig.pi.setProfileMode(true);
-        rig.pi.robot().health = gatr2::kHealthEncodersFresh | gatr2::kHealthGyroFresh;
+        rig.pi.robot().health = translagatr::kHealthEncodersFresh | translagatr::kHealthGyroFresh;
     }
 
     static ClientConfig config() {
@@ -151,7 +151,7 @@ TEST_P(ProfileChange, InvalidFirstProfileShowsItsReasonUntilReplaced) {
     EXPECT_FALSE(rig.driver().setProfile(bad));
     EXPECT_TRUE(rig.driver().hasProfile());
     EXPECT_EQ(rig.client().profile().state, ProfileSync::kInvalid);
-    EXPECT_EQ(rig.client().profile().reason, gatr2::kProfileReasonEncoderPort);
+    EXPECT_EQ(rig.client().profile().reason, translagatr::kProfileReasonEncoderPort);
     EXPECT_EQ(rig.client().profile().detail, 1);
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().ready(); }, kLimit));
     rig.run(0.3);
@@ -166,10 +166,10 @@ TEST_P(ProfileChange, InvalidFirstProfileShowsItsReasonUntilReplaced) {
 
 TEST_P(ProfileChange, ChangeInTheMiddleOfAnUploadEndsWithTheNewDocument) {
     ASSERT_TRUE(rig.driver().setProfile(largeProfile()));
-    ASSERT_GT(rig.client().config().profile.len, gatr2::kProfileChunkMax);
+    ASSERT_GT(rig.client().config().profile.len, translagatr::kProfileChunkMax);
     // First chunk staged on the Pi, its reply still on the way.
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.pi.stagingReceived() == gatr2::kProfileChunkMax; }, kLimit));
+        [&] { return rig.pi.stagingReceived() == translagatr::kProfileChunkMax; }, kLimit));
     RobotProfile changed           = largeProfile();
     changed.wheels[0].travel_scale = 0.995;
     ASSERT_TRUE(rig.driver().setProfile(changed));
@@ -177,14 +177,14 @@ TEST_P(ProfileChange, ChangeInTheMiddleOfAnUploadEndsWithTheNewDocument) {
     EXPECT_EQ(rig.pi.appliedProfile(), rig.client().profile().id);
     EXPECT_EQ(rig.pi.profilesApplied(), 1);
     EXPECT_EQ(rig.client().stats().unexpected, 0u);
-    EXPECT_EQ(rig.client().profile().reason, gatr2::kProfileReasonNone);
+    EXPECT_EQ(rig.client().profile().reason, translagatr::kProfileReasonNone);
 }
 
 TEST_P(ProfileChange, ChangeWhileThePiAppliesTheOldOneEndsWithTheNewOne) {
     rig.pi.setProfileApplyDelay(30);
     ASSERT_TRUE(rig.driver().setProfile(benchProfile()));
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.client().profile().result == gatr2::kResultPending; }, kLimit));
+        [&] { return rig.client().profile().result == translagatr::kResultPending; }, kLimit));
     RobotProfile changed           = benchProfile();
     changed.wheels[1].travel_scale = 1.02;
     ASSERT_TRUE(rig.driver().setProfile(changed));
@@ -202,7 +202,7 @@ TEST_P(ProfileChange, NewProfileNeverShowsTheOldPlacement) {
         SCOPED_TRACE(delay);
         LinkRig r(config(), FakeBusConfig{}, GetParam());
         r.pi.setProfileMode(true);
-        r.pi.robot().health = gatr2::kHealthEncodersFresh | gatr2::kHealthGyroFresh;
+        r.pi.robot().health = translagatr::kHealthEncodersFresh | translagatr::kHealthGyroFresh;
         ASSERT_TRUE(r.driver().setProfile(benchProfile()));
         ASSERT_TRUE(r.runUntil([&] { return r.client().profileApplied(); }, kLimit));
         const PlacementTicket ticket = r.driver().place(Pose{0.5, 0.4, 0.0});
@@ -246,7 +246,7 @@ TEST_P(ProfileChange, BrainRestartWithAnEditedProfileNeverShowsTheOldPlacement) 
         SCOPED_TRACE(delay);
         LinkRig r(config(), FakeBusConfig{}, GetParam());
         r.pi.setProfileMode(true);
-        r.pi.robot().health = gatr2::kHealthEncodersFresh | gatr2::kHealthGyroFresh;
+        r.pi.robot().health = translagatr::kHealthEncodersFresh | translagatr::kHealthGyroFresh;
         ASSERT_TRUE(r.driver().setProfile(benchProfile()));
         ASSERT_TRUE(r.runUntil([&] { return r.client().profileApplied(); }, kLimit));
         const PlacementTicket ticket = r.driver().place(Pose{0.5, 0.4, 0.0});
@@ -275,7 +275,7 @@ TEST_P(ProfileChange, BrainRestartWithAnEditedProfileNeverShowsTheOldPlacement) 
         EXPECT_EQ(valid, 0);
         EXPECT_EQ(placed, 0);
         EXPECT_EQ(r.pi.appliedProfile(), r.client().profile().id);
-        EXPECT_EQ(r.pi.robot().robot_flags & gatr2::kRobotLocalized, 0);
+        EXPECT_EQ(r.pi.robot().robot_flags & translagatr::kRobotLocalized, 0);
     }
 }
 

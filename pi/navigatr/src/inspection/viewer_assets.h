@@ -1,5 +1,5 @@
 // viewer_assets.h
-// The browser inspector compiled into the binary: viewer/ plus the pinned
+// The browser viewer compiled into the binary: spectaGATR/ plus the pinned
 // three.js files under vendor/. Generated at build time by
 // cmake/embed_assets.cmake so the Pi serves the viewer with no filesystem
 // dependency, no CDN and no development server.

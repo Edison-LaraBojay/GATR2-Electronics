@@ -7,7 +7,7 @@
 #include <cstring>
 #include <vector>
 
-#include "common/link_documents.h"
+#include "translaGATR/link_documents.h"
 
 namespace communigatr
 {
@@ -40,8 +40,8 @@ bool toWire(double value, int32_t& out) {
 
 EstimateSource sourceOf(uint8_t code) {
     switch (code) {
-    case gatr2::kEstimateSourceNominal: return EstimateSource::kNominal;
-    case gatr2::kEstimateSourceObserved: return EstimateSource::kObserved;
+    case translagatr::kEstimateSourceNominal: return EstimateSource::kNominal;
+    case translagatr::kEstimateSourceObserved: return EstimateSource::kObserved;
     default: return EstimateSource::kNone;
     }
 }
@@ -64,23 +64,23 @@ investigatr::RobotState LinkDriver::robot(Seconds now) {
         return out;
     }
     const StateSample&       sample = client_.state();
-    const gatr2::BrainState& s      = sample.state;
-    if (s.calibration == gatr2::kCalibrationRunning ||
-        s.calibration == gatr2::kCalibrationWaitingStill ||
-        s.calibration == gatr2::kCalibrationWaitingData) {
+    const translagatr::BrainState& s      = sample.state;
+    if (s.calibration == translagatr::kCalibrationRunning ||
+        s.calibration == translagatr::kCalibrationWaitingStill ||
+        s.calibration == translagatr::kCalibrationWaitingData) {
         out.status = RobotStatus::kCalibrating;
         return out;
     }
     const uint8_t flags  = s.robot_flags;
-    const bool    anchor = (flags & gatr2::kRobotAnchorCommand) != 0 ||
+    const bool    anchor = (flags & translagatr::kRobotAnchorCommand) != 0 ||
                         (config_.accept_configured_anchor &&
-                         (flags & gatr2::kRobotAnchorConfigured) != 0);
+                         (flags & translagatr::kRobotAnchorConfigured) != 0);
     // A pending placement is about to replace the anchor.
-    if ((flags & gatr2::kRobotLocalized) == 0 || !anchor || client_.placementPending()) {
+    if ((flags & translagatr::kRobotLocalized) == 0 || !anchor || client_.placementPending()) {
         out.status = RobotStatus::kUnplaced;
         return out;
     }
-    if ((flags & gatr2::kRobotPoseValid) == 0 || (flags & gatr2::kRobotAgeKnown) == 0) {
+    if ((flags & translagatr::kRobotPoseValid) == 0 || (flags & translagatr::kRobotAgeKnown) == 0) {
         out.status = RobotStatus::kNoPose;
         return out;
     }
@@ -102,10 +102,10 @@ bool LinkDriver::field(investigatr::Field& out) {
     }
     const uint16_t map_len = static_cast<uint16_t>(p.map.size());
     const uint16_t est_len = static_cast<uint16_t>(p.estimate.size());
-    gatr2::FieldMapHeader      map;
-    gatr2::FieldEstimateHeader estimate;
-    if (!gatr2::decodeFieldMapHeader(p.map.data(), map_len, map) ||
-        !gatr2::decodeFieldEstimateHeader(p.estimate.data(), est_len, estimate) ||
+    translagatr::FieldMapHeader      map;
+    translagatr::FieldEstimateHeader estimate;
+    if (!translagatr::decodeFieldMapHeader(p.map.data(), map_len, map) ||
+        !translagatr::decodeFieldEstimateHeader(p.estimate.data(), est_len, estimate) ||
         estimate.object_count != map.object_count) {
         return false; // the client publishes only validated pairs
     }
@@ -123,19 +123,19 @@ bool LinkDriver::field(investigatr::Field& out) {
     const Seconds transit = p.completed_at - p.snapshot_after;
     out.objects.resize(map.object_count);
     for (uint16_t i = 0; i < map.object_count; ++i) {
-        gatr2::FieldObjectRecord   r;
-        gatr2::FieldEstimateRecord e;
-        gatr2::decodeFieldObjectRecord(p.map.data(), map_len, i, r);
-        gatr2::decodeFieldEstimateRecord(p.estimate.data(), est_len, i, e);
+        translagatr::FieldObjectRecord   r;
+        translagatr::FieldEstimateRecord e;
+        translagatr::decodeFieldObjectRecord(p.map.data(), map_len, i, r);
+        translagatr::decodeFieldEstimateRecord(p.estimate.data(), est_len, i, e);
 
         investigatr::FieldObject& o = out.objects[i];
         o                           = investigatr::FieldObject{};
         o.id                        = r.object_id;
-        o.kind      = r.kind == gatr2::kObjectLandmark ? investigatr::ObjectKind::kLandmark
+        o.kind      = r.kind == translagatr::kObjectLandmark ? investigatr::ObjectKind::kLandmark
                                                        : investigatr::ObjectKind::kFixed;
-        o.obstacle  = (r.flags & gatr2::kObjectObstacle) != 0;
-        o.estimated = (r.flags & gatr2::kObjectEstimated) != 0;
-        o.reference = (r.flags & gatr2::kObjectReference) != 0;
+        o.obstacle  = (r.flags & translagatr::kObjectObstacle) != 0;
+        o.estimated = (r.flags & translagatr::kObjectEstimated) != 0;
+        o.reference = (r.flags & translagatr::kObjectReference) != 0;
         o.nominal   = fromWire(r.x_mm, r.y_mm, r.heading_cdeg);
         o.box.center = Pose{r.box_x_mm / kMmPerMeter, r.box_y_mm / kMmPerMeter,
                             fromCdeg(r.box_heading_cdeg)};
@@ -143,7 +143,7 @@ bool LinkDriver::field(investigatr::Field& out) {
         o.box.width  = r.box_width_mm / kMmPerMeter;
 
         o.source = sourceOf(e.source);
-        o.valid  = (e.flags & gatr2::kEstimateValid) != 0;
+        o.valid  = (e.flags & translagatr::kEstimateValid) != 0;
         if (o.valid) {
             o.pose = fromWire(e.x_mm, e.y_mm, e.heading_cdeg);
         }
@@ -156,15 +156,15 @@ bool LinkDriver::field(investigatr::Field& out) {
 }
 
 void LinkDriver::reportPath(investigatr::CommandId command, const investigatr::Path& path) {
-    uint8_t mode = gatr2::kPathNone;
+    uint8_t mode = translagatr::kPathNone;
     if (!path.empty()) {
-        mode = path.mode == investigatr::PlanMode::kAvoiding ? uint8_t{gatr2::kPathAvoiding}
-                                                             : uint8_t{gatr2::kPathDirect};
+        mode = path.mode == investigatr::PlanMode::kAvoiding ? uint8_t{translagatr::kPathAvoiding}
+                                                             : uint8_t{translagatr::kPathDirect};
     }
-    std::vector<gatr2::PathPoint> points;
+    std::vector<translagatr::PathPoint> points;
     points.reserve(path.segments.size() + 1);
     const auto add = [&points](const Pose& p) {
-        gatr2::PathPoint point;
+        translagatr::PathPoint point;
         if (!toWire(p.x * kMmPerMeter, point.x_mm) || !toWire(p.y * kMmPerMeter, point.y_mm)) {
             return false;
         }

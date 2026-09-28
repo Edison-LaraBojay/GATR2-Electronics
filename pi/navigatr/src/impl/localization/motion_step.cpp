@@ -180,6 +180,10 @@ void AttitudeFold::apply(StateEstimatorOutput& out, const StateEstimatorInput& i
             level.source           = retained_.observation.source.source;
             level.measuredAt       = retained_.hostAt;
             level.measuredAtSource = retained_.observation.measuredAt;
+        } else if (!ref_.empty()) {
+            // a source is configured but has measured nothing yet: the
+            // observation id names it, and no measurement time exists
+            level.source = ref_.value;
         }
         r.attitude = level;
     }

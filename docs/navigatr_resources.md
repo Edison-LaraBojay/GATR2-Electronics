@@ -90,7 +90,7 @@ still describe the robot in resources such as `wheel_geometry`.
   start drives it low. Implemented and host tested with a fake port; not
   validated on hardware (TIOCSERGETLSR on the Pi UART, turnaround timing, DE
   behavior).
-- Hardware alignment: the Pico transmits at 115200 (`pico/src/config.h`); the
+- Hardware alignment: the Pico transmits at 115200 (`pico/aggreGATR/src/config.h`); the
   brain link is UART5 at `/dev/ttyAMA5` (`dtoverlay=uart5`), RS-485 half
   duplex with DE on GPIO6, where the Pi only answers Brain requests.
 
@@ -172,7 +172,7 @@ still describe the robot in resources such as `wheel_geometry`.
   status) and the Pi to Pico command channel. Consumers other than the
   channel sensors use only `PicoControl`: the brain_link CommandCollection and
   Publishing through `<Pico resource_id="pico_telemetry"/>`. Details in
-  [Pico link](../pi/navigatr/docs/pico_link.md).
+  [Pico link](../pi/naviGATR/docs/pico_link.md).
 - Schema:
 
 ```xml
@@ -257,8 +257,8 @@ still describe the robot in resources such as `wheel_geometry`.
   `CollisionBox` are errors. The `brain_link` publisher's `Field` turns this
   data into the Brain's map document; that needs `revision`, `Boundary` and a
   `wire_id` on every landmark (see
-  [landmarks](../pi/navigatr/docs/landmarks.md#field-documents) and
-  [field assets](../pi/navigatr/docs/field_assets.md#planning-data)).
+  [landmarks](../pi/naviGATR/docs/landmarks.md#field-documents) and
+  [field assets](../pi/naviGATR/docs/field_assets.md#planning-data)).
 - Optional Dimensions, Feature, and Visual metadata supplies viewer geometry
   only; it never becomes an obstacle.
 - Thread safety: immutable after construction.
@@ -293,7 +293,7 @@ still describe the robot in resources such as `wheel_geometry`.
   `Intrinsics model="brown_conrady"` with the full distortion set tied to
   the exact camera/lens/resolution, `Extrinsic frame_id` naming the
   engineering frame in the robot frame map). See the
-  [camera template](../pi/navigatr/config/shared/robots/gatr2_front_camera.xml.in).
+  [camera template](../pi/naviGATR/config/shared/robots/gatr2_front_camera.xml.in).
   Omitting Calibration supports 2D detection and inspection without metric pose.
 - Output: one `sensor.camera_frame` (`CameraFramePayload`) under the id of
   the optional `<Output id="frame"/>` child (default `frame`), published
@@ -305,7 +305,7 @@ still describe the robot in resources such as `wheel_geometry`.
   fails configuration. With the backend built, a camera open failure produces
   a warning and an unavailable device so the rest of the runtime can run.
   Capture receives frames asynchronously and resource polling forwards the
-  newest completed frame. See [Pi camera setup](../pi/navigatr/docs/pi_camera_setup.md).
+  newest completed frame. See [Pi camera setup](../pi/naviGATR/docs/pi_camera_setup.md).
 
 ## apriltag_detector
 
@@ -330,7 +330,7 @@ still describe the robot in resources such as `wheel_geometry`.
   association). Robot-relative targets carry a delta snapshotted once per
   new command sequence. Validated at build against the field map and the
   robot frame map. The `configured_targets` implementation consumes this
-  resource; see [target lifecycle and output](../pi/navigatr/docs/landmarks.md).
+  resource; see [target lifecycle and output](../pi/naviGATR/docs/landmarks.md).
 
 ## wheel_geometry
 
@@ -375,7 +375,7 @@ robot geometry:
 The same configs name the Brain link (`pros_usb_link` or `linux_serial_link`)
 on the CommandCollection and Publishing, `pico_telemetry` again in their
 `<Pico>`, and a `field_map` in the Publishing `<Field>`. See
-[Brain robot profiles](../pi/navigatr/docs/brain_profile.md).
+[Brain robot profiles](../pi/naviGATR/docs/brain_profile.md).
 
 ## synthetic_rig
 
@@ -386,5 +386,5 @@ on the CommandCollection and Publishing, `pico_telemetry` again in their
 - The demo drives the same channel sensors, observation models, detector, and
   association code used by other profiles. Its geometry and measurements are
   synthetic, not calibration for a physical robot.
-- See the [demo robot fragment](../pi/navigatr/config/shared/robots/synthetic_rig.xml)
-  and [demo profiles](../pi/navigatr/config/demo/).
+- See the [demo robot fragment](../pi/naviGATR/config/shared/robots/synthetic_rig.xml)
+  and [demo profiles](../pi/naviGATR/config/demo/).

@@ -46,6 +46,18 @@
 // reports the operation's current progress instead. READ_WHEELS is
 // Unavailable without a profile host; with one the host reads the profile
 // wheels (NotReady before a profile is applied).
+//
+// TELEMETRY is answered Ok (header only) and recorded for display and
+// capture only: its attitude group goes to the BenchImu mailbox as the
+// robot tilt (without the group the tilt is unavailable), and nothing else
+// changes. A resend of the newest id is answered again.
+//
+// Instrumentation (with the System's DiagnosticsHub): the link's
+// LinkMonitor sees every read at the decoded frame layer (for USB, the
+// frame bytes the NG1 lines carried), every decoded request, and every
+// rejected frame; the hub gets each GET_STATE bench IMU sample (when
+// wanted), PATH_REPORT, TELEMETRY, and one record per processed request
+// with the result actually sent (completed by the brain_link publisher).
 
 #pragma once
 #include <array>
@@ -55,8 +67,8 @@
 #include <string>
 #include <vector>
 
-#include "common/frame_codec.h"
-#include "common/link_documents.h"
+#include "translaGATR/frame_codec.h"
+#include "translaGATR/link_documents.h"
 #include "contracts/brain_profile.h"
 #include "contracts/commands.h"
 #include "resources/brain_imu_bench.h"
@@ -64,6 +76,13 @@
 
 namespace navigatr
 {
+
+class DiagnosticsHub;
+class LinkMonitor;
+
+// Display names of brain link v4 ops and results.
+const char* brainOpName(uint8_t op);
+const char* brainResultName(uint8_t result);
 
 class BrainLinkCommands : public Commands
 {
@@ -81,18 +100,20 @@ public:
     uint32_t piInstance() const { return pi_instance_; }
 
 private:
-    void     process(const gatr2::BrainRequest& req, CommandState& c, LinkStats* stats,
+    void     process(const translagatr::BrainRequest& req, CommandState& c, LinkStats* stats,
                      MonotonicTime now);
-    void     execute(const gatr2::BrainRequest& req, CommandState& c, MonotonicTime now,
+    void     execute(const translagatr::BrainRequest& req, CommandState& c, MonotonicTime now,
                      bool repeat);
-    void     hello(const gatr2::BrainRequest& req, CommandState& c, LinkStats* stats);
-    void     repeat(const gatr2::BrainRequest& req, CommandState& c, LinkStats* stats,
+    void     hello(const translagatr::BrainRequest& req, CommandState& c, LinkStats* stats);
+    void     repeat(const translagatr::BrainRequest& req, CommandState& c, LinkStats* stats,
                     MonotonicTime now);
-    void     setPose(const gatr2::BrainRequest& req, CommandState& c);
-    void     profileWrite(const gatr2::BrainRequest& req, BrainReplyContext& r);
-    void     profileApply(const gatr2::BrainRequest& req, CommandState& c);
+    void     setPose(const translagatr::BrainRequest& req, CommandState& c);
+    void     profileWrite(const translagatr::BrainRequest& req, BrainReplyContext& r);
+    void     profileApply(const translagatr::BrainRequest& req, CommandState& c);
     void     rejectProfile(uint32_t id, uint8_t reason, uint8_t detail, CommandState& c);
     uint32_t randomNonzero(uint32_t differs_from);
+    void     noteDecoded(const translagatr::BrainRequest& req);
+    void     noteProcessed(const translagatr::BrainRequest& req, const BrainReplyContext& reply);
 
     std::shared_ptr<SerialLink>    link_;
     std::shared_ptr<BrainImuBench> bench_imu_;
@@ -101,7 +122,14 @@ private:
     int64_t                        window_us_ = 40000;
     int64_t                        guard_us_  = 1000;
 
-    gatr2::FrameReader reader_;
+    DiagnosticsHub*              hub_       = nullptr;
+    uint16_t                     source_id_ = 0;
+    std::shared_ptr<LinkMonitor> monitor_;
+    bool                         repeated_  = false;   // the processed request was a resend
+    uint8_t                      request_len_ = 0;     // frame bytes of the newest request
+    uint8_t                      request_frame_[translagatr::kMaxFrameLen] = {};
+
+    translagatr::FrameReader reader_;
     bool               have_last_read_ = false;   // a previous drain exists
     int64_t            last_read_us_   = 0;       // its final, empty read
 
@@ -115,7 +143,7 @@ private:
     std::vector<uint32_t> recent_nonces_;           // last opening nonces, newest last
 
     bool                have_newest_ = false;
-    gatr2::BrainRequest newest_;   // the newest processed request
+    translagatr::BrainRequest newest_;   // the newest processed request
 
     struct SetPoseRecord {
         bool     valid        = false;
@@ -141,7 +169,7 @@ private:
         uint32_t id        = 0;
         uint16_t total_len = 0;   // 0 = nothing staged
         uint16_t received  = 0;   // contiguous from offset 0
-        std::array<uint8_t, gatr2::kProfileMaxLen> bytes{};
+        std::array<uint8_t, translagatr::kProfileMaxLen> bytes{};
     };
     struct Rejection {
         uint32_t id     = 0;

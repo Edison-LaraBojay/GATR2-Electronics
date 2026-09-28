@@ -1,6 +1,6 @@
 # Choosing and splitting configuration
 
-Run commands from `pi/navigatr` after building. On the Pi:
+Run commands from `pi/naviGATR` after building. On the Pi:
 
 ```sh
 ./build/navigatr
@@ -40,7 +40,7 @@ cmake --build build -j4
 ```
 
 CMake remembers this choice in that build directory. A relative default path is
-resolved against the `pi/navigatr` source directory and compiled as an absolute
+resolved against the `pi/naviGATR` source directory and compiled as an absolute
 path, so launching from another working directory still finds it. An explicit
 CLI filename is resolved from the shell's working directory.
 

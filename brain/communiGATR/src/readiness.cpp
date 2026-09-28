@@ -2,7 +2,7 @@
 
 #include "communigatr/readiness.h"
 
-#include "common/link_documents.h"
+#include "translaGATR/link_documents.h"
 
 namespace communigatr
 {
@@ -15,14 +15,14 @@ ImuUse imuUse(const Client& client) {
         return ImuUse::kUnknown;
     }
     const ProfileDocument& doc = client.config().profile;
-    gatr2::RobotProfileDoc decoded;
-    if (!gatr2::decodeRobotProfile(doc.bytes, doc.len, decoded)) {
+    translagatr::RobotProfileDoc decoded;
+    if (!translagatr::decodeRobotProfile(doc.bytes, doc.len, decoded)) {
         return ImuUse::kUnknown;
     }
     switch (decoded.imu_source) {
-    case gatr2::kImuSourcePico: return ImuUse::kPico;
-    case gatr2::kImuSourceBrainVex: return ImuUse::kBrainVex;
-    case gatr2::kImuSourceNone: return ImuUse::kNone;
+    case translagatr::kImuSourcePico: return ImuUse::kPico;
+    case translagatr::kImuSourceBrainVex: return ImuUse::kBrainVex;
+    case translagatr::kImuSourceNone: return ImuUse::kNone;
     default: return ImuUse::kUnknown;
     }
 }
@@ -71,25 +71,25 @@ const char* toString(Readiness readiness) {
 
 HealthBits decodeHealth(uint8_t health) {
     HealthBits h;
-    h.encoders_fresh   = (health & gatr2::kHealthEncodersFresh) != 0;
-    h.imu_fresh        = (health & gatr2::kHealthGyroFresh) != 0;
-    h.vision_alive     = (health & gatr2::kHealthVisionAlive) != 0;
-    h.bias_calibrated  = (health & gatr2::kHealthBiasCalibrated) != 0;
-    h.pico_link        = (health & gatr2::kHealthPicoLink) != 0;
-    h.imu_initializing = (health & gatr2::kHealthImuInitializing) != 0;
-    h.imu_failed       = (health & gatr2::kHealthImuFailed) != 0;
-    h.stationary       = (health & gatr2::kHealthStationary) != 0;
+    h.encoders_fresh   = (health & translagatr::kHealthEncodersFresh) != 0;
+    h.imu_fresh        = (health & translagatr::kHealthGyroFresh) != 0;
+    h.vision_alive     = (health & translagatr::kHealthVisionAlive) != 0;
+    h.bias_calibrated  = (health & translagatr::kHealthBiasCalibrated) != 0;
+    h.pico_link        = (health & translagatr::kHealthPicoLink) != 0;
+    h.imu_initializing = (health & translagatr::kHealthImuInitializing) != 0;
+    h.imu_failed       = (health & translagatr::kHealthImuFailed) != 0;
+    h.stationary       = (health & translagatr::kHealthStationary) != 0;
     return h;
 }
 
 const char* calibrationName(uint8_t calibration) {
     switch (calibration) {
-    case gatr2::kCalibrationNone: return "none";
-    case gatr2::kCalibrationRunning: return "collecting";
-    case gatr2::kCalibrationDone: return "done";
-    case gatr2::kCalibrationWaitingStill: return "waiting for stillness";
-    case gatr2::kCalibrationWaitingData: return "waiting for data";
-    case gatr2::kCalibrationFailed: return "failed";
+    case translagatr::kCalibrationNone: return "none";
+    case translagatr::kCalibrationRunning: return "collecting";
+    case translagatr::kCalibrationDone: return "done";
+    case translagatr::kCalibrationWaitingStill: return "waiting for stillness";
+    case translagatr::kCalibrationWaitingData: return "waiting for data";
+    case translagatr::kCalibrationFailed: return "failed";
     }
     return "?";
 }
@@ -100,12 +100,12 @@ LinkReadiness readinessOf(const Client& client, Seconds now, bool accept_configu
     r.brain_imu_calibrating = client.benchImu().calibrating;
     const StateSample& sample = client.state();
     if (sample.valid) {
-        const gatr2::BrainState& s = sample.state;
+        const translagatr::BrainState& s = sample.state;
         r.health      = decodeHealth(s.health);
         r.calibration = s.calibration;
-        r.localized   = (s.robot_flags & gatr2::kRobotLocalized) != 0;
-        r.pose_valid  = (s.robot_flags & gatr2::kRobotPoseValid) != 0 &&
-                       (s.robot_flags & gatr2::kRobotAgeKnown) != 0;
+        r.localized   = (s.robot_flags & translagatr::kRobotLocalized) != 0;
+        r.pose_valid  = (s.robot_flags & translagatr::kRobotPoseValid) != 0 &&
+                       (s.robot_flags & translagatr::kRobotAgeKnown) != 0;
     }
 
     if (!client.connected(now)) {
@@ -128,15 +128,15 @@ LinkReadiness readinessOf(const Client& client, Seconds now, bool accept_configu
         return r;
     }
     switch (r.calibration) {
-    case gatr2::kCalibrationWaitingStill: r.state = Readiness::kWaitingStill; return r;
-    case gatr2::kCalibrationRunning:
-    case gatr2::kCalibrationWaitingData: r.state = Readiness::kCalibrating; return r;
-    case gatr2::kCalibrationFailed: r.state = Readiness::kCalibrationFailed; return r;
+    case translagatr::kCalibrationWaitingStill: r.state = Readiness::kWaitingStill; return r;
+    case translagatr::kCalibrationRunning:
+    case translagatr::kCalibrationWaitingData: r.state = Readiness::kCalibrating; return r;
+    case translagatr::kCalibrationFailed: r.state = Readiness::kCalibrationFailed; return r;
     default: break;
     }
     const uint8_t flags  = sample.state.robot_flags;
-    const bool    anchor = (flags & gatr2::kRobotAnchorCommand) != 0 ||
-                        (accept_configured_anchor && (flags & gatr2::kRobotAnchorConfigured) != 0);
+    const bool    anchor = (flags & translagatr::kRobotAnchorCommand) != 0 ||
+                        (accept_configured_anchor && (flags & translagatr::kRobotAnchorConfigured) != 0);
     if (!r.localized || !anchor || client.placementPending()) {
         r.state = Readiness::kNeedsPlacement;
         return r;

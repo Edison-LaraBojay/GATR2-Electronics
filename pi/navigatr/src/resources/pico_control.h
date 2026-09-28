@@ -14,7 +14,7 @@
 #pragma once
 #include <cstdint>
 
-#include "common/frames.h"
+#include "translaGATR/frames.h"
 #include "core/time.h"
 
 namespace navigatr
@@ -31,7 +31,7 @@ struct PicoLinkState {
     uint64_t imu_restarts = 0; // imu_epoch changes seen
 
     bool              status_known = false; // a status frame of the current boot arrived
-    gatr2::PicoStatus status;
+    translagatr::PicoStatus status;
     MonotonicTime     last_frame;  // host clock
     MonotonicTime     last_status; // host clock
 };
@@ -46,7 +46,7 @@ enum class PicoRequestState : uint8_t {
 
 struct PicoRequestStatus {
     PicoRequestState state  = PicoRequestState::kUnknown;
-    uint8_t          detail = gatr2::kControlDetailNone; // ControlDetail on failure
+    uint8_t          detail = translagatr::kControlDetailNone; // ControlDetail on failure
 };
 
 class PicoControl

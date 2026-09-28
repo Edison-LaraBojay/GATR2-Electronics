@@ -13,6 +13,7 @@ state as an investiGATR `StateSource`. It does not plan or drive.
 - `readiness`: the status summary both programs show.
 - `ProsLink` (PROS): one class for both transports, with its own poll task
   and bounded locks. `ProsVexImu` (PROS): the Brain VEX IMU bench source.
+- `attitude`: VEX IMU roll and pitch in the robot frame, for TELEMETRY.
 - `VexImuRecalibration`: starts the VEX IMU calibration only after the Pi
   reports the robot still.
 - `wheel_calibration`, `startup_placement`, `link_events`: application

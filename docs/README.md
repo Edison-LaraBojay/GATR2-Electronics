@@ -2,24 +2,24 @@
 
 ## Runtime and configuration
 
-- [Set up and run Navigatr](../pi/navigatr/docs/setup.md): complete Pi/Pico bring-up,
+- [Set up and run Navigatr](../pi/naviGATR/docs/setup.md): complete Pi/Pico bring-up,
   camera calibration, robot geometry, three-wheel camera configurations, and the
   live viewer.
-- [Parallel-wheel bring-up](../pi/navigatr/docs/parallel_wheel_bringup.md): the
+- [Parallel-wheel bring-up](../pi/naviGATR/docs/parallel_wheel_bringup.md): the
   current robot's systems test, two parallel wheels + BNO08X, localization
   first and camera second.
-- [Navigatr](../pi/navigatr/README.md): build, run, demo, and implementation coverage.
-- [Configuration](../pi/navigatr/docs/configuration.md): default profile, command-line
+- [Navigatr](../pi/naviGATR/README.md): build, run, demo, and implementation coverage.
+- [Configuration](../pi/naviGATR/docs/configuration.md): default profile, command-line
   overrides, inline XML, and referenced fragments.
-- [Architecture](../pi/navigatr/docs/architecture.md): construction, stage contracts,
+- [Architecture](../pi/naviGATR/docs/architecture.md): construction, stage contracts,
   localization, field estimation, and workers.
-- [Coordinates](../pi/navigatr/docs/coordinates.md): frames, heading, camera offsets,
+- [Coordinates](../pi/naviGATR/docs/coordinates.md): frames, heading, camera offsets,
   measurement time, and pose history.
-- [Landmarks and targets](../pi/navigatr/docs/landmarks.md): association, retained
+- [Landmarks and targets](../pi/naviGATR/docs/landmarks.md): association, retained
   field estimates, target resolution, and the actual Brain output.
 - [Resources](navigatr_resources.md) and [sensors](navigatr_sensors.md): registered
   implementations and their configuration contracts.
-- [Inspection](../pi/navigatr/docs/inspection.md): browser field viewer, camera
+- [Inspection](../pi/naviGATR/docs/inspection.md): browser field viewer, camera
   previews, and inspection protocol.
 
 ## Brain
@@ -46,13 +46,13 @@
 - [Wire interfaces](interfaces.md): Pico sensor frames and control, and the brain
   link v4 request/reply protocol (sessions, profile, documents, bus timing).
 - [Pi access](pi_setup.md): SSH and provisioning.
-- [Pi camera setup](../pi/navigatr/docs/pi_camera_setup.md): libcamera build and
+- [Pi camera setup](../pi/naviGATR/docs/pi_camera_setup.md): libcamera build and
   capture checks.
-- [Field assets](../pi/navigatr/docs/field_assets.md): nominal Override geometry and
+- [Field assets](../pi/naviGATR/docs/field_assets.md): nominal Override geometry and
   its CAD sources.
-- [Calibration inventory](../pi/navigatr/docs/calibration_inventory.md): required
+- [Calibration inventory](../pi/naviGATR/docs/calibration_inventory.md): required
   robot measurements and template values.
-- [Attitude firmware follow-up](../pi/navigatr/docs/attitude_firmware_followup.md):
+- [Attitude firmware follow-up](../pi/naviGATR/docs/attitude_firmware_followup.md):
   the work needed to provide live roll and pitch.
 - [RS-485 bench test](../bench/rs485_link/README.md): independent transmit bring-up.
 

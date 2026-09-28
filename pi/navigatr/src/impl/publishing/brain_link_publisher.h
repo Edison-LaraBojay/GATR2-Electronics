@@ -42,6 +42,10 @@
 // a Field, map_id and estimate_id are 0 and READ_DOC is Unavailable. Every
 // cycle, request or not, the state block it would answer goes out in
 // PublishingOutput::brain_state for inspection.
+//
+// Instrumentation: each reply goes to the link's LinkMonitor as attempted
+// and accepted bytes (a refused write accepted nothing) with a decoded
+// summary, and completes the request record the commands slot staged.
 
 #pragma once
 #include <cstdint>
@@ -49,7 +53,7 @@
 #include <string>
 #include <vector>
 
-#include "common/frame_codec.h"
+#include "translaGATR/frame_codec.h"
 #include "contracts/brain_profile.h"
 #include "contracts/publishing.h"
 #include "impl/publishing/field_documents.h"
@@ -58,6 +62,9 @@
 
 namespace navigatr
 {
+
+class DiagnosticsHub;
+class LinkMonitor;
 
 class BrainLinkPublisher : public Publishing
 {
@@ -74,10 +81,12 @@ public:
     const FieldDocuments* fieldDocuments() const { return documents_.get(); }
 
 private:
+    void noteReply(const translagatr::BrainReply& reply, const uint8_t* frame, uint16_t len,
+                   const SerialWriteResult& written);
     bool              sensorFresh(const SensorMap& results, const SensorId& id,
                                   MonotonicTime now) const;
     uint8_t           calibration(const PublishingInput& in, const ProfileBinding* profile) const;
-    gatr2::BrainState state(const PublishingInput& in) const;
+    translagatr::BrainState state(const PublishingInput& in) const;
 
     std::shared_ptr<SerialLink> link_;
     std::string                 diagnostics_id_;
@@ -90,6 +99,10 @@ private:
     std::unique_ptr<FieldDocuments> documents_;
     BrainProfileHost*               profile_host_ = nullptr;
     std::shared_ptr<PicoControl>    pico_;
+
+    DiagnosticsHub*              hub_       = nullptr;   // null outside a System
+    uint16_t                     source_id_ = 0;
+    std::shared_ptr<LinkMonitor> monitor_;   // shared with the brain_link commands
 
     bool bias_cal_seen_ = false;
 };

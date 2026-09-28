@@ -21,10 +21,10 @@ namespace
 constexpr Seconds kLimit = 5.0;
 
 ControlStatus answer(ControlTicket ticket, ControlResult state,
-                     uint8_t result = gatr2::kResultOk) {
+                     uint8_t result = translagatr::kResultOk) {
     ControlStatus s;
     s.ticket = ticket;
-    s.action = gatr2::kControlRecalibrate;
+    s.action = translagatr::kControlRecalibrate;
     s.state  = state;
     s.result = result;
     return s;
@@ -105,14 +105,14 @@ TEST(VexImuRecalibration, MovementRefusalAndNoAnswerStartNothing) {
         VexRecalibrationState end;
     };
     const Case cases[] = {
-        {ControlResult::kNotStationary, gatr2::kResultNotStationary,
+        {ControlResult::kNotStationary, translagatr::kResultNotStationary,
          VexRecalibrationState::kMoving},
-        {ControlResult::kNotReady, gatr2::kResultNotReady, VexRecalibrationState::kRefused},
-        {ControlResult::kRejected, gatr2::kResultInvalidArgument, VexRecalibrationState::kRefused},
-        {ControlResult::kFailed, gatr2::kResultFailed, VexRecalibrationState::kRefused},
-        {ControlResult::kTimedOut, gatr2::kResultOk, VexRecalibrationState::kRefused},
-        {ControlResult::kSessionLost, gatr2::kResultOk, VexRecalibrationState::kRefused},
-        {ControlResult::kNone, gatr2::kResultOk, VexRecalibrationState::kRefused}, // replaced
+        {ControlResult::kNotReady, translagatr::kResultNotReady, VexRecalibrationState::kRefused},
+        {ControlResult::kRejected, translagatr::kResultInvalidArgument, VexRecalibrationState::kRefused},
+        {ControlResult::kFailed, translagatr::kResultFailed, VexRecalibrationState::kRefused},
+        {ControlResult::kTimedOut, translagatr::kResultOk, VexRecalibrationState::kRefused},
+        {ControlResult::kSessionLost, translagatr::kResultOk, VexRecalibrationState::kRefused},
+        {ControlResult::kNone, translagatr::kResultOk, VexRecalibrationState::kRefused}, // replaced
     };
     for (const Case& c : cases) {
         SCOPED_TRACE(int(c.state));
@@ -256,7 +256,7 @@ TEST_P(VexRecalibrationLink, MovingRobotNeverStartsTheVexCalibration) {
 }
 
 TEST_P(VexRecalibrationLink, NoProfileOrNoAnswerStartsNothing) {
-    rig.pi.setProfileRejection(gatr2::kProfileReasonEncoderPort); // never applied: NotReady
+    rig.pi.setProfileRejection(translagatr::kProfileReasonEncoderPort); // never applied: NotReady
     ASSERT_TRUE(rig.runUntil(
         [&] { return rig.client().profile().state == ProfileSync::kRejected; }, kLimit));
     VexImuRecalibration r;

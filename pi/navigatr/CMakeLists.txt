@@ -129,21 +129,28 @@ set(NAVIGATR_SOURCES
     src/inspection/inspection_service.cpp
     src/inspection/http_server.cpp
     src/inspection/jpeg_encoder.cpp
+    src/diagnostics/hub.cpp
+    src/diagnostics/link_monitor.cpp
+    src/diagnostics/instrumentation.cpp
+    src/capture/capture_service.cpp
+    src/capture/capture_bundle.cpp
+    src/capture/capture_http.cpp
+    src/capture/zip_writer.cpp
 )
 
-# The browser inspector, compiled in. viewer/ holds the app, third_party/three
+# The browser viewer (spectaGATR), compiled in. spectaGATR/ holds the app, third_party/three
 # the pinned three.js module and OrbitControls served under vendor/.
 file(GLOB NAVIGATR_VIEWER_FILES CONFIGURE_DEPENDS
-    ${CMAKE_CURRENT_SOURCE_DIR}/viewer/*.html
-    ${CMAKE_CURRENT_SOURCE_DIR}/viewer/*.js
-    ${CMAKE_CURRENT_SOURCE_DIR}/viewer/*.css
-    ${CMAKE_CURRENT_SOURCE_DIR}/viewer/*.json
-    ${CMAKE_CURRENT_SOURCE_DIR}/viewer/*.svg
+    ${CMAKE_CURRENT_SOURCE_DIR}/spectaGATR/*.html
+    ${CMAKE_CURRENT_SOURCE_DIR}/spectaGATR/*.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/spectaGATR/*.css
+    ${CMAKE_CURRENT_SOURCE_DIR}/spectaGATR/*.json
+    ${CMAKE_CURRENT_SOURCE_DIR}/spectaGATR/*.svg
 )
 set(NAVIGATR_EMBED_ENTRIES "")
 foreach(f IN LISTS NAVIGATR_VIEWER_FILES)
     get_filename_component(name "${f}" NAME)
-    list(APPEND NAVIGATR_EMBED_ENTRIES "${name}=viewer/${name}")
+    list(APPEND NAVIGATR_EMBED_ENTRIES "${name}=spectaGATR/${name}")
 endforeach()
 list(APPEND NAVIGATR_EMBED_ENTRIES
     "vendor/three.module.min.js=third_party/three/three.module.min.js"
@@ -170,8 +177,8 @@ add_custom_command(
 add_library(navigatr_core STATIC
     ${NAVIGATR_SOURCES}
     ${NAVIGATR_VIEWER_ASSETS_CPP}
-    ${REPO_ROOT}/common/frame_codec.cpp
-    ${REPO_ROOT}/common/link_documents.cpp
+    ${REPO_ROOT}/translaGATR/frame_codec.cpp
+    ${REPO_ROOT}/translaGATR/link_documents.cpp
 )
 target_include_directories(navigatr_core PUBLIC src ${REPO_ROOT})
 target_link_libraries(navigatr_core PUBLIC navigatr_tinyxml2 navigatr_apriltag Threads::Threads)
@@ -225,13 +232,19 @@ endif()
 add_custom_target(field_references
     COMMAND navigatr_field_refs
         ${CMAKE_CURRENT_SOURCE_DIR}/config/override/field.xml
-        ${REPO_ROOT}/brain/testing/include/field_references.h
-        pi/navigatr/config/override/field.xml
-    COMMENT "Regenerating brain/testing/include/field_references.h"
+        ${REPO_ROOT}/brain/operaGATR/include/field_references.h
+        pi/naviGATR/config/override/field.xml
+    COMMENT "Regenerating brain/operaGATR/include/field_references.h"
     VERBATIM
 )
 
 if(NAVIGATR_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+# Inspection and viewer perf harness (tools/perf); off by default.
+option(NAVIGATR_BUILD_PERF_TOOLS "Build the inspection and viewer perf harness" OFF)
+if(NAVIGATR_BUILD_PERF_TOOLS)
+    add_subdirectory(tools/perf)
 endif()

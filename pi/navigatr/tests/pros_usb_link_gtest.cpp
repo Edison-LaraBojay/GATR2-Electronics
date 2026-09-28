@@ -6,10 +6,11 @@
 #include <string>
 #include <vector>
 
-#include "common/frame_codec.h"
-#include "common/frames.h"
-#include "common/link_documents.h"
+#include "translaGATR/frame_codec.h"
+#include "translaGATR/frames.h"
+#include "translaGATR/link_documents.h"
 #include "config/composition.h"
+#include "diagnostics/hub.h"
 #include "impl/resources/pros_usb_link.h"
 #include "impl/resources/serial_links.h"
 #include "inspection/inspection_document.h"
@@ -96,7 +97,7 @@ TEST(ProsUsbLink, IgnoresLogNoiseMalformedHexAndOversizedLinesThenRecovers) {
     auto raw = std::make_shared<MemoryLink>();
     ProsUsbLink link(raw);
     feed(*raw, "boot complete\nNG1:\nNG1:012\nNG1:abcd\nNG1:00ZZ\nNG1:00 garbage\n");
-    feed(*raw, "NG1:" + std::string(2 * gatr2::kMaxFrameLen + 2, '0') + "\n");
+    feed(*raw, "NG1:" + std::string(2 * translagatr::kMaxFrameLen + 2, '0') + "\n");
     feed(*raw, std::string(2000, 'X') + "\n");
     feed(*raw, "kernel prefix: NG1:1200FF\n");
     std::vector<uint8_t> received;
@@ -139,7 +140,7 @@ TEST(ProsUsbLink, DisconnectDropsPartialEnvelopeBeforeReconnection) {
 TEST(ProsUsbLink, AcceptsMaximumFrameAndRejectsOversizedWrite) {
     auto raw = std::make_shared<MemoryLink>();
     ProsUsbLink link(raw);
-    std::vector<uint8_t> frame(gatr2::kMaxFrameLen, 0xAC);
+    std::vector<uint8_t> frame(translagatr::kMaxFrameLen, 0xAC);
     ASSERT_TRUE(link.write({frame.data(), frame.size()}).ok);
     raw->input().feed(raw->output().takeAll());
     EXPECT_EQ(read(link), frame);
@@ -152,45 +153,45 @@ TEST(ProsUsbLink, LargestV4RequestAndReplySurviveTheEnvelope) {
     auto raw = std::make_shared<MemoryLink>();
     ProsUsbLink link(raw);
 
-    gatr2::BrainRequest write;
-    write.op         = gatr2::kOpProfileWrite;
+    translagatr::BrainRequest write;
+    write.op         = translagatr::kOpProfileWrite;
     write.session    = 0x01020304;
     write.request_id = 7;
     write.profile_id = 0xA5A5A5A5;
-    write.total_len  = gatr2::kProfileMaxLen;
-    write.data_len   = gatr2::kProfileChunkMax;
+    write.total_len  = translagatr::kProfileMaxLen;
+    write.data_len   = translagatr::kProfileChunkMax;
     for (uint8_t i = 0; i < write.data_len; ++i) {
         write.data[i] = static_cast<uint8_t>(i * 7);
     }
-    std::array<uint8_t, gatr2::kMaxFrameLen> bytes{};
-    ASSERT_EQ(gatr2::encodeBrainRequest(write, bytes.data(), bytes.size()), gatr2::kMaxFrameLen);
+    std::array<uint8_t, translagatr::kMaxFrameLen> bytes{};
+    ASSERT_EQ(translagatr::encodeBrainRequest(write, bytes.data(), bytes.size()), translagatr::kMaxFrameLen);
     ASSERT_TRUE(link.write({bytes.data(), bytes.size()}).ok);
 
-    gatr2::BrainReply doc;
-    doc.op            = gatr2::kOpReadDoc;
-    doc.doc_kind      = gatr2::kDocFieldMap;
+    translagatr::BrainReply doc;
+    doc.op            = translagatr::kOpReadDoc;
+    doc.doc_kind      = translagatr::kDocFieldMap;
     doc.doc_total_len = 500;
-    doc.data_len      = gatr2::kDocChunkMax;
-    std::array<uint8_t, gatr2::kMaxFrameLen> reply{};
-    ASSERT_EQ(gatr2::encodeBrainReply(doc, reply.data(), reply.size()), gatr2::kMaxFrameLen);
+    doc.data_len      = translagatr::kDocChunkMax;
+    std::array<uint8_t, translagatr::kMaxFrameLen> reply{};
+    ASSERT_EQ(translagatr::encodeBrainReply(doc, reply.data(), reply.size()), translagatr::kMaxFrameLen);
     ASSERT_TRUE(link.write({reply.data(), reply.size()}).ok);
 
     raw->input().feed(raw->output().takeAll());
     std::vector<uint8_t> received;
-    for (int attempt = 0; attempt < 8 && received.size() < 2u * gatr2::kMaxFrameLen; ++attempt) {
+    for (int attempt = 0; attempt < 8 && received.size() < 2u * translagatr::kMaxFrameLen; ++attempt) {
         const auto part = read(link, 64);
         received.insert(received.end(), part.begin(), part.end());
     }
-    ASSERT_EQ(received.size(), 2u * gatr2::kMaxFrameLen);
-    gatr2::BrainRequest decoded;
-    ASSERT_TRUE(gatr2::decodeBrainRequest(received.data(), gatr2::kMaxFrameLen, decoded));
-    EXPECT_EQ(decoded.data_len, gatr2::kProfileChunkMax);
+    ASSERT_EQ(received.size(), 2u * translagatr::kMaxFrameLen);
+    translagatr::BrainRequest decoded;
+    ASSERT_TRUE(translagatr::decodeBrainRequest(received.data(), translagatr::kMaxFrameLen, decoded));
+    EXPECT_EQ(decoded.data_len, translagatr::kProfileChunkMax);
     EXPECT_EQ(std::vector<uint8_t>(decoded.data, decoded.data + decoded.data_len),
               std::vector<uint8_t>(write.data, write.data + write.data_len));
-    gatr2::BrainReply decoded_reply;
-    ASSERT_TRUE(gatr2::decodeBrainReply(received.data() + gatr2::kMaxFrameLen,
-                                        gatr2::kMaxFrameLen, decoded_reply));
-    EXPECT_EQ(decoded_reply.data_len, gatr2::kDocChunkMax);
+    translagatr::BrainReply decoded_reply;
+    ASSERT_TRUE(translagatr::decodeBrainReply(received.data() + translagatr::kMaxFrameLen,
+                                        translagatr::kMaxFrameLen, decoded_reply));
+    EXPECT_EQ(decoded_reply.data_len, translagatr::kDocChunkMax);
 }
 
 TEST_F(UsbDiscovery, SelectsOnlyBrainUserInterfaceWithoutAssumingAcmNumber) {
@@ -269,9 +270,9 @@ TEST(ProsUsbLink, UsbProfileHandshakeImuPlacementMotionAndInspectionUseExistingP
     ASSERT_NE(pico, nullptr) << error;
     system->step(hostTime(now));
 
-    const auto request = [&](const gatr2::BrainRequest& request) {
-        std::array<uint8_t, gatr2::kMaxFrameLen> bytes{};
-        const auto length = gatr2::encodeBrainRequest(request, bytes.data(), bytes.size());
+    const auto request = [&](const translagatr::BrainRequest& request) {
+        std::array<uint8_t, translagatr::kMaxFrameLen> bytes{};
+        const auto length = translagatr::encodeBrainRequest(request, bytes.data(), bytes.size());
         EXPECT_GT(length, 0);
         EXPECT_TRUE(brain.write({bytes.data(), length}).ok);
         pi_raw->input().feed(brain_raw->output().takeAll());
@@ -279,38 +280,38 @@ TEST(ProsUsbLink, UsbProfileHandshakeImuPlacementMotionAndInspectionUseExistingP
         system->step(hostTime(now));
         brain_raw->input().feed(pi_raw->output().takeAll());
         const auto frame = read(brain);
-        gatr2::BrainReply reply;
-        EXPECT_TRUE(gatr2::decodeBrainReply(frame.data(), static_cast<uint16_t>(frame.size()), reply));
+        translagatr::BrainReply reply;
+        EXPECT_TRUE(translagatr::decodeBrainReply(frame.data(), static_cast<uint16_t>(frame.size()), reply));
         return reply;
     };
     uint8_t sequence = 0;
     const auto wheels = [&](int forward, int sideways) {
-        gatr2::SensorSample sample{};
+        translagatr::SensorSample sample{};
         sample.seq = sequence++;
         sample.stamp_ms = static_cast<uint32_t>(now);
-        sample.mask = gatr2::kSensorEnc0 | gatr2::kSensorEnc1;
+        sample.mask = translagatr::kSensorEnc0 | translagatr::kSensorEnc1;
         sample.enc[0] = forward;
         sample.enc[1] = sideways;
-        std::vector<uint8_t> frame(gatr2::kMaxFrameLen);
-        frame.resize(gatr2::encodeSensorFrame(sample, frame.data(), gatr2::kMaxFrameLen));
+        std::vector<uint8_t> frame(translagatr::kMaxFrameLen);
+        frame.resize(translagatr::encodeSensorFrame(sample, frame.data(), translagatr::kMaxFrameLen));
         pico->input().feed(frame);
     };
-    gatr2::BrainRequest hello;
-    hello.op = gatr2::kOpHello;
+    translagatr::BrainRequest hello;
+    hello.op = translagatr::kOpHello;
     hello.request_id = 1;
     hello.nonce = 0x00005270; // little-endian payload includes the pR terminal escape
     const uint32_t session = request(hello).session;
     ASSERT_NE(session, 0u);
-    gatr2::BrainRequest imu;
-    imu.op = gatr2::kOpGetState;
+    translagatr::BrainRequest imu;
+    imu.op = translagatr::kOpGetState;
     imu.request_id = 2;
     imu.session = session;
-    imu.imu_flags = gatr2::kBenchImuValid;
+    imu.imu_flags = translagatr::kBenchImuValid;
     imu.imu_stamp_ms = 100;
     wheels(0, 0);
-    EXPECT_EQ(request(imu).result, gatr2::kResultOk);
-    gatr2::BrainRequest place;
-    place.op = gatr2::kOpSetPose;
+    EXPECT_EQ(request(imu).result, translagatr::kResultOk);
+    translagatr::BrainRequest place;
+    place.op = translagatr::kOpSetPose;
     place.request_id = 3;
     place.session = session;
     place.x_mm = 1000;
@@ -323,18 +324,50 @@ TEST(ProsUsbLink, UsbProfileHandshakeImuPlacementMotionAndInspectionUseExistingP
     imu.request_id = 5;
     imu.imu_stamp_ms = 140;
     const auto state = request(imu);
-    EXPECT_EQ(state.result, gatr2::kResultOk);
-    EXPECT_NE(state.state.robot_flags & gatr2::kRobotPoseValid, 0);
+    EXPECT_EQ(state.result, translagatr::kResultOk);
+    EXPECT_NE(state.state.robot_flags & translagatr::kRobotPoseValid, 0);
     EXPECT_GT(state.state.x_mm, 1100);
     EXPECT_EQ(state.state.y_mm, 0);
     wheels(4000, 4000);
     imu.request_id = 6;
     imu.imu_stamp_ms = 160;
     const auto sideways = request(imu);
-    EXPECT_EQ(sideways.result, gatr2::kResultOk);
+    EXPECT_EQ(sideways.result, translagatr::kResultOk);
     EXPECT_EQ(sideways.state.x_mm, state.state.x_mm);
     EXPECT_GT(sideways.state.y_mm, 100);
     const auto snapshot = snapshotDocument(*system, InspectionServiceStats{}, hostTime(now));
     EXPECT_NE(snapshot.find("arrival-time"), std::string::npos);
     EXPECT_NE(snapshot.find("brain_usb"), std::string::npos);
+}
+
+TEST(ProsUsbLink, DroppedNg1LinesAreCountedAsRejections) {
+    DiagnosticsHub hub;
+    auto           raw = std::make_shared<MemoryLink>();
+    ProsUsbLink    link(raw);
+    auto           monitor = hub.links().monitor("brain_usb", "brain_usb");
+    link.attachMonitor(monitor);
+    feed(*raw, "boot complete\nNG1:\nNG1:012\nNG1:abcd\nNG1:00ZZ\nNG1:00 garbage\n");
+    feed(*raw, "NG1:" + std::string(2 * translagatr::kMaxFrameLen + 2, '0') + "\n");
+    feed(*raw, std::string(2000, 'X') + "\n");
+    feed(*raw, "kernel prefix: NG1:1200FF\n");
+    std::vector<uint8_t> received;
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        const auto part = read(link);
+        received.insert(received.end(), part.begin(), part.end());
+    }
+    EXPECT_EQ(received, (std::vector<uint8_t>{0x12, 0, 0xFF}));
+    EXPECT_EQ(link.framedLines(), 1u);
+    EXPECT_EQ(link.consoleLines(), 1u);   // Brain console text is not an error
+    EXPECT_EQ(link.rejectedLines(), 7u);
+    const LinkMonitorSnapshot s = monitor->snapshot();
+    EXPECT_EQ(s.rejected, 7u);
+    ASSERT_EQ(s.errors.size(), 7u);
+    EXPECT_EQ(s.errors[0].reason, "NG1 line without bytes");
+    EXPECT_EQ(s.errors[1].reason, "NG1 line with odd hex digits");
+    EXPECT_EQ(s.errors[2].reason, "NG1 line with a non-hex digit");
+    EXPECT_EQ(s.errors[5].reason, "NG1 line longer than a frame");
+    EXPECT_EQ(s.errors[6].reason, "USB line over the length limit");
+    // frame bytes are monitored by the brain_link slots, not by the envelope
+    EXPECT_EQ(s.rx_bytes, 0u);
+    EXPECT_EQ(s.rx_frames, 0u);
 }

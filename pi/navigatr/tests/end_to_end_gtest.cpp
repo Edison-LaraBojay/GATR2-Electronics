@@ -12,7 +12,7 @@
 #include <optional>
 #include <vector>
 
-#include "common/frame_codec.h"
+#include "translaGATR/frame_codec.h"
 #include "impl/resources/cameras.h"
 #include "impl/resources/serial_links.h"
 #include "math/angles.h"
@@ -126,38 +126,38 @@ const char* kFullConfig = R"(
 
 std::vector<uint8_t> sensorPacket(uint8_t seq, uint32_t stamp, int32_t enc0, int32_t enc1,
                                   int32_t enc2, int32_t gyro) {
-    gatr2::SensorSample s{};
+    translagatr::SensorSample s{};
     s.seq      = seq;
     s.stamp_ms = stamp;
-    s.mask     = gatr2::kSensorEnc0 | gatr2::kSensorEnc1 | gatr2::kSensorEnc2 |
-             gatr2::kSensorGyroZ;
+    s.mask     = translagatr::kSensorEnc0 | translagatr::kSensorEnc1 | translagatr::kSensorEnc2 |
+             translagatr::kSensorGyroZ;
     s.enc[0] = enc0;
     s.enc[1] = enc1;
     s.enc[2] = enc2;
     s.gyro_z = gyro;
 
-    std::vector<uint8_t> buf(gatr2::kMaxFrameLen);
-    buf.resize(gatr2::encodeSensorFrame(s, buf.data(), gatr2::kMaxFrameLen));
+    std::vector<uint8_t> buf(translagatr::kMaxFrameLen);
+    buf.resize(translagatr::encodeSensorFrame(s, buf.data(), translagatr::kMaxFrameLen));
     return buf;
 }
 
-std::vector<uint8_t> requestBytes(const gatr2::BrainRequest& r) {
-    std::vector<uint8_t> buf(gatr2::kMaxFrameLen);
-    buf.resize(gatr2::encodeBrainRequest(r, buf.data(), gatr2::kMaxFrameLen));
+std::vector<uint8_t> requestBytes(const translagatr::BrainRequest& r) {
+    std::vector<uint8_t> buf(translagatr::kMaxFrameLen);
+    buf.resize(translagatr::encodeBrainRequest(r, buf.data(), translagatr::kMaxFrameLen));
     return buf;
 }
 
 // Every reply frame in the link output; each must decode.
-std::vector<gatr2::BrainReply> takeReplies(MemoryLink& link) {
-    std::vector<gatr2::BrainReply> out;
-    gatr2::FrameReader             reader;
+std::vector<translagatr::BrainReply> takeReplies(MemoryLink& link) {
+    std::vector<translagatr::BrainReply> out;
+    translagatr::FrameReader             reader;
     for (uint8_t b : link.output().takeAll()) {
         if (!reader.push(b)) {
             continue;
         }
         do {
-            gatr2::BrainReply reply;
-            EXPECT_TRUE(gatr2::decodeBrainReply(reader.frame(), reader.frameLen(), reply));
+            translagatr::BrainReply reply;
+            EXPECT_TRUE(translagatr::decodeBrainReply(reader.frame(), reader.frameLen(), reply));
             out.push_back(reply);
         } while (reader.next());
     }
@@ -243,7 +243,7 @@ TEST(EndToEnd, SquarePathClosesOnCommandedStart) {
     uint32_t          session = 0;
     uint16_t          rid     = 0;
     int               sent    = 0;
-    gatr2::BrainReply last_state;
+    translagatr::BrainReply last_state;
     bool              placed = false, reported = false;
 
     auto step = [&](bool driving, bool turning) {
@@ -263,26 +263,26 @@ TEST(EndToEnd, SquarePathClosesOnCommandedStart) {
             static_cast<int32_t>(std::llround(travel_b * kCountsPerMeter)),
             static_cast<int32_t>(std::llround(travel_c * kCountsPerMeter)), gyro));
 
-        gatr2::BrainRequest request;
+        translagatr::BrainRequest request;
         request.session    = session;
         request.request_id = static_cast<uint16_t>(rid + 1);
         if (cycle == 2) {
-            request.op    = gatr2::kOpHello;
+            request.op    = translagatr::kOpHello;
             request.nonce = 0x5EED;
         } else if (cycle == 3) {
-            request.op           = gatr2::kOpSetPose;
+            request.op           = translagatr::kOpSetPose;
             request.x_mm         = 610;
             request.y_mm         = 457;
             request.heading_cdeg = 9000;
         } else if (cycle == 300) {
-            request.op          = gatr2::kOpPathReport;
+            request.op          = translagatr::kOpPathReport;
             request.command_id  = 17;
-            request.path_mode   = gatr2::kPathDirect;
+            request.path_mode   = translagatr::kPathDirect;
             request.point_count = 2;
             request.points[0]   = {610, 457};
             request.points[1]   = {610, 1457};
         } else if (cycle > 3 && cycle % 4 == 0) {
-            request.op = gatr2::kOpGetState;
+            request.op = translagatr::kOpGetState;
         }
         if (request.op != 0) {
             rig.brain->input().feed(requestBytes(request));
@@ -292,20 +292,20 @@ TEST(EndToEnd, SquarePathClosesOnCommandedStart) {
 
         rig.step(cycle);
 
-        const std::vector<gatr2::BrainReply> replies = takeReplies(*rig.brain);
+        const std::vector<translagatr::BrainReply> replies = takeReplies(*rig.brain);
         ASSERT_EQ(replies.size(), request.op != 0 ? 1u : 0u) << "cycle " << cycle;
         if (replies.empty()) {
             return;
         }
-        const gatr2::BrainReply& reply = replies.front();
+        const translagatr::BrainReply& reply = replies.front();
         EXPECT_EQ(reply.request_id, request.request_id);
-        EXPECT_EQ(reply.result, gatr2::kResultOk) << "cycle " << cycle;
-        if (reply.op == gatr2::kOpHello) {
+        EXPECT_EQ(reply.result, translagatr::kResultOk) << "cycle " << cycle;
+        if (reply.op == translagatr::kOpHello) {
             session = reply.session;
-        } else if (reply.op == gatr2::kOpSetPose) {
-            placed = reply.result == gatr2::kResultOk;
-        } else if (reply.op == gatr2::kOpPathReport) {
-            reported = reply.result == gatr2::kResultOk;
+        } else if (reply.op == translagatr::kOpSetPose) {
+            placed = reply.result == translagatr::kResultOk;
+        } else if (reply.op == translagatr::kOpPathReport) {
+            reported = reply.result == translagatr::kResultOk;
         } else {
             last_state = reply;
         }
@@ -341,26 +341,26 @@ TEST(EndToEnd, SquarePathClosesOnCommandedStart) {
 
     EXPECT_TRUE(placed);
     EXPECT_TRUE(reported);
-    const gatr2::BrainState& s = last_state.state;
+    const translagatr::BrainState& s = last_state.state;
     EXPECT_EQ(last_state.session, session);
-    EXPECT_TRUE(s.robot_flags & gatr2::kRobotPoseValid);
-    EXPECT_TRUE(s.robot_flags & gatr2::kRobotLocalized);
-    EXPECT_TRUE(s.robot_flags & gatr2::kRobotAnchorCommand);
-    EXPECT_FALSE(s.robot_flags & gatr2::kRobotAnchorConfigured);
+    EXPECT_TRUE(s.robot_flags & translagatr::kRobotPoseValid);
+    EXPECT_TRUE(s.robot_flags & translagatr::kRobotLocalized);
+    EXPECT_TRUE(s.robot_flags & translagatr::kRobotAnchorCommand);
+    EXPECT_FALSE(s.robot_flags & translagatr::kRobotAnchorConfigured);
     EXPECT_EQ(s.anchor_revision, 1u);
-    EXPECT_TRUE(s.health & gatr2::kHealthEncodersFresh);
-    EXPECT_TRUE(s.health & gatr2::kHealthGyroFresh);
-    EXPECT_TRUE(s.health & gatr2::kHealthBiasCalibrated);
-    EXPECT_FALSE(s.health & gatr2::kHealthVisionAlive);
+    EXPECT_TRUE(s.health & translagatr::kHealthEncodersFresh);
+    EXPECT_TRUE(s.health & translagatr::kHealthGyroFresh);
+    EXPECT_TRUE(s.health & translagatr::kHealthBiasCalibrated);
+    EXPECT_FALSE(s.health & translagatr::kHealthVisionAlive);
 
     // XML robot, no field documents; the reported path is kept for inspection
-    EXPECT_EQ(s.profile_state, gatr2::kProfileNone);
+    EXPECT_EQ(s.profile_state, translagatr::kProfileNone);
     EXPECT_EQ(s.map_id, 0u);
     EXPECT_EQ(s.estimate_id, 0u);
     const PathReport& path = rig.system->command().path;
     EXPECT_EQ(path.session, session);
     EXPECT_EQ(path.command_id, 17u);
-    EXPECT_EQ(path.mode, gatr2::kPathDirect);
+    EXPECT_EQ(path.mode, translagatr::kPathDirect);
     ASSERT_EQ(path.count, 2u);
     EXPECT_DOUBLE_EQ(path.points[1].x_m, 0.610);
     EXPECT_DOUBLE_EQ(path.points[1].y_m, 1.457);
@@ -385,27 +385,27 @@ TEST(EndToEnd, NothingAttachedStillRunsAndSendsNothingUnasked) {
     EXPECT_TRUE(rig.brain->output().takeAll().empty());   // the brain initiates
 
     // asked, it reports an invalid pose and stale health
-    gatr2::BrainRequest hello;
-    hello.op         = gatr2::kOpHello;
+    translagatr::BrainRequest hello;
+    hello.op         = translagatr::kOpHello;
     hello.request_id = 1;
     hello.nonce      = 0xAB;
     rig.brain->input().feed(requestBytes(hello));
     rig.step(21);
-    std::vector<gatr2::BrainReply> replies = takeReplies(*rig.brain);
+    std::vector<translagatr::BrainReply> replies = takeReplies(*rig.brain);
     ASSERT_EQ(replies.size(), 1u);
 
-    gatr2::BrainRequest poll;
-    poll.op         = gatr2::kOpGetState;
+    translagatr::BrainRequest poll;
+    poll.op         = translagatr::kOpGetState;
     poll.session    = replies[0].session;
     poll.request_id = 2;
     rig.brain->input().feed(requestBytes(poll));
     rig.step(22);
     replies = takeReplies(*rig.brain);
     ASSERT_EQ(replies.size(), 1u);
-    EXPECT_EQ(replies[0].result, gatr2::kResultOk);
-    EXPECT_FALSE(replies[0].state.robot_flags & gatr2::kRobotPoseValid);
-    EXPECT_FALSE(replies[0].state.robot_flags & gatr2::kRobotAgeKnown);
-    EXPECT_FALSE(replies[0].state.health & gatr2::kHealthEncodersFresh);
+    EXPECT_EQ(replies[0].result, translagatr::kResultOk);
+    EXPECT_FALSE(replies[0].state.robot_flags & translagatr::kRobotPoseValid);
+    EXPECT_FALSE(replies[0].state.robot_flags & translagatr::kRobotAgeKnown);
+    EXPECT_FALSE(replies[0].state.health & translagatr::kHealthEncodersFresh);
     EXPECT_EQ(replies[0].state.estimate_id, 0u);
 
     // the map-seeded world exists with no data at all

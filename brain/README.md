@@ -8,14 +8,15 @@ programs compile them in place from this folder.
   motion model, paths.
 - [`communiGATR/`](communiGATR/README.md): the Pi link over USB or RS-485:
   sessions, robot profile upload, field map and estimates, placement,
-  calibration and recovery, wheel calibration.
+  calibration and recovery, wheel calibration, telemetry and VEX IMU tilt
+  for the Pi viewer.
 - [`actuGATR/`](actuGATR/README.md): movement: `goToDirect` and
   `goToAvoiding`, path following, tank and mecanum drives, the drive task.
 - [`robot/`](robot/README.md): this robot's description (tracking wheels,
   IMU, footprint, link, start pose), shared by the programs.
-- [`localization-test/`](localization-test/README.md): motor-free bench
+- [`locaGATR/`](locaGATR/README.md): motor-free bench
   program: placement, pose, IMU and wheel calibration, recovery history.
-- [`testing/`](testing/README.md): drive program: direct, avoiding and
+- [`operaGATR/`](operaGATR/README.md): drive program: direct, avoiding and
   landmark tests, manual driving, tuning.
 - `gatr2_brain.mk`: make fragment that compiles the libraries into a PROS
   project.

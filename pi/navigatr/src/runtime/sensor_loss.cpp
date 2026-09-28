@@ -12,12 +12,12 @@ namespace
 
 const char* imuStateName(uint8_t state) {
     switch (state) {
-    case gatr2::kPicoImuDisabled: return "disabled";
-    case gatr2::kPicoImuInitializing: return "initializing";
-    case gatr2::kPicoImuAligning: return "aligning";
-    case gatr2::kPicoImuReady: return "ready";
-    case gatr2::kPicoImuRetrying: return "retrying";
-    case gatr2::kPicoImuFailed: return "failed";
+    case translagatr::kPicoImuDisabled: return "disabled";
+    case translagatr::kPicoImuInitializing: return "initializing";
+    case translagatr::kPicoImuAligning: return "aligning";
+    case translagatr::kPicoImuReady: return "ready";
+    case translagatr::kPicoImuRetrying: return "retrying";
+    case translagatr::kPicoImuFailed: return "failed";
     default: return "in an unknown state";
     }
 }
@@ -127,7 +127,7 @@ SensorLossMonitor::Result SensorLossMonitor::update(const SensorMap& sensors,
         reboots_      = pico->reboots;
         restarts_     = pico->restarts;
         imu_restarts_ = pico->imu_restarts;
-        if (uses_pico_imu_ && pico->status_known && pico->status.imu_state != gatr2::kPicoImuReady &&
+        if (uses_pico_imu_ && pico->status_known && pico->status.imu_state != translagatr::kPicoImuReady &&
             r.level.empty()) {
             r.level = std::string("pico_imu ") + imuStateName(pico->status.imu_state);
         }

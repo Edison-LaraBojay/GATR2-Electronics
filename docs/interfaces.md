@@ -2,9 +2,9 @@
 
 This is the datasheet for the byte-level contract between the Pico, the Pi and
 the Brain: framing, frame types, the Pico control frames, brain link v4 and the
-documents it moves in chunks. The source of truth in code is `common/frames.h`,
-with the codec in `common/frame_codec.h` and the documents in
-`common/link_documents.h`. When this document and the headers disagree, the
+documents it moves in chunks. The source of truth in code is `translaGATR/frames.h`,
+with the codec in `translaGATR/frame_codec.h` and the documents in
+`translaGATR/link_documents.h`. When this document and the headers disagree, the
 headers win and this document is the bug.
 
 There are three exchanges:
@@ -12,7 +12,9 @@ There are three exchanges:
 - Sensor link, Pico to Pi: one way, handshake free. Every sensor frame stands
   alone. v2 frames carry the Pico's acquisition identity.
 - Pico control, Pi to Pico on the same UART pair: the Pi sends commands, the
-  Pico reports their progress only in periodic status frames.
+  Pico reports their progress only in periodic status frames. Optional
+  diagnostic frames (0x14) flow only after a Pi asked the current Pico boot
+  for them.
 - Brain link v4, Brain and Pi: request/reply over RS-485 or the V5 USB console.
   The Brain sends a request, the Pi answers it with one reply or stays silent,
   and the Brain retries on timeout. Sessions and request ids make retries,
@@ -21,7 +23,7 @@ There are three exchanges:
 ## Pipeline
 
 ```
-               sensor 0x01/0x04, status 0x13               request 0x10
+        sensor 0x01/0x04, status 0x13, diag 0x14           request 0x10
 sensors --> Pico ----------------------------> Pi <--------------------------- Brain --> motors
                  <----------------------------    --------------------------->
                          command 0x12                      reply 0x11
@@ -39,7 +41,7 @@ window, and listens otherwise. Every request gets an explicit result code or no
 reply at all; status bits are never acknowledgements. See
 [bus ownership and timing](#bus-ownership-and-timing).
 
-Validation status: host tests only. The codec is tested in `common/tests`
+Validation status: host tests only. The codec is tested in `translaGATR/tests`
 with independently packed known-byte vectors, the Brain library against a fake
 Pi in `brain/communiGATR/tests`, and the Pi and Pico sides in their own host
 suites. Nothing here is validated on hardware: V5 smart port RS-485 direction
@@ -96,7 +98,7 @@ Sensor envelope (types 0x01 and 0x04), XOR checksum:
 +--------+--------+------+------------------+-----+
 ```
 
-Link envelope (types 0x10 to 0x13), explicit length and CRC:
+Link envelope (types 0x10 to 0x14), explicit length and CRC:
 
 ```
 +--------+--------+------+-----+-------------------+----------+
@@ -128,6 +130,7 @@ A link frame is `len + 6` bytes (`kLinkEnvelopeLen`).
 | 0x11 | Brain reply | Pi to Brain | `kFrameBrainReply` | 13 to 122 |
 | 0x12 | Pico command | Pi to Pico | `kFramePicoCommand` | 6 to 8 |
 | 0x13 | Pico status | Pico to Pi | `kFramePicoStatus` | 20 |
+| 0x14 | Pico diagnostic | Pico to Pi, only after DIAGNOSTICS | `kFramePicoDiag` | 26 |
 
 Types 0x02 and 0x03 were the one-way pose and command frames. They are retired
 and every current reader rejects them.
@@ -167,8 +170,23 @@ a damaged length cannot swallow the frames behind it.
 
 One rescan can find several complete frames at once. `FrameReader::push()`
 reports the first; `FrameReader::next()` reports each further buffered frame
-without a new byte. `FrameReader` accepts all six types; each consumer then
+without a new byte. `FrameReader` accepts all seven types; each consumer then
 ignores the types that are not meant for it.
+
+`FrameReader::stats()` counts what the reader saw (`FrameReaderStats`, never
+cleared by `reset()`):
+
+| Counter | Counts |
+|---------|--------|
+| `bytes` | every byte pushed |
+| `frames` | every valid frame reported, by `push()` or `next()` |
+| `sync_dropped` | every discarded byte, including the sync byte of a rejected candidate; the rest of a rejected candidate is rescanned, not counted |
+| `length_errors` | rejected candidates with an impossible length, an unknown type or an invalid sensor mask |
+| `check_errors` | rejected candidates failing their checksum or CRC |
+
+Without a `reset()`, `bytes` = bytes of reported frames + `sync_dropped` +
+bytes still buffered. The error counters count candidates, not bytes; line
+noise that looks like a sync pair can therefore raise them.
 
 Sensor frames carry no cross-frame state, so the Pico or Pi may reboot
 mid-frame and the stream recovers on the next clean sync pair. Brain link
@@ -281,12 +299,13 @@ v2 (27 bytes)  AA 55 04 09 04 03 02 01 EF BE 02 05 0B 00 E8 03 00 00 0C FE FF FF
 The v2 frame is seq 9, stamp 0x01020304, boot_id 0xBEEF, acq_epoch 2,
 imu_epoch 5, with the same three sensors.
 
-## Pico control (types 0x12 and 0x13)
+## Pico control (types 0x12, 0x13 and 0x14)
 
 The Pi controls the Pico's acquisition over the same UART pair: configure the
-IMU, reinitialize the IMU, restart acquisition. The Pico never answers a
-command directly; it reports progress in status frames. Same envelope and CRC
-as the brain link. `kPicoLinkVersion = 1`; decoders refuse any other version.
+IMU, reinitialize the IMU, restart acquisition, and ask for optional
+diagnostic frames. The Pico never answers a command directly; it reports
+progress in status frames. Same envelope and CRC as the brain link.
+`kPicoLinkVersion = 1`; decoders refuse any other version.
 
 ### Command (type 0x12, Pi to Pico)
 
@@ -303,9 +322,11 @@ as the brain link. `kPicoLinkVersion = 1`; decoders refuse any other version.
 | 1 | `kPicoOpConfigure` | imu_enabled u8 (0 or 1) | 7 |
 | 2 | `kPicoOpReinitImu` | imu_port u8 (0 on HAT v2) | 7 |
 | 3 | `kPicoOpRestartAcquisition` | none | 6 |
+| 4 | `kPicoOpDiagnostics` | diag_hz u8 (0 off, 1..5; 6..255 fail with BadBody) | 7 |
 
 A command with an unknown op decodes its header, so the Pico can report it
-failed with `kPicoDetailUnknownOp`.
+failed with `kPicoDetailUnknownOp`. Firmware older than DIAGNOSTICS answers
+op 4 that way.
 
 ### Status (type 0x13, Pico to Pi)
 
@@ -363,6 +384,63 @@ failed with `kPicoDetailUnknownOp`.
   every 30 s. Encoders keep streaming throughout.
 - An ordinary reconnect changes nothing on the Pico; only
   RESTART_ACQUISITION or a reboot zeroes counters.
+- DIAGNOSTICS sets the diagnostic frame rate and completes at once; it is
+  recorded and deduplicated like every other command. The rate is 0 after
+  every boot, so the Pi asks again after a reboot.
+
+### Diagnostic frame (type 0x14, Pico to Pi)
+
+Optional instrumentation for the Pi's viewer and captures; nothing on the Pi
+localizes from it. A Pico sends it only while a DIAGNOSTICS command of its
+current boot set a nonzero rate. The rate lasts until the Pico reboots or
+receives DIAGNOSTICS 0, so a Pi process that never asked can still receive
+frames an earlier Pi process asked for (navigatr restarted with another
+configuration or build while the Pico stayed powered):
+
+- a current Pi without `<Diagnostics>` sends DIAGNOSTICS 0 once to that boot
+  and the frames stop;
+- an older Pi build does not know type 0x14; its reader discards those
+  frames like line noise until the Pico reboots (its sync and length reject
+  counters rise). Sensor frames between them still decode.
+
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | version | u8 | 1 |
+| 1 | boot_id | u16 | As in sensor frames |
+| 3 | seq | u8 | Counts diagnostic frames, wraps |
+| 4 | firmware | u8 | As in the status frame |
+| 5 | pins | u16 | Pin levels read back, bit set = HIGH (`PicoDiagPin`) |
+| 7 | pins_known | u16 | Bit set = that pin was sampled |
+| 9 | imu_rx | u16 | IMU packets or reads completed |
+| 11 | imu_bad | u16 | Bad headers or failed reads |
+| 13 | imu_resets | u8 | Hub resets or chip restarts seen |
+| 14 | imu_error | i8 | Last driver error code, 0 none |
+| 15 | reports_ok | u16 | Sensor reports accepted |
+| 17 | reports_rejected | u16 | Sensor reports rejected |
+| 19 | report_age_ms | u16 | Since the newest accepted report; 0xFFFE means at least that, 0xFFFF none |
+| 21 | link_rx_bad | u16 | Pi to Pico candidate frames rejected (length or CRC), from the Pico's command FrameReader |
+| 23 | ticks_skipped | u16 | Sensor ticks skipped because the TX FIFO was busy |
+| 25 | flags | u8 | bit 0 `kPicoDiagImuPresent`: the build drives an IMU |
+
+Counters are free running and keep their low bits (they wrap). The IMU
+counters mean what each driver can report: BNO08X counts SHTP packets, bad
+headers, hub resets (SH2_RESET events) and the last sh2 result (negative
+`SH2_ERR_*`); ASM330 counts gyro samples read, failed probes, configurations
+and health checks, software resets issued and the last failure reason (a
+`PicoImuReason`), and has no report rejection (always 0).
+
+`PicoDiagPin` bits: 0 IMU INT, 1 IMU RST, 2 IMU WAKE/PS0, 3 IMU CS, 4..9
+encoder 0 A/B, 1 A/B, 2 A/B, 10 the UART RX from the Pi. The levels are logic
+levels read back from the pads when the frame was built, with `gpio_get`,
+which never changes a pin's function, direction or pull. They are not
+voltages and not a signal-quality measurement; one sample per frame misses
+fast transitions. The UART RX idles HIGH, so HIGH there does not show a
+connection or its absence. RST and WAKE exist on the BNO08X build only.
+
+Timing: a diagnostic frame is 32 bytes, exactly the RP2040 TX FIFO. It goes
+out only in an idle window, like a status frame (FIFO empty, and its airtime
+plus a margin before the next sensor tick), and after any due status frame.
+It never delays a sensor frame; a busy link delays or thins it instead.
 
 ### Pico control examples
 
@@ -370,9 +448,18 @@ failed with `kPicoDetailUnknownOp`.
 CONFIGURE rid 0x0102, boot 0xBEEF, enabled   AA 55 12 07 01 01 02 01 EF BE 01 26 24
 REINIT_IMU rid 0xFFFF, boot 0x0001, port 0   AA 55 12 07 01 02 FF FF 01 00 00 EE 5F
 RESTART_ACQUISITION rid 7, boot 0xBEEF       AA 55 12 06 01 03 07 00 EF BE CF 9E
+DIAGNOSTICS rid 0x0304, boot 0xBEEF, 1 Hz    AA 55 12 07 01 04 04 03 EF BE 01 CA 47
+DIAGNOSTICS rid 0x0305, boot 0xBEEF, off     AA 55 12 07 01 04 05 03 EF BE 00 BA FD
 Status                                       AA 55 13 14 01 EF BE 02 05 56 34 12 00 04 03 02
                                              01 01 02 01 02 01 04 01 09 BF
+Diagnostic                                   AA 55 14 1A 01 EF BE 7F 01 05 04 FF 07 34 12 56
+                                             00 03 FA FE FF 02 01 FF FF A0 00 0C 0B 01 F0 D6
 ```
+
+The diagnostic frame is boot 0xBEEF, seq 127, BNO08X, pins INT, WAKE and Pi
+RX HIGH of 0x07FF sampled, imu_rx 0x1234, imu_bad 0x56, 3 resets, error -6,
+65534 reports accepted, 258 rejected, no report yet (0xFFFF), 160 link
+rejections, 0x0B0C ticks skipped, IMU present.
 
 The status is boot 0xBEEF, acq_epoch 2, imu_epoch 5, uptime 0x00123456 ms, IMU
 retrying after a features failure, 0x0102 attempts, enabled, last command
@@ -471,6 +558,7 @@ request is idempotent by content and gets a new id each time.
 | 9 | `kOpControl` | action u8, arg u8 | 10 | 16 |
 | 10 | `kOpPathReport` | command_id u32, path_mode u8, count u8, count x (x_mm i32, y_mm i32) | 14..118 | 20..124 |
 | 11 | `kOpReadWheels` | none | 8 | 14 |
+| 12 | `kOpTelemetry` | `BrainTelemetry`, fixed 54 bytes | 62 | 68 |
 
 Ops 3 (SELECT_LANDMARK) and 5 (GET_STATE_WITH_IMU) are retired v3 ops and are
 never reused.
@@ -497,6 +585,7 @@ Request bodies (offsets from the body start, payload offset 8):
   avoiding), `count` at 5 (0..13), points at 6, field frame mm. The length
   must equal `14 + 8 * count`.
 - READ_WHEELS: no body.
+- TELEMETRY: see [TELEMETRY](#telemetry).
 
 The Pi answers `kResultInvalidArgument` for a body it cannot use: unknown
 GET_STATE flag bits; a PROFILE_WRITE or PROFILE_APPLY `total_len` outside
@@ -584,6 +673,59 @@ reset); `discontinuity` tells a reader that a restart happened in between.
 A version 4 reply for a known (op, result) with a length outside its range, or
 a READ_WHEELS count that does not match the length, fails to decode. An unknown
 op or result decodes the header only.
+
+### TELEMETRY
+
+Optional, best effort, Brain to Pi: what the Brain measured and commanded,
+for the Pi's viewer and captures only. The Pi answers `Ok` with no body; the
+report never changes localization, placement, the profile, the path or any
+reply. The Brain sends it at most every `telemetry_period`, at the lowest
+priority, one request outstanding as always.
+
+Body (offsets from the body start, payload offset 8), 54 bytes:
+
+| Offset | Field | Type | Group | Description |
+|--------|-------|------|-------|-------------|
+| 0 | flags | u8 | | bit 0 attitude, bit 1 motion, bit 2 wheels (`TelemetryFlagBit`); other bits are kept and ignored |
+| 1 | stamp_ms | u32 | | Brain clock when the values were taken |
+| 5 | roll_cdeg | i16 | attitude | robot frame, about +x (forward), positive left side up |
+| 7 | pitch_cdeg | i16 | attitude | robot frame, about +y (left), positive nose down |
+| 9 | command_id | u32 | motion | The command being executed |
+| 13 | motion_state | u8 | motion | actugatr `MotionState` |
+| 14 | motion_reason | u8 | motion | actugatr `MotionReason` |
+| 15 | plan_mode | u8 | motion | investigatr `PlanMode` |
+| 16 | segment | u8 | motion | Current path segment |
+| 17 | segment_count | u8 | motion | Path segments |
+| 18 | target_x_mm | i32 | motion | Field-frame destination |
+| 22 | target_y_mm | i32 | motion | |
+| 26 | target_heading_cdeg | i16 | motion | |
+| 28 | cmd_vx_mm_s | i16 | motion | Commanded body-frame velocity, +x forward |
+| 30 | cmd_vy_mm_s | i16 | motion | +y left |
+| 32 | cmd_omega_cdeg_s | i16 | motion | CCW positive |
+| 34 | cross_track_mm | i16 | motion | Tracking error |
+| 36 | distance_error_mm | i16 | motion | |
+| 38 | heading_error_cdeg | i16 | motion | |
+| 40 | drive_fault | u8 | motion | actugatr `DriveFault` |
+| 41 | wheel_count | u8 | wheels | 0..6 (`kTelemetryWheelsMax`) |
+| 42 | wheel_rpm_x10 | 6 x i16 | wheels | Motor velocity targets, rpm x 10; entries past wheel_count are 0 |
+
+A group whose flag bit is clear is written as zeros and ignored by the
+decoder whatever the wire holds. A wheels group with `wheel_count` above 6
+fails to decode (the encoder refuses it). Distances saturate at +-32767 mm.
+The enum tables are in docs/actugatr.md.
+
+Compatibility: a Pi without op 12 answers `UnsupportedOp`, header only; the
+Brain then stops sending TELEMETRY for that session and keeps the session.
+A resend of the newest request id with the same body is answered `Ok` again
+and recorded once.
+
+On the Pi, a Brain VEX profile folds the attitude group as the robot tilt:
+measured while the newest report carrying the group is at most 250 ms old by
+Pi arrival time, then stale (level assumed, the old measurement time kept).
+Reports without the group (the VEX IMU calibrating or failing) do not end
+that early; before the first attitude the tilt is unavailable. The Brain applies
+its IMU mounting before sending; see docs/brain_setup.md for the sign
+conventions, which are not yet verified on hardware.
 
 ### State block (GET_STATE Ok)
 
@@ -973,14 +1115,14 @@ Pi configuration constraints:
   backpressure to 5 ms and treats a stalled device as unplugged. The reply
   window, first-drain and trailing-bytes rules still apply.
 
-Pi configuration and wiring: [Navigatr setup](../pi/navigatr/docs/setup.md#connect-the-brain)
+Pi configuration and wiring: [Navigatr setup](../pi/naviGATR/docs/setup.md#connect-the-brain)
 and [hardware](hardware.md).
 
 ### Brain link examples
 
 Values used: session `0xA1B2C3D4`, pi_instance `0x0BADF00D`, nonce
 `0x12345678`, profile_id `0xCAFEBABE`, map_id `0x89ABCDEF`. These frames are
-the known-byte vectors in `common/tests/frame_codec_gtest.cpp`, packed by an
+the known-byte vectors in `translaGATR/tests/frame_codec_gtest.cpp`, packed by an
 independent generator and checked against an independent CRC.
 
 GET_STATE request, request_id 65535, no bench IMU sample:
@@ -1052,11 +1194,30 @@ The READ_WHEELS records are port 0, fresh and valid, discontinuity 0x1234,
 counts -123456, travel 987654 um, age 12 ms; and port 1, fresh only,
 discontinuity 0xFFFF, counts INT32_MAX, travel INT32_MIN, age 65535 ms.
 
+TELEMETRY, as packed by the independent generator:
+
+```
+TELEMETRY rid 0x0102, every    AA 55 10 3E 04 0C D4 C3 B2 A1 02 01 07 EF CD AB 00 2E FB 37
+  group                        02 04 03 02 01 02 03 01 04 09 DC 05 00 00 36 F7 FF FF D8 DC
+                               20 03 88 FF 94 11 DD FF B0 04 96 00 05 04 B0 04 50 FB FF 7F
+                               00 80 00 00 00 00 3E 3E
+TELEMETRY rid 13, attitude     AA 55 10 3E 04 0C D4 C3 B2 A1 0D 00 01 E8 03 00 00 FA 00 0C
+  only (2.50, -5.00 deg)       FE, then 45 zero bytes, E0 69
+TELEMETRY Ok                   AA 55 11 0D 04 0C D4 C3 B2 A1 0D 00 00 0D F0 AD 0B 55 98
+TELEMETRY UnsupportedOp        AA 55 11 0D 04 0C D4 C3 B2 A1 0D 00 04 0D F0 AD 0B 53 11
+  (an older Pi)
+```
+
+The full report is stamp 0x00ABCDEF, roll -12.34 deg, pitch 5.67 deg, command
+0x01020304, state 2, reason 3, mode 1, segment 4 of 9, target (1500, -2250)
+mm at -90 deg, command (800, -120) mm/s and 45 deg/s, errors -35 mm, 1200 mm
+and 1.5 deg, fault 5, 4 wheels at 120.0, -120.0, 3276.7 and -3276.8 rpm.
+
 ## Documents
 
 Documents are moved in chunks: the robot profile Brain to Pi with
 PROFILE_WRITE, the field map and field estimate Pi to Brain with READ_DOC.
-Layouts are in `common/link_documents.h`.
+Layouts are in `translaGATR/link_documents.h`.
 
 - Integers are little endian. Counts are explicit, records are fixed length,
   and there are no terminators: binary records contain zero bytes.
@@ -1262,8 +1423,9 @@ nominal.
 ## Structs are not the wire
 
 The structs in `frames.h` and `link_documents.h` (`SensorSample`,
-`BrainRequest`, `BrainReply`, `BrainState`, `WheelReading`, `PicoCommand`,
-`PicoStatus`, `RobotProfileDoc`, the document records) are in-memory
+`BrainRequest`, `BrainReply`, `BrainState`, `BrainTelemetry`, `WheelReading`,
+`PicoCommand`, `PicoStatus`, `PicoDiag`, `RobotProfileDoc`, the document
+records) are in-memory
 conveniences. Their layout differs from the wire because of padding, and the
 request and reply structs hold the body fields of every op. Only the codec
 maps between structs and bytes. Never copy a struct onto the wire, and never
@@ -1288,14 +1450,29 @@ overlay a struct on received bytes.
   record the format alongside stored captures.
 - The Pico link carries `kPicoLinkVersion` (1) in every payload; frames of
   another version are dropped.
+- Optional additions stay inside version 4 and Pico link version 1, and each
+  side degrades on its own. TELEMETRY (op 12): an older Pi answers
+  `UnsupportedOp` and the Brain stops sending it for that session; an older
+  Brain never sends it. DIAGNOSTICS (Pico op 4) and the diagnostic frame
+  (0x14): older firmware answers `UnknownOp` and the Pi shows Pico
+  diagnostics unavailable; a new Pico sends 0x14 only after a Pi asked its
+  current boot. An older Pi therefore sees 0x14 only when a new Pi asked
+  earlier in the same Pico boot (Pi builds switched without power-cycling
+  the Pico); it discards those frames like line noise until the Pico reboots,
+  and a current Pi that did not ask turns them off (see the diagnostic
+  frame). Rebuilding one side alone is therefore safe; the new information
+  appears only once every side involved runs the new build.
+- Bodies kept as raw bytes (the Pi hub records) decode with
+  `decodeTelemetryBody` and `decodePicoDiagPayload`, the same rules as the
+  frame decoders.
 - A protocol change updates the headers, the codec, the fakes
   (`brain/communiGATR/sim`), the tests and this document together.
 
 ## Language parity
 
 The Pico firmware, the Pi runtime and the Brain library (`brain/communiGATR`)
-share `common/frames.h` and the C++ codec `common/frame_codec.cpp`; it builds
+share `translaGATR/frames.h` and the C++ codec `translaGATR/frame_codec.cpp`; it builds
 as C++17 on the host, gnu++17 for the Pico, and gnu++20 in the PROS build.
-`common/link_documents.cpp` is built by the Brain and the Pi only. The RS-485
+`translaGATR/link_documents.cpp` is built by the Brain and the Pi only. The RS-485
 bench programs exercise raw text transfer and are not implementations of these
 frames.

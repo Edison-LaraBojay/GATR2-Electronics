@@ -8,11 +8,11 @@
 namespace communigatr
 {
 
-WheelSample fromReading(const gatr2::WheelReading& r) {
+WheelSample fromReading(const translagatr::WheelReading& r) {
     WheelSample s;
     s.port          = r.port;
-    s.fresh         = (r.flags & gatr2::kWheelFresh) != 0;
-    s.valid         = (r.flags & gatr2::kWheelValid) != 0;
+    s.fresh         = (r.flags & translagatr::kWheelFresh) != 0;
+    s.valid         = (r.flags & translagatr::kWheelValid) != 0;
     s.discontinuity = r.discontinuity;
     s.counts        = r.counts;
     s.travel        = static_cast<double>(r.travel_um) * 1e-6;

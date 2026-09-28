@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "common/frames.h"
+#include "translaGATR/frames.h"
 
 namespace communigatr
 {
@@ -18,11 +18,11 @@ namespace communigatr
 constexpr std::size_t kUsbMarkerLen = 4; // "NG1:"
 
 // Longest encoded line, newline included.
-constexpr std::size_t kUsbLineMax = kUsbMarkerLen + 2 * gatr2::kMaxFrameLen + 1;
+constexpr std::size_t kUsbLineMax = kUsbMarkerLen + 2 * translagatr::kMaxFrameLen + 1;
 
 // Characters a line may hold before its newline; longer lines are dropped.
 // Room for a diagnostic prefix before the marker.
-constexpr std::size_t kUsbLineLimit = kUsbMarkerLen + 2 * gatr2::kMaxFrameLen + 256;
+constexpr std::size_t kUsbLineLimit = kUsbMarkerLen + 2 * translagatr::kMaxFrameLen + 256;
 
 // Writes the line for one frame. Returns the characters written, 0 when len
 // is 0 or over kMaxFrameLen or the line does not fit in cap.
@@ -53,7 +53,7 @@ private:
     char         line_[kUsbLineLimit]        = {};
     std::size_t  used_                       = 0;
     bool         discarding_                 = false;
-    uint8_t      bytes_[gatr2::kMaxFrameLen] = {};
+    uint8_t      bytes_[translagatr::kMaxFrameLen] = {};
     std::size_t  length_                     = 0;
     UsbLineStats stats_;
 };

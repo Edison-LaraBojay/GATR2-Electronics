@@ -33,6 +33,7 @@ GATR2_SRC_investigatr := \
 	$(GATR2_ROOT)/brain/investiGATR/src/planner.cpp
 
 GATR2_SRC_communigatr := \
+	$(GATR2_ROOT)/brain/communiGATR/src/attitude.cpp \
 	$(GATR2_ROOT)/brain/communiGATR/src/client.cpp \
 	$(GATR2_ROOT)/brain/communiGATR/src/doc_assembly.cpp \
 	$(GATR2_ROOT)/brain/communiGATR/src/link_driver.cpp \
@@ -47,8 +48,8 @@ GATR2_SRC_communigatr := \
 	$(GATR2_ROOT)/brain/communiGATR/pros/pros_serial_port.cpp \
 	$(GATR2_ROOT)/brain/communiGATR/pros/pros_usb_port.cpp \
 	$(GATR2_ROOT)/brain/communiGATR/pros/pros_vex_imu.cpp \
-	$(GATR2_ROOT)/common/frame_codec.cpp \
-	$(GATR2_ROOT)/common/link_documents.cpp
+	$(GATR2_ROOT)/translaGATR/frame_codec.cpp \
+	$(GATR2_ROOT)/translaGATR/link_documents.cpp
 
 GATR2_SRC_actugatr := \
 	$(GATR2_ROOT)/brain/actuGATR/src/chassis.cpp \
@@ -61,6 +62,7 @@ GATR2_SRC_actugatr := \
 	$(GATR2_ROOT)/brain/actuGATR/src/drive_owner.cpp \
 	$(GATR2_ROOT)/brain/actuGATR/src/drive_requests.cpp \
 	$(GATR2_ROOT)/brain/actuGATR/src/ports.cpp \
+	$(GATR2_ROOT)/brain/actuGATR/src/telemetry.cpp \
 	$(GATR2_ROOT)/brain/actuGATR/pros/pros_motor_output.cpp \
 	$(GATR2_ROOT)/brain/actuGATR/pros/pros_drive.cpp
 

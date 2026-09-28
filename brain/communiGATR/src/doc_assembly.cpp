@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-#include "common/link_documents.h"
+#include "translaGATR/link_documents.h"
 
 namespace communigatr
 {
@@ -29,13 +29,13 @@ void DocAssembly::clear() {
 }
 
 uint8_t DocAssembly::maxLen() const {
-    if (total_len_ == 0 || total_len_ - offset_ >= gatr2::kDocChunkMax) {
-        return gatr2::kDocChunkMax;
+    if (total_len_ == 0 || total_len_ - offset_ >= translagatr::kDocChunkMax) {
+        return translagatr::kDocChunkMax;
     }
     return static_cast<uint8_t>(total_len_ - offset_);
 }
 
-DocAssembly::Step DocAssembly::accept(const gatr2::BrainReply& reply) {
+DocAssembly::Step DocAssembly::accept(const translagatr::BrainReply& reply) {
     if (!active_ || complete_) {
         return invalid();
     }
@@ -60,7 +60,7 @@ DocAssembly::Step DocAssembly::accept(const gatr2::BrainReply& reply) {
     if (offset_ < total_len_) {
         return Step::kMore;
     }
-    if (gatr2::crc32(buffer_.data(), total_len_) != crc_) {
+    if (translagatr::crc32(buffer_.data(), total_len_) != crc_) {
         return invalid();
     }
     complete_ = true;

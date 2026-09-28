@@ -1,9 +1,10 @@
 # Pico link (Pi side)
 
-The `pico_telemetry` resource reads the Pico UART, decodes sensor and status
-frames, publishes the encoder and gyro channels, and sends Pico commands on
-the same link. The wire layouts are in [docs/interfaces.md](../../../docs/interfaces.md)
-and the firmware side is in [pico/README.md](../../../pico/README.md).
+The `pico_telemetry` resource reads the Pico UART, decodes sensor, status
+and diagnostic frames, publishes the encoder and gyro channels, and sends
+Pico commands on the same link. The wire layouts are in
+[docs/interfaces.md](../../../docs/interfaces.md) and the firmware side is in
+[pico/aggreGATR/README.md](../../../pico/aggreGATR/README.md).
 
 ```xml
 <Resource id="pico_uart" type="linux_serial_link">
@@ -16,6 +17,7 @@ and the firmware side is in [pico/README.md](../../../pico/README.md).
     <Output id="encoder_1" channel="1"/>
     <Output id="encoder_2" channel="2"/>
     <Output id="imu_0" channel="imu"/>
+    <Diagnostics hz="1"/>   <!-- optional, 0..5 -->
 </Resource>
 ```
 
@@ -67,6 +69,7 @@ Firmware that sends v1 frames (type 0x01) has no identity:
 | CONFIGURE (1) | imu_enabled | enable or disable IMU port 0 | Completed at once |
 | REINIT_IMU (2) | imu_port (0) | fresh IMU attempts, `imu_epoch` + 1 | Completed when the IMU is ready; Failed ImuAbsent after the Pico's attempts |
 | RESTART_ACQUISITION (3) | none | encoder counters zeroed, `acq_epoch` + 1 | Completed at once |
+| DIAGNOSTICS (4) | diag_hz (0..5) | diagnostic frames at that rate, 0 off | Completed at once; UnknownOp on older firmware |
 
 - **Request ids** start at a random base per Pi process and count up, never
   0, so a restarted Pi does not repeat ids the Pico recorded. Every command
@@ -115,6 +118,102 @@ frame with the new `acq_epoch` arrives; wait for `link().acq_epoch` (or
 
 The Pico sends a status frame every 200 ms and shortly after each command or
 IMU state change.
+
+## Diagnostics
+
+`<Diagnostics hz="N"/>` (1..5) asks each Pico boot for the optional
+diagnostic frame (type 0x14): pin levels read back, IMU driver counters, Pi
+command link rejections and skipped sensor ticks. The Brain-profile
+configurations set `hz="1"`.
+
+Without the element, or with `hz="0"`, the Pi asks for nothing. A Pico
+keeps the rate its boot was given until it reboots, though, so after
+navigatr restarts with such a configuration the Pico may still send the
+frames an earlier Pi process asked for. The Pi then sends DIAGNOSTICS 0
+once to that boot and the frames stop; the state stays `not requested`.
+An older Pi build cannot do that: its reader discards the frames like line
+noise until the Pico reboots (sensor frames still decode).
+
+- The request is an ordinary Pico command (DIAGNOSTICS, op 4), resent every
+  200 ms under one id until a status names it, bounded at 2 s. Unanswered
+  attempts are retried every 5 s; nothing else waits for them.
+- A Pico reboot turns its diagnostics off; the Pi asks the new boot at once.
+- An `UnknownOp` answer (firmware older than the diagnostic frame) marks
+  diagnostics unavailable with the reason `firmware` until the next boot.
+  Another reported refusal is `refused`.
+- Diagnostic frames are decoded and kept (the newest, with its host arrival
+  time); they never reach a sensor, localization or a reply to the Brain.
+  Encoder counts, epochs and the gyro accumulator are identical with and
+  without them (tested).
+
+`PicoTelemetry::instrumentation()` reports the state: `not requested`,
+`no link` (no fresh frames), `no identity` (v1 firmware takes no commands),
+`requesting`, `active`, `firmware`, `refused`. The viewer calls diagnostics
+available only while a diagnostic frame is at most 3 s (and three frame
+periods) old.
+
+## Instrumentation
+
+With the System's DiagnosticsHub (always, inside a System) the resource
+feeds the link's LinkMonitor (id = the Serial resource id, kind
+`pico_uart`) from the reads and writes it already makes; there is never a
+second reader:
+
+- every read: byte counters, the rate window, and raw bytes while a viewer or
+  a capture asked for raw capture;
+- every decoded frame: name (`sensor v1`, `sensor v2`, `status`, `diag`) and,
+  while decoded summaries are on, a short field summary;
+- every rejected frame: a typed decode failure or a frame type that is not
+  the Pico's (`not a Pico frame`);
+- the FrameReader counters after each drain (sync bytes dropped, length and
+  CRC or checksum rejections);
+- every command written, as attempted and accepted bytes (a failed write
+  accepted nothing) with its op name.
+
+Hub records: every status and diagnostic frame (a few per second), and sensor
+frames only while a consumer (a capture) wants them.
+
+`writeInstrumentation` (src/diagnostics/instrumentation.cpp) writes the
+viewer's instrumentation object. Ages are Pi host clock milliseconds at
+write time, `null` when never.
+
+- `links[]`: per LinkMonitor: `rx_bytes`, `tx_attempted`, `tx_accepted`,
+  `rx_frames`, `tx_frames`, `rejected`, `reader` (the FrameReader counters),
+  `rates` (per second over the last full second; a quiet link decays toward 0),
+  `last_rx_ms_ago`, `last_tx_ms_ago`, `last_valid_rx_ms_ago`, `raw_on`,
+  `raw[]` (only when the request asked for raw; `dir` is `rx`, `tx`, or
+  `tx_attempted` for bytes a write did not accept), `decoded[]`, `errors[]`.
+- `pico`: `available` and `reason` as above, `diag_hz`, `status` (link state,
+  frame counts, `serial` with the device's open state, reopen attempts,
+  reopens, closes and last open error when the UART is a
+  `linux_serial_link`, and the newest status frame by name), `diag` (null
+  until a frame arrives):
+  `age_ms`, `seq`, `boot_id`, `current_boot`, `firmware`, `pins[]`
+  (`name`, `level` HIGH or LOW or null when not sampled, `known`, `driven`),
+  `imu` (counters with their per-firmware `meaning`; `reports_rejected` null
+  for ASM330, `report_age_ms` null when none), `link_rx_bad`,
+  `ticks_skipped`. `encoders[]`: `port`, `present`, `counts` (the newest
+  value, kept after updates stop), `updated_ms_ago`, `fresh` (the port was
+  updated within 250 ms of the Pi's last refresh), `delta_1s` and `span_ms`
+  (counts change over about the last second; null until two samples and
+  whenever `fresh` is false; a silence longer than a second starts a new
+  window), `direction` (`fwd` counts increasing, `rev`, `still`; null with
+  `delta_1s`), `a` and `b` (encoder pin levels from a fresh diagnostic
+  frame, else null) and a `note` (`no recent counts: Pico frames for this
+  port stopped` once `fresh` is false).
+- `brain`: `telemetry_age_ms`, `telemetry_supported` (true once a TELEMETRY
+  report arrived, null before: an older Brain never sends one),
+  `telemetry` (decoded summary), `vex_imu` (the newest GET_STATE bench
+  sample).
+- `hub`: records posted and dropped per kind, queued, capacity.
+
+What the instrumentation cannot tell, and says so:
+- pin levels are logic levels read back once per frame, not voltages; fast
+  transitions between samples are missed; the UART RX idling HIGH proves
+  neither a connection nor its absence;
+- an encoder whose counts do not change may be stationary or disconnected;
+  fresh Pico frames do not prove any one encoder is connected;
+- `direction` is raw counts before the profile's polarity and gearing.
 
 ## Serial reopen
 
@@ -175,6 +274,11 @@ and [section 6](../../../docs/brain_setup.md#6-placement).
   the Windows build machine.
 - Update the Pi software before flashing v2 Pico firmware: older Pi software
   ignores type 0x04 frames and would see no encoder data.
+- DIAGNOSTICS and the diagnostic frame on the real UART; the pin read-back
+  on the RP2040 pads; that a 32-byte diagnostic frame in the idle window never
+  delays a sensor frame (host-simulated only).
+- Compatibility: diagnostics need the new Pico firmware and the new Pi
+  software; either one alone keeps working without them.
 
 ## Tests
 
@@ -184,4 +288,11 @@ telemetry, sensor and localization path (an XML-configured three-wheel
 pipeline) with no displacement; a pulled and
 replaced cable; command ids, targets, resend timing, lost reports, running
 and failed commands, timeouts, reboots and two commands in flight against a
-fake Pico built from the common codec; thread-safe reads; serial reopening.
+fake Pico built from the common codec; thread-safe reads; serial reopening;
+diagnostics (never asked when not configured, asked once per boot, again
+after a reboot, `firmware` on UnknownOp, gentle retries when unanswered, no
+effect on sensor outputs, the configured rate bounded, frames an earlier Pi
+process asked for turned off once); the LinkMonitor and hub records;
+encoder change over a second, its rebase across an acquisition restart, and
+no change reported once frames stop or across a long silence; the
+instrumentation object of a System, including after the Pico frames stop.

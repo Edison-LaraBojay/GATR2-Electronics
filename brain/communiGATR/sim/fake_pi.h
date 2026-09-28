@@ -1,7 +1,7 @@
 // fake_pi.h
 // Host-only stand-in for Navigatr's brain_link slots, v4: session and dedupe
 // rules, placement, robot profile staging and apply, field map and estimate
-// documents, calibration control and path reports over the real common
+// documents, calibration control, path reports and telemetry over the real
 // codec, with a scripted robot state. No timing; FakeBus and FakeUsb add it.
 
 #pragma once
@@ -10,8 +10,8 @@
 #include <functional>
 #include <vector>
 
-#include "common/frame_codec.h"
-#include "common/link_documents.h"
+#include "translaGATR/frame_codec.h"
+#include "translaGATR/link_documents.h"
 
 namespace communigatr
 {
@@ -22,7 +22,7 @@ struct FakeField {
     int32_t                               min_y_mm = 0;
     int32_t                               max_x_mm = 3658;
     int32_t                               max_y_mm = 3658;
-    std::vector<gatr2::FieldObjectRecord> objects; // sorted by id
+    std::vector<translagatr::FieldObjectRecord> objects; // sorted by id
 };
 
 // count objects with ids 10, 20, ...: landmarks (estimated, reference,
@@ -33,8 +33,8 @@ FakeField makeFakeField(uint16_t count, uint16_t revision = 1);
 struct FakePath {
     bool                          have       = false;
     uint32_t                      command_id = 0;
-    uint8_t                       mode       = gatr2::kPathNone;
-    std::vector<gatr2::PathPoint> points;
+    uint8_t                       mode       = translagatr::kPathNone;
+    std::vector<translagatr::PathPoint> points;
 };
 
 class FakePi {
@@ -45,7 +45,7 @@ public:
     std::vector<std::vector<uint8_t>> receive(const uint8_t* data, std::size_t len);
 
     // One request under the Pi's rules. Tests may call it directly.
-    gatr2::BrainReply answer(const gatr2::BrainRequest& request);
+    translagatr::BrainReply answer(const translagatr::BrainRequest& request);
 
     // Process restart: new instance, no session, no placement, no profile or
     // staging, estimate ids from 1 again with a nominal estimate. The field
@@ -53,7 +53,7 @@ public:
     void restart(uint32_t pi_instance);
 
     // Robot part of the state block as localization reports it.
-    gatr2::BrainState& robot() { return robot_; }
+    translagatr::BrainState& robot() { return robot_; }
 
     // A new SET_POSE applies after this many later requests of any op:
     // 0 = before its own answer, negative = never.
@@ -63,8 +63,18 @@ public:
     // kResultUnsupportedVersion.
     void setVersion(uint8_t version) { version_ = version; }
 
-    // Op answered kResultUnsupportedOp, 0 = none.
+    // Op answered kResultUnsupportedOp, 0 = none. kOpTelemetry is a Pi from
+    // before TELEMETRY.
     void setUnsupportedOp(uint8_t op) { unsupported_op_ = op; }
+
+    // --- Telemetry ---------------------------------------------------------
+    // Result of every new TELEMETRY; kResultOk keeps it. Display only: it
+    // never changes the robot, placement or profile.
+    void setTelemetryResult(uint8_t result) { telemetry_result_ = result; }
+
+    // Latest kept TELEMETRY body and how many were kept.
+    const translagatr::BrainTelemetry& telemetry() const { return telemetry_; }
+    int                                telemetryKept() const { return telemetry_kept_; }
 
     // --- Robot profile -----------------------------------------------------
     // On: localization waits for an applied Brain profile (no pose, SET_POSE
@@ -110,13 +120,13 @@ public:
 
     // New estimate snapshot, records in map order; returns its id. The last
     // three stay readable.
-    uint32_t publishEstimate(const std::vector<gatr2::FieldEstimateRecord>& records);
+    uint32_t publishEstimate(const std::vector<translagatr::FieldEstimateRecord>& records);
     uint32_t publishNominalEstimate();
-    std::vector<gatr2::FieldEstimateRecord> nominalRecords() const;
+    std::vector<translagatr::FieldEstimateRecord> nominalRecords() const;
     uint32_t newestEstimate() const { return estimates_.empty() ? 0 : estimates_.back().id; }
 
     // Edits every READ_DOC Ok reply, for chunk faults.
-    std::function<void(gatr2::BrainReply&)> doc_hook;
+    std::function<void(translagatr::BrainReply&)> doc_hook;
 
     // --- Control -----------------------------------------------------------
     void setMoving(bool moving) { moving_ = moving; }
@@ -139,10 +149,10 @@ public:
     const FakePath& path() const { return path_; }
 
     // READ_WHEELS answer.
-    void setWheels(const std::vector<gatr2::WheelReading>& wheels) { wheels_ = wheels; }
+    void setWheels(const std::vector<translagatr::WheelReading>& wheels) { wheels_ = wheels; }
 
     // Every decoded request, in order.
-    const std::vector<gatr2::BrainRequest>& requests() const { return requests_; }
+    const std::vector<translagatr::BrainRequest>& requests() const { return requests_; }
 
 private:
     struct Placement {
@@ -157,11 +167,11 @@ private:
 
     struct Record {
         bool                have = false;
-        gatr2::BrainRequest request;
-        uint8_t             result      = gatr2::kResultOk; // CONTROL
-        uint8_t             calibration = gatr2::kCalibrationNone;
+        translagatr::BrainRequest request;
+        uint8_t             result      = translagatr::kResultOk; // CONTROL
+        uint8_t             calibration = translagatr::kCalibrationNone;
         uint32_t            sequence    = 0; // SET_POSE placement sequence
-        uint8_t             detail      = gatr2::kControlDetailNone;
+        uint8_t             detail      = translagatr::kControlDetailNone;
     };
 
     struct Estimate {
@@ -175,19 +185,19 @@ private:
         uint8_t  detail = 0;
     };
 
-    void     openSession(const gatr2::BrainRequest& request);
-    void     execute(gatr2::BrainReply& reply, const gatr2::BrainRequest& request, bool repeat);
-    void     repeat(gatr2::BrainReply& reply, const gatr2::BrainRequest& request);
-    void     setPose(gatr2::BrainReply& reply, const gatr2::BrainRequest& request);
-    void     answerPlacement(gatr2::BrainReply& reply, uint32_t sequence) const;
-    void     answerState(gatr2::BrainReply& reply) const;
-    void     profileWrite(gatr2::BrainReply& reply, const gatr2::BrainRequest& request);
-    void     profileApply(gatr2::BrainReply& reply, const gatr2::BrainRequest& request);
-    void     rejectProfile(gatr2::BrainReply& reply, uint32_t id, uint8_t reason, uint8_t detail);
-    void     readDoc(gatr2::BrainReply& reply, const gatr2::BrainRequest& request);
-    void     control(gatr2::BrainReply& reply, const gatr2::BrainRequest& request);
+    void     openSession(const translagatr::BrainRequest& request);
+    void     execute(translagatr::BrainReply& reply, const translagatr::BrainRequest& request, bool repeat);
+    void     repeat(translagatr::BrainReply& reply, const translagatr::BrainRequest& request);
+    void     setPose(translagatr::BrainReply& reply, const translagatr::BrainRequest& request);
+    void     answerPlacement(translagatr::BrainReply& reply, uint32_t sequence) const;
+    void     answerState(translagatr::BrainReply& reply) const;
+    void     profileWrite(translagatr::BrainReply& reply, const translagatr::BrainRequest& request);
+    void     profileApply(translagatr::BrainReply& reply, const translagatr::BrainRequest& request);
+    void     rejectProfile(translagatr::BrainReply& reply, uint32_t id, uint8_t reason, uint8_t detail);
+    void     readDoc(translagatr::BrainReply& reply, const translagatr::BrainRequest& request);
+    void     control(translagatr::BrainReply& reply, const translagatr::BrainRequest& request);
     void     finishControl();
-    void     readWheels(gatr2::BrainReply& reply) const;
+    void     readWheels(translagatr::BrainReply& reply) const;
     void     tick();
     void     applyPlacement();
     void     applyProfile();
@@ -197,7 +207,7 @@ private:
 
     uint32_t pi_instance_;
     uint32_t rng_;
-    uint8_t  version_        = gatr2::kBrainLinkVersion;
+    uint8_t  version_        = translagatr::kBrainLinkVersion;
     uint8_t  unsupported_op_ = 0;
 
     // Session.
@@ -208,7 +218,7 @@ private:
     uint32_t            nonce_ring_[4]   = {};
     int                 nonce_count_     = 0;
     bool                have_newest_     = false;
-    gatr2::BrainRequest newest_;
+    translagatr::BrainRequest newest_;
     Record              last_set_pose_;
     Record              last_control_;
 
@@ -221,19 +231,19 @@ private:
 
     // Profile.
     bool                   profile_mode_      = false;
-    uint8_t                capability_reason_ = gatr2::kProfileReasonNone;
+    uint8_t                capability_reason_ = translagatr::kProfileReasonNone;
     uint8_t                capability_detail_ = 0;
     int                    profile_delay_     = 0;
     uint32_t               staging_id_        = 0;
     uint16_t               staging_total_     = 0;
     uint16_t               staging_received_  = 0;
-    uint8_t                staging_[gatr2::kProfileMaxLen] = {};
+    uint8_t                staging_[translagatr::kProfileMaxLen] = {};
     uint32_t               applied_profile_   = 0;
     uint32_t               applying_profile_  = 0;
     int                    applying_countdown_ = 0;
-    uint8_t                profile_state_     = gatr2::kProfileNone;
+    uint8_t                profile_state_     = translagatr::kProfileNone;
     uint32_t               profile_id_        = 0;
-    uint8_t                profile_reason_    = gatr2::kProfileReasonNone;
+    uint8_t                profile_reason_    = translagatr::kProfileReasonNone;
     uint8_t                profile_detail_    = 0;
     std::vector<Rejection> rejected_;
     int                    profiles_applied_  = 0;
@@ -253,14 +263,18 @@ private:
     int     controls_executed_    = 0;
     int     control_delay_        = 0;
     int     control_left_         = 0; // requests until the pending control completes
-    uint8_t control_failure_      = gatr2::kControlDetailNone;
+    uint8_t control_failure_      = translagatr::kControlDetailNone;
 
-    std::vector<gatr2::WheelReading> wheels_;
+    std::vector<translagatr::WheelReading> wheels_;
 
-    gatr2::BrainState                robot_;
+    uint8_t                     telemetry_result_ = translagatr::kResultOk;
+    translagatr::BrainTelemetry telemetry_;
+    int                         telemetry_kept_ = 0;
+
+    translagatr::BrainState                robot_;
     FakePath                         path_;
-    gatr2::FrameReader               reader_;
-    std::vector<gatr2::BrainRequest> requests_;
+    translagatr::FrameReader               reader_;
+    std::vector<translagatr::BrainRequest> requests_;
     int                              sessions_opened_    = 0;
     int                              placements_applied_ = 0;
     int                              imu_samples_        = 0;

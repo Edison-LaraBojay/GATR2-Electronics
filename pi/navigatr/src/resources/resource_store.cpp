@@ -98,6 +98,7 @@ const ResourceInstance* ResourceStoreBuilder::resolve(const ResourceId& id,
     context.resolver          = this;
     context.functions         = &functions_;
     context.warnings          = warnings_;
+    context.diagnostics       = diagnostics_;
 
     ResourceInstance value;
     std::string   build_err;

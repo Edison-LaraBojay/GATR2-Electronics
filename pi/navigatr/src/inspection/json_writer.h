@@ -10,15 +10,37 @@
 #include <cstdio>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace navigatr
 {
 
+// Byte ranges [begin, end) of a document.
+using JsonSpans = std::vector<std::pair<std::size_t, std::size_t>>;
+
 class JsonWriter
 {
 public:
     JsonWriter() { out_.reserve(4096); }
+
+    // Identity checks: while set, the byte ranges of values that change on
+    // every build (clocks, ages, counters) are recorded here, so a hash of
+    // the rest tells whether the content changed. Off (null) by default.
+    void recordVarying(JsonSpans* spans) { varying_ = spans; }
+    std::size_t mark() const { return out_.size(); }
+    // Everything written since from is varying.
+    void varying(std::size_t from) {
+        if (varying_ != nullptr && out_.size() > from) {
+            varying_->emplace_back(from, out_.size());
+        }
+    }
+    template <typename T>
+    void varyingField(const char* k, const T& v) {
+        const std::size_t from = mark();
+        field(k, v);
+        varying(from);
+    }
 
     void beginObject() {
         separate();
@@ -87,6 +109,13 @@ public:
         out_ += "null";
         afterValue();
     }
+    // A value the caller already holds as valid JSON text (a checked number
+    // token, a nested document). Nothing is escaped or checked here.
+    void raw(const std::string& json) {
+        separate();
+        out_ += json;
+        afterValue();
+    }
 
     // Convenience: key + value in one call.
     template <typename T>
@@ -144,6 +173,7 @@ private:
     std::string       out_;
     std::vector<bool> first_;
     bool              pending_key_ = false;
+    JsonSpans*        varying_     = nullptr;
 };
 
 } // namespace navigatr

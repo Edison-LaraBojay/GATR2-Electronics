@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "common/frame_codec.h"
+#include "translaGATR/frame_codec.h"
 
 using namespace communigatr;
 
@@ -45,12 +45,12 @@ TEST(UsbLine, EncodesUppercaseHexWithMarkerAndNewline) {
 }
 
 TEST(UsbLine, EncoderRefusesEmptyOversizedAndShortBuffer) {
-    uint8_t frame[gatr2::kMaxFrameLen + 1] = {};
+    uint8_t frame[translagatr::kMaxFrameLen + 1] = {};
     char    line[kUsbLineMax + 2];
     EXPECT_EQ(encodeUsbLine(frame, 0, line, sizeof(line)), 0u);
-    EXPECT_EQ(encodeUsbLine(frame, gatr2::kMaxFrameLen + 1, line, sizeof(line)), 0u);
-    EXPECT_EQ(encodeUsbLine(frame, gatr2::kMaxFrameLen, line, kUsbLineMax - 1), 0u);
-    EXPECT_EQ(encodeUsbLine(frame, gatr2::kMaxFrameLen, line, kUsbLineMax), kUsbLineMax);
+    EXPECT_EQ(encodeUsbLine(frame, translagatr::kMaxFrameLen + 1, line, sizeof(line)), 0u);
+    EXPECT_EQ(encodeUsbLine(frame, translagatr::kMaxFrameLen, line, kUsbLineMax - 1), 0u);
+    EXPECT_EQ(encodeUsbLine(frame, translagatr::kMaxFrameLen, line, kUsbLineMax), kUsbLineMax);
     EXPECT_EQ(kUsbLineMax, 4u + 256u + 1u);
 }
 
@@ -127,32 +127,32 @@ TEST(UsbLine, RoundTripsLinkFramesOfEverySize) {
     std::string    stream;
     std::vector<std::vector<uint8_t>> sent;
     // Largest reply: READ_DOC with 96 data bytes, a 128 byte frame.
-    for (uint8_t n = 1; n <= gatr2::kDocChunkMax; n = static_cast<uint8_t>(n + 19)) {
-        gatr2::BrainReply reply;
-        reply.op            = gatr2::kOpReadDoc;
+    for (uint8_t n = 1; n <= translagatr::kDocChunkMax; n = static_cast<uint8_t>(n + 19)) {
+        translagatr::BrainReply reply;
+        reply.op            = translagatr::kOpReadDoc;
         reply.session       = 0x01020304;
         reply.request_id    = n;
         reply.pi_instance   = 0xA0B0C0D0;
-        reply.doc_kind      = gatr2::kDocFieldMap;
+        reply.doc_kind      = translagatr::kDocFieldMap;
         reply.doc_id        = 0x0A55AA55;
         reply.doc_total_len = 500;
         reply.data_len      = n;
         for (uint8_t i = 0; i < n; ++i) {
             reply.data[i] = static_cast<uint8_t>(i * 37 + 0xAA); // sync bytes inside data
         }
-        std::vector<uint8_t> frame(gatr2::kMaxFrameLen);
-        frame.resize(gatr2::encodeBrainReply(reply, frame.data(), gatr2::kMaxFrameLen));
+        std::vector<uint8_t> frame(translagatr::kMaxFrameLen);
+        frame.resize(translagatr::encodeBrainReply(reply, frame.data(), translagatr::kMaxFrameLen));
         ASSERT_GT(frame.size(), 0u);
         sent.push_back(frame);
         stream += "PROS diag\n" + encode(frame);
     }
-    gatr2::BrainReply full;
-    full.op       = gatr2::kOpReadDoc;
-    full.data_len = gatr2::kDocChunkMax;
-    full.doc_kind = gatr2::kDocFieldEstimate;
-    std::vector<uint8_t> frame(gatr2::kMaxFrameLen);
-    frame.resize(gatr2::encodeBrainReply(full, frame.data(), gatr2::kMaxFrameLen));
-    ASSERT_EQ(frame.size(), gatr2::kMaxFrameLen);
+    translagatr::BrainReply full;
+    full.op       = translagatr::kOpReadDoc;
+    full.data_len = translagatr::kDocChunkMax;
+    full.doc_kind = translagatr::kDocFieldEstimate;
+    std::vector<uint8_t> frame(translagatr::kMaxFrameLen);
+    frame.resize(translagatr::encodeBrainReply(full, frame.data(), translagatr::kMaxFrameLen));
+    ASSERT_EQ(frame.size(), translagatr::kMaxFrameLen);
     sent.push_back(frame);
     stream += encode(frame);
 
@@ -160,8 +160,8 @@ TEST(UsbLine, RoundTripsLinkFramesOfEverySize) {
     ASSERT_EQ(frames.size(), sent.size());
     for (std::size_t i = 0; i < sent.size(); ++i) {
         EXPECT_EQ(frames[i], sent[i]);
-        gatr2::BrainReply decoded;
-        EXPECT_TRUE(gatr2::decodeBrainReply(frames[i].data(),
+        translagatr::BrainReply decoded;
+        EXPECT_TRUE(translagatr::decodeBrainReply(frames[i].data(),
                                             static_cast<uint16_t>(frames[i].size()), decoded));
     }
 }

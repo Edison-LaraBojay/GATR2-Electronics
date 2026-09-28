@@ -4,7 +4,7 @@ The current bench: Pi USB-A to the V5 Brain's micro-USB port with a data
 cable, the Brain on its V5 battery. This bypasses the HAT's RS-485 circuit.
 The Pico supplies one forward tracking wheel (encoder port 0, J2) and one
 sideways wheel (port 1, J3) over its UART; the VEX IMU stays on Brain Smart
-Port 1. The Brain program is `brain/localization-test`, which never drives
+Port 1. The Brain program is `brain/locaGATR`, which never drives
 motors: push the robot by hand. No camera, AprilTags or external IMU are
 needed.
 
@@ -23,14 +23,14 @@ In [brain/robot/gatr2_robot.h](../../../brain/robot/gatr2_robot.h):
   (UNMEASURED) and measuring direction;
 - the start pose `kStartX`, `kStartY`, `kStartHeadingDegrees`.
 
-Build and upload `localization-test` as in
+Build and upload `locaGATR` as in
 [Brain setup](../../../docs/brain_setup.md#2-build-and-upload). USB text
 logging stays off on this link: do not run a PROS terminal or another serial
 reader on the Brain's user port while the Pi uses it.
 
 ## Pi
 
-On the Pi, from `pi/navigatr`:
+On the Pi, from `pi/naviGATR`:
 
 ```sh
 cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DNAVIGATR_BUILD_TESTS=OFF -DNAVIGATR_WITH_LIBCAMERA=OFF

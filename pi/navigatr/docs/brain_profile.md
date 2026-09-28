@@ -8,11 +8,14 @@ geometry or its localization setup is a Brain edit and upload, not a Pi XML
 edit.
 
 - Pi configs: [brain_profile_usb.xml](../config/override/brain_profile_usb.xml)
-  and [brain_profile_rs485.xml](../config/override/brain_profile_rs485.xml).
+  and [brain_profile_rs485.xml](../config/override/brain_profile_rs485.xml);
+  [brain_profile_usb_camera.xml](../config/override/brain_profile_usb_camera.xml)
+  is the USB config plus a camera preview with no field correction
+  ([camera preview](camera_preview.md)).
 - Brain side: [brain/robot/gatr2_robot.h](../../../brain/robot/gatr2_robot.h),
   procedures in [Brain setup](../../../docs/brain_setup.md).
 - Wire format: [Brain link v4](../../../docs/interfaces.md) and
-  `common/link_documents.h`.
+  `translaGATR/link_documents.h`.
 
 The XML-configured profiles (`bench_vex_imu*.xml`, `parallel_wheels_bno08x*`,
 the three-wheel templates, the synthetic demos) still run. They describe the
@@ -80,9 +83,13 @@ detection.
 - `<Pico resource_id="pico_telemetry"/>` on the CommandCollection enables
   CONTROL 3 and 4; on Publishing it adds the Pico health bits.
 - Both configs also have `pico_telemetry` with all three encoder outputs and
-  the IMU output, noop world estimation, and `<Field>` publishing of
-  `field.xml`. A camera variant does not exist: a profile with camera mounts is
-  refused (see below).
+  the IMU output, `<Diagnostics hz="1"/>` (optional Pico diagnostic frames
+  for the viewer, see [Pico link](pico_link.md#diagnostics)), noop world
+  estimation, and `<Field>` publishing of `field.xml`.
+- `brain_profile_usb_camera.xml` adds only a `libcamera_camera` resource and a
+  `camera_frame` sensor that nothing but the preview reads; its pipeline is
+  identical (a test pins that). A profile with camera mounts is still
+  refused (see below): the preview needs no mount.
 
 ## Lifecycle
 
@@ -131,6 +138,25 @@ boundary runs, the waiting candidate is dropped.
 
 The Brain VEX IMU models pair wheel and IMU samples by Pi arrival time. They
 are bench models and do not synchronize the Brain and Pico clocks.
+
+**Attitude (tilt).** With the Brain VEX IMU, the Brain sends roll and pitch
+in TELEMETRY, already turned into the robot frame by its IMU mounting
+(`kVexImuMountYawDeg`, sign conventions not yet verified on hardware). The
+bench model publishes each new report as `profile_attitude` (gravity
+referenced, no yaw, measured at its Pi arrival time) and the estimator folds
+it into `RobotState.attitude`:
+
+| Situation | `attitude` |
+|---|---|
+| an attitude report at most 250 ms old | valid, measured roll and pitch, yaw from the planar heading |
+| the newest attitude report older than 250 ms | not valid, level assumed, `measured_at` of the old report kept (stale) |
+| reports that drop the attitude group after a measured one (VEX IMU calibrating or failing) | as above: measured until 250 ms after the last attitude report, then stale. The instrumentation's `brain.telemetry.attitude` is `null` for such reports |
+| no attitude report yet | not valid, level assumed, source `profile_attitude`, no measurement time (unavailable) |
+
+The tilt never changes the pose, and nothing estimates height. Pico IMU
+profiles carry no attitude: the Pico sends yaw rate only and no profile holds
+an IMU-to-robot mounting rotation for the external IMU, so their attitude is
+level assumed with no source.
 
 **Refusals** (ProfileRejected, reason and detail):
 
@@ -344,3 +370,15 @@ the Pico link and the lifecycle log. The viewer's Brain link panel turns them
 into a readiness line (link, profile, sensors, map, calibration, placement)
 and draws the profile footprint, the field boundary and collision boxes, and
 the path. See [inspection](inspection.md).
+
+**Brain link instrumentation.** The brain_link slots feed the link's
+LinkMonitor (id = the Serial resource id, kind `brain_usb` or
+`brain_serial`) at the decoded frame layer: for USB these are the frame bytes
+the NG1 lines carried, not the hex text. Each decoded request and each reply
+(attempted and accepted bytes, the result actually sent) is listed; rejected
+frames and, for USB, dropped NG1 lines (odd or non-hex digits, too long, line
+overflow) count as rejections. Lines without an NG1 marker are Brain console
+text and are only counted. The hub gets one record per processed request with
+the result sent and 0 bytes when nothing went out, each GET_STATE bench IMU
+sample, each PATH_REPORT and each TELEMETRY report. The viewer's
+instrumentation object is described in [Pico link](pico_link.md#instrumentation).

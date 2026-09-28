@@ -29,7 +29,7 @@ enum class Readiness : uint8_t {
 
 const char* toString(Readiness readiness);
 
-// gatr2::HealthBit of one state block.
+// translagatr::HealthBit of one state block.
 struct HealthBits {
     bool encoders_fresh   = false; // every profile encoder
     bool imu_fresh        = false; // the profile IMU source, Pico or Brain bench
@@ -43,7 +43,7 @@ struct HealthBits {
 
 HealthBits decodeHealth(uint8_t health);
 
-// Short name of a gatr2::CalibrationState.
+// Short name of a translagatr::CalibrationState.
 const char* calibrationName(uint8_t calibration);
 
 enum class ImuUse : uint8_t {
@@ -57,7 +57,7 @@ struct LinkReadiness {
     Readiness  state = Readiness::kConnecting;
     ImuUse     imu   = ImuUse::kUnknown; // from the configured profile
     HealthBits health;                   // latest state of this session; all false without one
-    uint8_t    calibration           = gatr2::kCalibrationNone;
+    uint8_t    calibration           = translagatr::kCalibrationNone;
     bool       brain_imu_calibrating = false; // bench sample of the latest state poll
     bool       localized             = false;
     bool       pose_valid            = false;

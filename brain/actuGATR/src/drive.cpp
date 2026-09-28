@@ -47,13 +47,17 @@ DriveFault Drive::apply(const ChassisCommand& command, Seconds issued_at, Second
     status_.wheels     = wheels;
     status_.saturation = factor;
     status_.command    = kinematics_.toChassis(wheels);
+    for (double& rpm : status_.motor_rpm) {
+        rpm = 0;
+    }
     if (!moving) {
         output_.stop(config_.stop_mode);
         status_.stopped = true;
         return DriveFault::kNone;
     }
     for (std::size_t i = 0; i < wheels.count && i < output_.groups(); ++i) {
-        output_.setVelocity(i, motorRpm(wheels_, wheels.speed[i]));
+        status_.motor_rpm[i] = motorRpm(wheels_, wheels.speed[i]);
+        output_.setVelocity(i, status_.motor_rpm[i]);
     }
     status_.stopped = false;
     return DriveFault::kNone;
@@ -63,8 +67,12 @@ void Drive::stop(DriveFault fault) {
     output_.stop(config_.stop_mode);
     status_.fault   = fault;
     status_.stopped = true;
-    status_.wheels  = WheelSpeeds{};
-    status_.command = ChassisCommand{};
+    status_.wheels       = WheelSpeeds{};
+    status_.wheels.count = kinematics_.groups(); // every group targets 0
+    status_.command      = ChassisCommand{};
+    for (double& rpm : status_.motor_rpm) {
+        rpm = 0;
+    }
 }
 
 DriveFault Drive::fail(DriveFault fault) {

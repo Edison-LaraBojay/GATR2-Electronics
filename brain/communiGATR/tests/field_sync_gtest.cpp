@@ -9,7 +9,7 @@
 #include <gtest/gtest.h>
 #include <vector>
 
-#include "common/link_documents.h"
+#include "translaGATR/link_documents.h"
 #include "sim/link_rig.h"
 
 using namespace communigatr;
@@ -19,10 +19,10 @@ namespace
 
 constexpr Seconds kLimit = 5.0;
 
-std::vector<gatr2::BrainRequest> reads(const FakeBus& bus, uint8_t kind) {
-    std::vector<gatr2::BrainRequest> out;
-    for (const gatr2::BrainRequest& r : bus.brainRequests()) {
-        if (r.op == gatr2::kOpReadDoc && r.doc_kind == kind) {
+std::vector<translagatr::BrainRequest> reads(const FakeBus& bus, uint8_t kind) {
+    std::vector<translagatr::BrainRequest> out;
+    for (const translagatr::BrainRequest& r : bus.brainRequests()) {
+        if (r.op == translagatr::kOpReadDoc && r.doc_kind == kind) {
             out.push_back(r);
         }
     }
@@ -37,14 +37,14 @@ void expectConsistent(const FieldPublication& p) {
         return;
     }
     const uint16_t map_len = static_cast<uint16_t>(p.map.size());
-    ASSERT_EQ(gatr2::crc32(p.map.data(), map_len), p.map_id);
-    ASSERT_EQ(gatr2::validateFieldMap(p.map.data(), map_len), gatr2::DocError::kNone);
-    ASSERT_EQ(gatr2::validateFieldEstimate(p.estimate.data(),
+    ASSERT_EQ(translagatr::crc32(p.map.data(), map_len), p.map_id);
+    ASSERT_EQ(translagatr::validateFieldMap(p.map.data(), map_len), translagatr::DocError::kNone);
+    ASSERT_EQ(translagatr::validateFieldEstimate(p.estimate.data(),
                                            static_cast<uint16_t>(p.estimate.size()),
                                            p.map.data(), map_len, p.map_id),
-              gatr2::DocError::kNone);
-    gatr2::FieldEstimateHeader header;
-    ASSERT_TRUE(gatr2::decodeFieldEstimateHeader(
+              translagatr::DocError::kNone);
+    translagatr::FieldEstimateHeader header;
+    ASSERT_TRUE(translagatr::decodeFieldEstimateHeader(
         p.estimate.data(), static_cast<uint16_t>(p.estimate.size()), header));
     EXPECT_EQ(header.estimate_id, p.estimate_id);
 }
@@ -76,11 +76,11 @@ TEST(FieldSync, EveryObjectCountArrivesWholeAndChecked) {
         EXPECT_EQ(client.fieldSync().map_id, rig.pi.mapId());
 
         const std::size_t map_chunks =
-            (gatr2::fieldMapLen(count) + gatr2::kDocChunkMax - 1) / gatr2::kDocChunkMax;
+            (translagatr::fieldMapLen(count) + translagatr::kDocChunkMax - 1) / translagatr::kDocChunkMax;
         const std::size_t est_chunks =
-            (gatr2::fieldEstimateLen(count) + gatr2::kDocChunkMax - 1) / gatr2::kDocChunkMax;
-        EXPECT_EQ(reads(rig.bus, gatr2::kDocFieldMap).size(), map_chunks);
-        EXPECT_EQ(reads(rig.bus, gatr2::kDocFieldEstimate).size(), est_chunks);
+            (translagatr::fieldEstimateLen(count) + translagatr::kDocChunkMax - 1) / translagatr::kDocChunkMax;
+        EXPECT_EQ(reads(rig.bus, translagatr::kDocFieldMap).size(), map_chunks);
+        EXPECT_EQ(reads(rig.bus, translagatr::kDocFieldEstimate).size(), est_chunks);
         EXPECT_EQ(client.stats().doc_rejects, 0u);
         EXPECT_EQ(client.stats().maps, 1u);
         EXPECT_EQ(client.stats().estimates, 1u);
@@ -88,7 +88,7 @@ TEST(FieldSync, EveryObjectCountArrivesWholeAndChecked) {
         // The same generation stays; nothing is read again without a change.
         rig.run(1.0);
         EXPECT_EQ(client.field().generation, p.generation);
-        EXPECT_EQ(reads(rig.bus, gatr2::kDocFieldMap).size(), map_chunks);
+        EXPECT_EQ(reads(rig.bus, translagatr::kDocFieldMap).size(), map_chunks);
     }
 }
 
@@ -97,8 +97,8 @@ TEST(FieldSync, NoFieldOnThePiMeansNoReads) {
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().ready(); }, kLimit));
     rig.run(1.0);
     EXPECT_EQ(rig.client().field().generation, 0u);
-    EXPECT_TRUE(reads(rig.bus, gatr2::kDocFieldMap).empty());
-    EXPECT_TRUE(reads(rig.bus, gatr2::kDocFieldEstimate).empty());
+    EXPECT_TRUE(reads(rig.bus, translagatr::kDocFieldMap).empty());
+    EXPECT_TRUE(reads(rig.bus, translagatr::kDocFieldEstimate).empty());
     investigatr::Field field;
     EXPECT_FALSE(rig.driver().field(field));
 }
@@ -106,22 +106,22 @@ TEST(FieldSync, NoFieldOnThePiMeansNoReads) {
 TEST(FieldSync, InconsistentChunksAreDroppedThenTheTransferRecovers) {
     struct Case {
         const char*                             name;
-        std::function<void(gatr2::BrainReply&)> edit;
+        std::function<void(translagatr::BrainReply&)> edit;
     };
     const std::vector<Case> cases = {
-        {"total_len", [](gatr2::BrainReply& r) { r.doc_total_len += 4; }},
-        {"crc", [](gatr2::BrainReply& r) { r.doc_crc32 ^= 0x10; }},
-        {"doc id", [](gatr2::BrainReply& r) { r.doc_id += 1; }},
-        {"offset", [](gatr2::BrainReply& r) { r.doc_offset += 1; }},
-        {"data", [](gatr2::BrainReply& r) { r.data[5] ^= 0x01; }},
+        {"total_len", [](translagatr::BrainReply& r) { r.doc_total_len += 4; }},
+        {"crc", [](translagatr::BrainReply& r) { r.doc_crc32 ^= 0x10; }},
+        {"doc id", [](translagatr::BrainReply& r) { r.doc_id += 1; }},
+        {"offset", [](translagatr::BrainReply& r) { r.doc_offset += 1; }},
+        {"data", [](translagatr::BrainReply& r) { r.data[5] ^= 0x01; }},
     };
     for (const Case& c : cases) {
         SCOPED_TRACE(c.name);
         LinkRig rig;
         rig.pi.setField(makeFakeField(20));
         int edits      = 0;
-        rig.pi.doc_hook = [&](gatr2::BrainReply& r) {
-            if (r.doc_offset == gatr2::kDocChunkMax && edits < 2) {
+        rig.pi.doc_hook = [&](translagatr::BrainReply& r) {
+            if (r.doc_offset == translagatr::kDocChunkMax && edits < 2) {
                 ++edits; // second chunk, twice
                 c.edit(r);
             }
@@ -145,18 +145,18 @@ TEST(FieldSync, MalformedMapIsNeverPublishedAndBacksOff) {
     LinkRig rig(config);
     // Header says 5 objects, the document holds 4 records.
     const FakeField      field = makeFakeField(5);
-    std::vector<uint8_t> doc(gatr2::fieldMapLen(5));
-    gatr2::FieldMapHeader header;
+    std::vector<uint8_t> doc(translagatr::fieldMapLen(5));
+    translagatr::FieldMapHeader header;
     header.revision     = 1;
     header.object_count = 5;
     header.max_x_mm     = 3658;
     header.max_y_mm     = 3658;
     const uint16_t cap  = static_cast<uint16_t>(doc.size());
-    gatr2::encodeFieldMapHeader(header, doc.data(), cap);
+    translagatr::encodeFieldMapHeader(header, doc.data(), cap);
     for (uint16_t i = 0; i < 5; ++i) {
-        gatr2::encodeFieldObjectRecord(field.objects[i], i, doc.data(), cap);
+        translagatr::encodeFieldObjectRecord(field.objects[i], i, doc.data(), cap);
     }
-    doc.resize(doc.size() - gatr2::kFieldMapRecordLen);
+    doc.resize(doc.size() - translagatr::kFieldMapRecordLen);
     rig.pi.setMapDocument(doc);
 
     rig.run(2.5);
@@ -165,9 +165,9 @@ TEST(FieldSync, MalformedMapIsNeverPublishedAndBacksOff) {
     EXPECT_EQ(client.fieldSync().map_id, 0u);
     EXPECT_GE(client.stats().doc_rejects, 3u);
     // Three failures, a pause, three more: bounded, not a storm.
-    const std::size_t map_reads = reads(rig.bus, gatr2::kDocFieldMap).size();
+    const std::size_t map_reads = reads(rig.bus, translagatr::kDocFieldMap).size();
     EXPECT_LE(map_reads, 3u * 2u * 3u);
-    EXPECT_TRUE(reads(rig.bus, gatr2::kDocFieldEstimate).empty());
+    EXPECT_TRUE(reads(rig.bus, translagatr::kDocFieldEstimate).empty());
 }
 
 TEST(FieldSync, EstimateForAnotherMapOrWithAnotherCountIsRejected) {
@@ -183,7 +183,7 @@ TEST(FieldSync, EstimateForAnotherMapOrWithAnotherCountIsRejected) {
     EXPECT_GE(rig.client().stats().doc_rejects, 1u);
 
     rig.pi.setEstimateMapId(0);
-    std::vector<gatr2::FieldEstimateRecord> records = rig.pi.nominalRecords();
+    std::vector<translagatr::FieldEstimateRecord> records = rig.pi.nominalRecords();
     records.pop_back(); // count no longer the map's
     rig.pi.publishEstimate(records);
     rig.run(1.5);
@@ -223,8 +223,8 @@ TEST(FieldSync, StaleThreeTimesInARowBacksOff) {
     ASSERT_TRUE(published(rig));
     // Every chunk served is followed by three replacements: the next chunk
     // of that estimate is always Stale.
-    rig.pi.doc_hook = [&](gatr2::BrainReply& r) {
-        if (r.doc_kind == gatr2::kDocFieldEstimate) {
+    rig.pi.doc_hook = [&](translagatr::BrainReply& r) {
+        if (r.doc_kind == translagatr::kDocFieldEstimate) {
             rig.pi.publishNominalEstimate();
             rig.pi.publishNominalEstimate();
             rig.pi.publishNominalEstimate();
@@ -232,9 +232,9 @@ TEST(FieldSync, StaleThreeTimesInARowBacksOff) {
     };
     rig.pi.publishNominalEstimate();
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().stats().doc_stale == 3; }, kLimit));
-    const std::size_t reads_then = reads(rig.bus, gatr2::kDocFieldEstimate).size();
+    const std::size_t reads_then = reads(rig.bus, translagatr::kDocFieldEstimate).size();
     rig.run(0.9);
-    EXPECT_EQ(reads(rig.bus, gatr2::kDocFieldEstimate).size(), reads_then);
+    EXPECT_EQ(reads(rig.bus, translagatr::kDocFieldEstimate).size(), reads_then);
     rig.pi.doc_hook = nullptr;
     const uint32_t newest = rig.pi.publishNominalEstimate();
     ASSERT_TRUE(rig.runUntil(
@@ -265,12 +265,12 @@ TEST(FieldSync, MapCacheSurvivesSessionsAndPiRestarts) {
     LinkRig rig;
     rig.pi.setField(makeFakeField(30));
     ASSERT_TRUE(published(rig));
-    const std::size_t map_reads = reads(rig.bus, gatr2::kDocFieldMap).size();
+    const std::size_t map_reads = reads(rig.bus, translagatr::kDocFieldMap).size();
     const uint32_t    gen       = rig.client().field().generation;
 
     rig.rebootBrain(); // a new Brain boot starts empty
     ASSERT_TRUE(published(rig));
-    const std::size_t after_boot = reads(rig.bus, gatr2::kDocFieldMap).size();
+    const std::size_t after_boot = reads(rig.bus, translagatr::kDocFieldMap).size();
     EXPECT_EQ(after_boot, 2 * map_reads);
 
     rig.pi.restart(0xABCD0001); // same map, new instance: only a new estimate
@@ -278,7 +278,7 @@ TEST(FieldSync, MapCacheSurvivesSessionsAndPiRestarts) {
     const uint32_t gen_before = rig.client().field().generation;
     ASSERT_TRUE(rig.runUntil(
         [&] { return rig.client().field().generation != gen_before; }, kLimit));
-    EXPECT_EQ(reads(rig.bus, gatr2::kDocFieldMap).size(), after_boot);
+    EXPECT_EQ(reads(rig.bus, translagatr::kDocFieldMap).size(), after_boot);
     EXPECT_EQ(rig.client().field().pi_instance, 0xABCD0001u);
     EXPECT_EQ(rig.client().field().estimate_id, 1u);
     expectConsistent(rig.client().field());
@@ -310,7 +310,7 @@ TEST(FieldSync, InterruptedTransfersRestartInTheNewSession) {
     LinkRig rig;
     rig.pi.setField(makeFakeField(100));
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.client().fieldSync().map_received >= 3 * gatr2::kDocChunkMax; },
+        [&] { return rig.client().fieldSync().map_received >= 3 * translagatr::kDocChunkMax; },
         kLimit));
     rig.pi.restart(0x77770001); // mid map
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().stats().pi_restarts == 1; }, kLimit));
@@ -330,13 +330,13 @@ TEST(FieldSync, UnavailableWaitsAFieldPeriod) {
     rig.pi.setField(makeFakeField(3));
     ASSERT_TRUE(published(rig));
     // The Pi drops its estimates but still names one in the state block.
-    rig.pi.doc_hook = [](gatr2::BrainReply& r) {
-        if (r.doc_kind == gatr2::kDocFieldEstimate) {
-            r.result = gatr2::kResultUnavailable;
+    rig.pi.doc_hook = [](translagatr::BrainReply& r) {
+        if (r.doc_kind == translagatr::kDocFieldEstimate) {
+            r.result = translagatr::kResultUnavailable;
         }
     };
     rig.pi.publishNominalEstimate();
     rig.run(1.0);
-    const std::size_t n = reads(rig.bus, gatr2::kDocFieldEstimate).size();
+    const std::size_t n = reads(rig.bus, translagatr::kDocFieldEstimate).size();
     EXPECT_LE(n, 1u + 3u); // one plus at most one per field_period
 }

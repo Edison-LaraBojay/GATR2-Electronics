@@ -161,7 +161,7 @@ field documents.
 
 `Field` names a `field_map` resource; `estimate_period_ms` defaults to 200 and
 must be positive. Without a `Field`, `map_id` and `estimate_id` are 0 and
-READ_DOC answers `Unavailable`. The layouts are in `common/link_documents.h`;
+READ_DOC answers `Unavailable`. The layouts are in `translaGATR/link_documents.h`;
 the builder is [field_documents](../src/impl/publishing/field_documents.h).
 
 **Map document** (READ_DOC kind 1). It is built once, when the publisher is

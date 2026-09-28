@@ -1,5 +1,5 @@
 // field_documents.h
-// The brain link field documents (common/link_documents.h) of one field
+// The brain link field documents (translaGATR/link_documents.h) of one field
 // definition: the map, built once, and the estimate snapshots taken in the
 // reporting cycle and retained for chunked READ_DOC. Wire units are owned
 // here: positions round to the nearest mm and headings to the centidegree;
@@ -12,8 +12,8 @@
 #include <string>
 #include <vector>
 
-#include "common/frames.h"
-#include "common/link_documents.h"
+#include "translaGATR/frames.h"
+#include "translaGATR/link_documents.h"
 #include "config/field_map.h"
 #include "core/time.h"
 #include "state/field_state.h"
@@ -26,7 +26,7 @@ struct FieldMapDocument {
     struct Object {
         std::string              name;   // Landmark or Obstacle id in the definition
         bool                     landmark = false;
-        gatr2::FieldObjectRecord record;
+        translagatr::FieldObjectRecord record;
     };
 
     std::vector<uint8_t> bytes;
@@ -50,7 +50,7 @@ bool buildFieldMapDocument(const FieldMap& map, FieldMapDocument& out, std::stri
 // is composed with the current anchor and its age is now minus the newest
 // observation. Every other record is nominal and valid with age 0, which is
 // every record when world estimation is noop.
-std::vector<gatr2::FieldEstimateRecord> fieldEstimateRecords(const FieldMapDocument& map,
+std::vector<translagatr::FieldEstimateRecord> fieldEstimateRecords(const FieldMapDocument& map,
                                                             const FieldState& field,
                                                             const RobotState& robot,
                                                             MonotonicTime     now);
@@ -85,7 +85,7 @@ public:
     // retained, Unavailable before the first estimate, InvalidArgument for
     // an unknown kind, max_len 0, or offset at or past the end.
     uint8_t read(uint8_t kind, uint32_t doc_id, uint16_t offset, uint8_t max_len,
-                 gatr2::BrainReply& reply) const;
+                 translagatr::BrainReply& reply) const;
 
     // Drops the estimates. Ids keep counting, so none is reused.
     void reset();
@@ -102,7 +102,7 @@ private:
     std::deque<Estimate>                    estimates_;   // oldest first
     uint32_t                                last_id_ = 0;
     MonotonicTime                           taken_at_;
-    std::vector<gatr2::FieldEstimateRecord> content_;   // records of the newest
+    std::vector<translagatr::FieldEstimateRecord> content_;   // records of the newest
     uint32_t                                content_epoch_  = 0;
     uint32_t                                content_anchor_ = 0;
 };

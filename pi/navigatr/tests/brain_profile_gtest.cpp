@@ -20,10 +20,11 @@
 #include <thread>
 #include <vector>
 
-#include "common/frame_codec.h"
-#include "common/link_documents.h"
+#include "translaGATR/frame_codec.h"
+#include "translaGATR/link_documents.h"
 #include "config/composition.h"
 #include "core/host_clock.h"
+#include "impl/resources/cameras.h"
 #include "impl/resources/pros_usb_link.h"
 #include "impl/resources/serial_links.h"
 #include "inspection/inspection_document.h"
@@ -47,8 +48,8 @@ constexpr int64_t kCycleMs        = 20;
 
 // ---- profiles --------------------------------------------------------------
 
-gatr2::ProfileWheel wheel(uint8_t port, int32_t x_um, int32_t y_um, int32_t angle_mdeg) {
-    gatr2::ProfileWheel w;
+translagatr::ProfileWheel wheel(uint8_t port, int32_t x_um, int32_t y_um, int32_t angle_mdeg) {
+    translagatr::ProfileWheel w;
     w.encoder_port   = port;
     w.counts_per_rev = kCpr;
     w.radius_um      = 24000;
@@ -58,11 +59,11 @@ gatr2::ProfileWheel wheel(uint8_t port, int32_t x_um, int32_t y_um, int32_t angl
     return w;
 }
 
-gatr2::RobotProfileDoc baseProfile(uint8_t topology, uint8_t imu_source) {
-    gatr2::RobotProfileDoc p;
+translagatr::RobotProfileDoc baseProfile(uint8_t topology, uint8_t imu_source) {
+    translagatr::RobotProfileDoc p;
     p.topology           = topology;
     p.imu_source         = imu_source;
-    p.vex_smart_port     = imu_source == gatr2::kImuSourceBrainVex ? 1 : 0;
+    p.vex_smart_port     = imu_source == translagatr::kImuSourceBrainVex ? 1 : 0;
     p.footprint_front_um = 200000;
     p.footprint_back_um  = 200000;
     p.footprint_left_um  = 200000;
@@ -72,8 +73,8 @@ gatr2::RobotProfileDoc baseProfile(uint8_t topology, uint8_t imu_source) {
 }
 
 // Forward wheel on port 0 at (0, 0.15), sideways wheel on port 1 at (0.10, 0).
-gatr2::RobotProfileDoc perpendicular(uint8_t imu_source) {
-    gatr2::RobotProfileDoc p = baseProfile(gatr2::kTopologyTwoWheelImu, imu_source);
+translagatr::RobotProfileDoc perpendicular(uint8_t imu_source) {
+    translagatr::RobotProfileDoc p = baseProfile(translagatr::kTopologyTwoWheelImu, imu_source);
     p.wheel_count            = 2;
     p.wheels[0]              = wheel(0, 0, 150000, 0);
     p.wheels[1]              = wheel(1, 100000, 0, 90000);
@@ -81,16 +82,16 @@ gatr2::RobotProfileDoc perpendicular(uint8_t imu_source) {
 }
 
 // Two forward-measuring wheels; the right one is mounted to measure backward.
-gatr2::RobotProfileDoc twoForward(uint8_t imu_source) {
-    gatr2::RobotProfileDoc p = baseProfile(gatr2::kTopologyTwoForwardWheelImu, imu_source);
+translagatr::RobotProfileDoc twoForward(uint8_t imu_source) {
+    translagatr::RobotProfileDoc p = baseProfile(translagatr::kTopologyTwoForwardWheelImu, imu_source);
     p.wheel_count            = 2;
     p.wheels[0]              = wheel(0, 0, 150000, 0);
     p.wheels[1]              = wheel(1, 0, -150000, 180000);
     return p;
 }
 
-gatr2::RobotProfileDoc threeWheel(uint8_t imu_source) {
-    gatr2::RobotProfileDoc p = baseProfile(gatr2::kTopologyThreeWheel, imu_source);
+translagatr::RobotProfileDoc threeWheel(uint8_t imu_source) {
+    translagatr::RobotProfileDoc p = baseProfile(translagatr::kTopologyThreeWheel, imu_source);
     p.wheel_count            = 3;
     p.wheels[0]              = wheel(0, 0, 130000, 0);
     p.wheels[1]              = wheel(1, 0, -130000, 0);
@@ -98,19 +99,19 @@ gatr2::RobotProfileDoc threeWheel(uint8_t imu_source) {
     return p;
 }
 
-std::vector<uint8_t> bytesOf(const gatr2::RobotProfileDoc& p) {
-    std::vector<uint8_t> bytes(gatr2::kProfileMaxLen);
-    bytes.resize(gatr2::encodeRobotProfile(p, bytes.data(), gatr2::kProfileMaxLen));
+std::vector<uint8_t> bytesOf(const translagatr::RobotProfileDoc& p) {
+    std::vector<uint8_t> bytes(translagatr::kProfileMaxLen);
+    bytes.resize(translagatr::encodeRobotProfile(p, bytes.data(), translagatr::kProfileMaxLen));
     EXPECT_FALSE(bytes.empty());
     return bytes;
 }
 
 uint32_t idOf(const std::vector<uint8_t>& doc) {
-    return gatr2::crc32(doc.data(), static_cast<uint32_t>(doc.size()));
+    return translagatr::crc32(doc.data(), static_cast<uint32_t>(doc.size()));
 }
 
 // Lever arm k = x uy - y ux of a profile wheel, meters.
-double leverArm(const gatr2::ProfileWheel& w) {
+double leverArm(const translagatr::ProfileWheel& w) {
     const double a = w.angle_mdeg * kPi / 180000.0;
     return w.x_um * 1e-6 * std::sin(a) - w.y_um * 1e-6 * std::cos(a);
 }
@@ -195,7 +196,7 @@ struct FakePico : PicoControl {
         return none;
     }
 
-    void settle(uint8_t op, PicoRequestState s, uint8_t detail = gatr2::kControlDetailNone) {
+    void settle(uint8_t op, PicoRequestState s, uint8_t detail = translagatr::kControlDetailNone) {
         requests[last(op).handle] = PicoRequestStatus{s, detail};
     }
 };
@@ -237,6 +238,37 @@ struct PullableLink : SerialLink {
 // ---- rig -------------------------------------------------------------------
 
 // The Pi built from a checked-in Brain-profile config with the Pico UART and
+// A camera for the preview configuration. Dead: the device never opened,
+// as libcamera_camera reports a missing or failed camera. Live: a 16x12 Y8
+// frame at every poll, stamped with the host clock.
+class TestCamera : public CameraDevice
+{
+public:
+    explicit TestCamera(bool live) : live_(live) {}
+    bool        alive() const override { return live_; }
+    std::string diagnostic() const override { return live_ ? "" : "camera not connected"; }
+    const CameraIntrinsics* intrinsics() const override { return nullptr; }
+    FrameId engineeringFrame() const override { return FrameId{}; }
+    std::optional<CameraFrameData> latestFrame(uint64_t, uint32_t) override {
+        if (!live_) {
+            return std::nullopt;
+        }
+        CameraFrameData f;
+        f.sequence   = ++sequence_;
+        f.epoch      = 1;
+        f.exposureAt = HostClock::now();
+        f.receivedAt = f.exposureAt;
+        f.width_px   = 16;
+        f.height_px  = 12;
+        f.y8         = std::make_shared<const std::vector<uint8_t>>(16 * 12, uint8_t{128});
+        return f;
+    }
+
+private:
+    bool     live_;
+    uint32_t sequence_ = 0;
+};
+
 // the Brain link device replaced by memory links. brain_profile_usb.xml: the
 // Brain side speaks NG1 through its own ProsUsbLink, exactly as the Brain app
 // does. brain_profile_rs485.xml: raw frames, as on the Smart Port.
@@ -289,7 +321,19 @@ struct Rig {
             [pico_control](const ConfigNode&, ResourceInitializationContext&, std::string&) {
                 return ResourceInstance::asContract<PicoControl>(pico_control);
             }));
-        const bool usb = config_name == "brain_profile_usb.xml";
+        // cameras for the preview configuration: one that never opened, one
+        // that streams small Y8 frames
+        EXPECT_TRUE(functions.add<ResourceMakeFunction>(
+            FunctionKey{"test_dead_camera"},
+            [](const ConfigNode&, ResourceInitializationContext&, std::string&) {
+                return cameraResource(std::make_shared<TestCamera>(false), OutputId{"frame"});
+            }));
+        EXPECT_TRUE(functions.add<ResourceMakeFunction>(
+            FunctionKey{"test_live_camera"},
+            [](const ConfigNode&, ResourceInitializationContext&, std::string&) {
+                return cameraResource(std::make_shared<TestCamera>(true), OutputId{"frame"});
+            }));
+        const bool usb = config_name.find("_usb") != std::string::npos;
         if (usb) {
             brain = std::make_shared<ProsUsbLink>(brain_raw);
         } else {
@@ -344,32 +388,32 @@ struct Rig {
     }
 
     void picoFrame() {
-        gatr2::SensorSample f{};
+        translagatr::SensorSample f{};
         f.seq      = seq++;
         f.stamp_ms = static_cast<uint32_t>(now - pico_zero);
-        f.mask     = (gatr2::kSensorEnc0 | gatr2::kSensorEnc1 | gatr2::kSensorEnc2) & ~mask_drop;
+        f.mask     = (translagatr::kSensorEnc0 | translagatr::kSensorEnc1 | translagatr::kSensorEnc2) & ~mask_drop;
         for (int i = 0; i < 3; ++i) {
             f.enc[i] = static_cast<int32_t>(std::llround(counts[i]));
         }
         if (send_gyro) {
-            f.mask |= gatr2::kSensorGyroZ;
+            f.mask |= translagatr::kSensorGyroZ;
             f.gyro_z = static_cast<int32_t>(std::llround(gyro_sign * (bias_mdps + rate_mdps)));
         }
-        std::vector<uint8_t> bytes(gatr2::kMaxFrameLen);
-        bytes.resize(gatr2::encodeSensorFrame(f, bytes.data(), gatr2::kMaxFrameLen));
+        std::vector<uint8_t> bytes(translagatr::kMaxFrameLen);
+        bytes.resize(translagatr::encodeSensorFrame(f, bytes.data(), translagatr::kMaxFrameLen));
         EXPECT_FALSE(bytes.empty());
         pico->input().feed(bytes);
     }
 
-    std::vector<gatr2::BrainReply> exchange(const gatr2::BrainRequest& r) {
+    std::vector<translagatr::BrainReply> exchange(const translagatr::BrainRequest& r) {
         send(r);
         step();
         return replies();
     }
 
-    void send(const gatr2::BrainRequest& r) {
-        std::array<uint8_t, gatr2::kMaxFrameLen> bytes{};
-        const uint16_t len = gatr2::encodeBrainRequest(r, bytes.data(), bytes.size());
+    void send(const translagatr::BrainRequest& r) {
+        std::array<uint8_t, translagatr::kMaxFrameLen> bytes{};
+        const uint16_t len = translagatr::encodeBrainRequest(r, bytes.data(), bytes.size());
         EXPECT_GT(len, 0);
         EXPECT_TRUE(brain->write({bytes.data(), len}).ok);
         pi_raw->input().feed(brain_raw->output().takeAll());
@@ -379,7 +423,7 @@ struct Rig {
     // whose clock stands still meanwhile so the reply window holds. They run
     // on the real host clock, and nothing but commands flows meanwhile. No
     // profile boundary runs unless the test asks for one.
-    std::vector<gatr2::BrainReply> exchangeWithWorkers(const gatr2::BrainRequest& r) {
+    std::vector<translagatr::BrainReply> exchangeWithWorkers(const translagatr::BrainRequest& r) {
         send(r);
         std::string err;
         EXPECT_TRUE(system->start(err)) << err;
@@ -389,10 +433,10 @@ struct Rig {
         return replies();
     }
 
-    std::vector<gatr2::BrainReply> replies() {
+    std::vector<translagatr::BrainReply> replies() {
         brain_raw->input().feed(pi_raw->output().takeAll());
-        std::vector<gatr2::BrainReply> replies;
-        gatr2::FrameReader             reader;
+        std::vector<translagatr::BrainReply> replies;
+        translagatr::FrameReader             reader;
         for (;;) {
             std::array<uint8_t, 256> in{};
             const SerialReadResult   read = brain->readAvailable({in.data(), in.size()});
@@ -404,8 +448,8 @@ struct Rig {
                     continue;
                 }
                 do {
-                    gatr2::BrainReply reply;
-                    EXPECT_TRUE(gatr2::decodeBrainReply(reader.frame(), reader.frameLen(), reply));
+                    translagatr::BrainReply reply;
+                    EXPECT_TRUE(translagatr::decodeBrainReply(reader.frame(), reader.frameLen(), reply));
                     replies.push_back(reply);
                 } while (reader.next());
             }
@@ -413,14 +457,14 @@ struct Rig {
         return replies;
     }
 
-    gatr2::BrainReply one(const gatr2::BrainRequest& r) {
-        const std::vector<gatr2::BrainReply> replies = exchange(r);
+    translagatr::BrainReply one(const translagatr::BrainRequest& r) {
+        const std::vector<translagatr::BrainReply> replies = exchange(r);
         EXPECT_EQ(replies.size(), 1u) << "op " << int(r.op);
-        return replies.empty() ? gatr2::BrainReply{} : replies.front();
+        return replies.empty() ? translagatr::BrainReply{} : replies.front();
     }
 
-    gatr2::BrainRequest request(uint8_t op) {
-        gatr2::BrainRequest r;
+    translagatr::BrainRequest request(uint8_t op) {
+        translagatr::BrainRequest r;
         r.op         = op;
         r.session    = session;
         r.request_id = rid++;
@@ -428,28 +472,28 @@ struct Rig {
     }
 
     uint32_t hello(uint32_t nonce = 0x5EED0001) {
-        gatr2::BrainRequest r = request(gatr2::kOpHello);
+        translagatr::BrainRequest r = request(translagatr::kOpHello);
         r.session             = 0;
         r.nonce               = nonce;
-        const gatr2::BrainReply reply = one(r);
-        EXPECT_EQ(reply.result, gatr2::kResultOk);
+        const translagatr::BrainReply reply = one(r);
+        EXPECT_EQ(reply.result, translagatr::kResultOk);
         session = reply.session;
         return session;
     }
 
     // One pipeline cycle: a Pico frame and a state poll carrying the Brain
     // VEX IMU sample, as the Brain app sends it.
-    gatr2::BrainReply cycle() {
+    translagatr::BrainReply cycle() {
         picoFrame();
-        gatr2::BrainRequest r = request(gatr2::kOpGetState);
-        r.imu_flags           = vex_valid ? gatr2::kBenchImuValid : 0;
+        translagatr::BrainRequest r = request(translagatr::kOpGetState);
+        r.imu_flags           = vex_valid ? translagatr::kBenchImuValid : 0;
         r.imu_stamp_ms        = static_cast<uint32_t>(now);
         r.imu_rotation_mdeg   = static_cast<int32_t>(std::llround(theta_mdeg));
         return one(r);
     }
 
-    gatr2::BrainState still(int cycles) {
-        gatr2::BrainReply last;
+    translagatr::BrainState still(int cycles) {
+        translagatr::BrainReply last;
         for (int i = 0; i < cycles; ++i) {
             last = cycle();
         }
@@ -457,8 +501,8 @@ struct Rig {
     }
 
     // Raw count deltas per port spread evenly over the cycles, no rotation.
-    gatr2::BrainState translate(std::array<double, 3> delta, int cycles) {
-        gatr2::BrainReply last;
+    translagatr::BrainState translate(std::array<double, 3> delta, int cycles) {
+        translagatr::BrainReply last;
         for (int c = 0; c < cycles; ++c) {
             for (int i = 0; i < 3; ++i) {
                 counts[i] += delta[i] / cycles;
@@ -472,9 +516,9 @@ struct Rig {
     // counts_per_rad per port make each wheel follow the rotation the Pi
     // integrates from the gyro (trapezoid between frames), so the lever arms
     // see exactly that rotation.
-    gatr2::BrainState turn(double turn_mdps, int cycles, std::array<double, 3> counts_per_rad,
+    translagatr::BrainState turn(double turn_mdps, int cycles, std::array<double, 3> counts_per_rad,
                            double wheel_gain = 1.0) {
-        gatr2::BrainReply last;
+        translagatr::BrainReply last;
         for (int c = 0; c <= cycles; ++c) {
             const double prev = rate_mdps;
             rate_mdps         = c < cycles ? turn_mdps : 0.0;
@@ -490,8 +534,8 @@ struct Rig {
     }
 
     // Stage in chunks of at most chunk bytes, then APPLY; the APPLY reply.
-    gatr2::BrainReply stageAndApply(const std::vector<uint8_t>& doc,
-                                    uint16_t chunk = gatr2::kProfileChunkMax) {
+    translagatr::BrainReply stageAndApply(const std::vector<uint8_t>& doc,
+                                    uint16_t chunk = translagatr::kProfileChunkMax) {
         stage(doc, 0, static_cast<uint16_t>(doc.size()), chunk);
         return apply(doc);
     }
@@ -499,30 +543,30 @@ struct Rig {
     void stage(const std::vector<uint8_t>& doc, uint16_t from, uint16_t to, uint16_t chunk) {
         for (uint16_t offset = from; offset < to; offset = static_cast<uint16_t>(offset + chunk)) {
             const uint16_t      n = static_cast<uint16_t>(std::min<int>(chunk, to - offset));
-            gatr2::BrainRequest r = request(gatr2::kOpProfileWrite);
+            translagatr::BrainRequest r = request(translagatr::kOpProfileWrite);
             r.profile_id          = idOf(doc);
             r.total_len           = static_cast<uint16_t>(doc.size());
             r.offset              = offset;
             r.data_len            = static_cast<uint8_t>(n);
             std::memcpy(r.data, doc.data() + offset, n);
-            const gatr2::BrainReply reply = one(r);
-            EXPECT_EQ(reply.result, gatr2::kResultOk);
+            const translagatr::BrainReply reply = one(r);
+            EXPECT_EQ(reply.result, translagatr::kResultOk);
         }
     }
 
-    gatr2::BrainReply apply(const std::vector<uint8_t>& doc) { return one(applyRequest(doc)); }
+    translagatr::BrainReply apply(const std::vector<uint8_t>& doc) { return one(applyRequest(doc)); }
 
-    gatr2::BrainRequest applyRequest(const std::vector<uint8_t>& doc) {
-        gatr2::BrainRequest r = request(gatr2::kOpProfileApply);
+    translagatr::BrainRequest applyRequest(const std::vector<uint8_t>& doc) {
+        translagatr::BrainRequest r = request(translagatr::kOpProfileApply);
         r.profile_id          = idOf(doc);
         r.total_len           = static_cast<uint16_t>(doc.size());
         return r;
     }
 
     // One chunk holding the whole document.
-    gatr2::BrainRequest writeRequest(const std::vector<uint8_t>& doc) {
-        EXPECT_LE(doc.size(), static_cast<std::size_t>(gatr2::kProfileChunkMax));
-        gatr2::BrainRequest r = request(gatr2::kOpProfileWrite);
+    translagatr::BrainRequest writeRequest(const std::vector<uint8_t>& doc) {
+        EXPECT_LE(doc.size(), static_cast<std::size_t>(translagatr::kProfileChunkMax));
+        translagatr::BrainRequest r = request(translagatr::kOpProfileWrite);
         r.profile_id          = idOf(doc);
         r.total_len           = static_cast<uint16_t>(doc.size());
         r.data_len            = static_cast<uint8_t>(doc.size());
@@ -532,32 +576,32 @@ struct Rig {
 
     // The whole exchange a Brain runs: stage, APPLY (Pending), one cycle for
     // the boundary, APPLY again (Ok).
-    bool applyProfile(const gatr2::RobotProfileDoc& p) {
+    bool applyProfile(const translagatr::RobotProfileDoc& p) {
         const std::vector<uint8_t> doc     = bytesOf(p);
-        const gatr2::BrainReply    pending = stageAndApply(doc);
-        EXPECT_EQ(pending.result, gatr2::kResultPending);
-        if (pending.result != gatr2::kResultPending) {
+        const translagatr::BrainReply    pending = stageAndApply(doc);
+        EXPECT_EQ(pending.result, translagatr::kResultPending);
+        if (pending.result != translagatr::kResultPending) {
             return false;
         }
         cycle();
-        const gatr2::BrainReply done = apply(doc);
-        EXPECT_EQ(done.result, gatr2::kResultOk);
-        EXPECT_EQ(done.profile_state, gatr2::kProfileApplied);
-        return done.result == gatr2::kResultOk;
+        const translagatr::BrainReply done = apply(doc);
+        EXPECT_EQ(done.result, translagatr::kResultOk);
+        EXPECT_EQ(done.profile_state, translagatr::kProfileApplied);
+        return done.result == translagatr::kResultOk;
     }
 
-    gatr2::BrainReply place(int32_t x_mm, int32_t y_mm, int32_t heading_cdeg) {
+    translagatr::BrainReply place(int32_t x_mm, int32_t y_mm, int32_t heading_cdeg) {
         picoFrame();
-        gatr2::BrainRequest r = request(gatr2::kOpSetPose);
+        translagatr::BrainRequest r = request(translagatr::kOpSetPose);
         r.x_mm                = x_mm;
         r.y_mm                = y_mm;
         r.heading_cdeg        = heading_cdeg;
         return one(r);
     }
 
-    gatr2::BrainReply control(uint8_t action) {
+    translagatr::BrainReply control(uint8_t action) {
         picoFrame();
-        gatr2::BrainRequest r = request(gatr2::kOpControl);
+        translagatr::BrainRequest r = request(translagatr::kOpControl);
         r.action              = action;
         return one(r);
     }
@@ -566,20 +610,20 @@ struct Rig {
 };
 
 // Applies a profile, places the robot at (1, 0.5, 0) and lets it settle.
-void ready(Rig& r, const gatr2::RobotProfileDoc& p, int settle = 40) {
+void ready(Rig& r, const translagatr::RobotProfileDoc& p, int settle = 40) {
     ASSERT_TRUE(r.ok()) << r.build_error;
     r.hello();
     r.still(3);
     ASSERT_TRUE(r.applyProfile(p));
     r.still(settle);   // baselines, and a Pico gyro calibrates here
-    const gatr2::BrainReply placed = r.place(1000, 500, 0);
-    ASSERT_EQ(placed.result, gatr2::kResultOk);
+    const translagatr::BrainReply placed = r.place(1000, 500, 0);
+    ASSERT_EQ(placed.result, translagatr::kResultOk);
     r.still(3);
     ASSERT_NEAR(r.pose().x_m, 1.0, 1e-9);
     ASSERT_NEAR(r.pose().y_m, 0.5, 1e-9);
 }
 
-std::array<double, 3> countsPerRad(const gatr2::RobotProfileDoc& p) {
+std::array<double, 3> countsPerRad(const translagatr::RobotProfileDoc& p) {
     std::array<double, 3> out{};
     for (uint8_t i = 0; i < p.wheel_count; ++i) {
         out[p.wheels[i].encoder_port] = leverArm(p.wheels[i]) / kMetersPerCount;
@@ -591,7 +635,7 @@ std::array<double, 3> countsPerRad(const gatr2::RobotProfileDoc& p) {
 // lever arm: forward travel moves only x, sideways only y, the turn neither.
 void perpendicularWheelsMeasureEachAxisOnce(uint8_t imu_source) {
     Rig                          r;
-    const gatr2::RobotProfileDoc p = perpendicular(imu_source);
+    const translagatr::RobotProfileDoc p = perpendicular(imu_source);
     ready(r, p);
 
     r.translate({kCpr, 0, 0}, 10);
@@ -629,16 +673,16 @@ TEST(BrainProfile, WaitsWithAcquisitionCommandsAndInspectionAlive) {
     Rig r;
     ASSERT_TRUE(r.ok()) << r.build_error;
     r.hello();
-    const gatr2::BrainState s = r.still(5);
-    EXPECT_EQ(s.profile_state, gatr2::kProfileNone);
-    EXPECT_EQ(s.robot_flags & gatr2::kRobotPoseValid, 0);
-    EXPECT_EQ(s.health & gatr2::kHealthEncodersFresh, 0);   // no profile encoders yet
-    EXPECT_EQ(s.calibration, gatr2::kCalibrationNone);
+    const translagatr::BrainState s = r.still(5);
+    EXPECT_EQ(s.profile_state, translagatr::kProfileNone);
+    EXPECT_EQ(s.robot_flags & translagatr::kRobotPoseValid, 0);
+    EXPECT_EQ(s.health & translagatr::kHealthEncodersFresh, 0);   // no profile encoders yet
+    EXPECT_EQ(s.calibration, translagatr::kCalibrationNone);
     EXPECT_NE(s.map_id, 0u);   // the field is served while waiting
     EXPECT_EQ(r.system->localization().estimatorType(), "noop");
 
-    EXPECT_EQ(r.place(1000, 500, 0).result, gatr2::kResultNotReady);
-    EXPECT_EQ(r.control(gatr2::kControlRecalibrate).result, gatr2::kResultNotReady);
+    EXPECT_EQ(r.place(1000, 500, 0).result, translagatr::kResultNotReady);
+    EXPECT_EQ(r.control(translagatr::kControlRecalibrate).result, translagatr::kResultNotReady);
 
     // raw acquisition stays visible
     const auto health = r.system->sourceHealth();
@@ -661,18 +705,18 @@ TEST(BrainProfile, WaitsWithAcquisitionCommandsAndInspectionAlive) {
 // ---- topologies ------------------------------------------------------------
 
 TEST(BrainProfile, PerpendicularWheelsWithTheBrainVexImu) {
-    perpendicularWheelsMeasureEachAxisOnce(gatr2::kImuSourceBrainVex);
+    perpendicularWheelsMeasureEachAxisOnce(translagatr::kImuSourceBrainVex);
 }
 
 TEST(BrainProfile, PerpendicularWheelsWithThePicoGyro) {
-    perpendicularWheelsMeasureEachAxisOnce(gatr2::kImuSourcePico);
+    perpendicularWheelsMeasureEachAxisOnce(translagatr::kImuSourcePico);
 }
 
 TEST(BrainProfile, PicoImuInversionAppliesOnce) {
     Rig r;
     r.gyro_sign              = -1.0;   // the chip reports CW positive
-    gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourcePico);
-    p.imu_flags              = gatr2::kImuInvert;
+    translagatr::RobotProfileDoc p = perpendicular(translagatr::kImuSourcePico);
+    p.imu_flags              = translagatr::kImuInvert;
     ready(r, p);
     const Pose2D before = r.pose();
     r.turn(25000.0, 20, countsPerRad(p));   // 10 degrees CCW
@@ -685,27 +729,27 @@ TEST(BrainProfile, PicoImuInversionAppliesOnce) {
 TEST(BrainProfile, VexProfileIsReadyWithNoPicoImuFramesAtAll) {
     Rig r;
     r.send_gyro = false;   // an absent or broken BNO08X: encoder frames only
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    const gatr2::BrainState s = r.translate({kCpr, 0, 0}, 10);
-    EXPECT_EQ(s.profile_state, gatr2::kProfileApplied);
-    EXPECT_NE(s.robot_flags & gatr2::kRobotPoseValid, 0);
-    EXPECT_NE(s.robot_flags & gatr2::kRobotLocalized, 0);
-    EXPECT_NE(s.health & gatr2::kHealthEncodersFresh, 0);
-    EXPECT_NE(s.health & gatr2::kHealthGyroFresh, 0);   // the Brain bench sample
-    EXPECT_EQ(s.calibration, gatr2::kCalibrationNone);  // VEX firmware owns its calibration
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    const translagatr::BrainState s = r.translate({kCpr, 0, 0}, 10);
+    EXPECT_EQ(s.profile_state, translagatr::kProfileApplied);
+    EXPECT_NE(s.robot_flags & translagatr::kRobotPoseValid, 0);
+    EXPECT_NE(s.robot_flags & translagatr::kRobotLocalized, 0);
+    EXPECT_NE(s.health & translagatr::kHealthEncodersFresh, 0);
+    EXPECT_NE(s.health & translagatr::kHealthGyroFresh, 0);   // the Brain bench sample
+    EXPECT_EQ(s.calibration, translagatr::kCalibrationNone);  // VEX firmware owns its calibration
     r.still(2);
     EXPECT_NEAR(r.pose().x_m, 1.0 + kRevolution, 1e-6);
 
     // an invalid VEX sample drops the gyro bit and holds the pose
     r.vex_valid = false;
-    const gatr2::BrainState stale = r.translate({kCpr, 0, 0}, 5);
-    EXPECT_EQ(stale.health & gatr2::kHealthGyroFresh, 0);
+    const translagatr::BrainState stale = r.translate({kCpr, 0, 0}, 5);
+    EXPECT_EQ(stale.health & translagatr::kHealthGyroFresh, 0);
     EXPECT_NEAR(r.pose().x_m, 1.0 + kRevolution, 1e-6);
 }
 
 TEST(BrainProfile, TwoForwardWheelsWithThePicoGyro) {
     Rig                          r;
-    const gatr2::RobotProfileDoc p = twoForward(gatr2::kImuSourcePico);
+    const translagatr::RobotProfileDoc p = twoForward(translagatr::kImuSourcePico);
     ready(r, p);
     // the right wheel measures backward: forward travel counts down on it
     r.translate({kCpr, -kCpr, 0}, 10);
@@ -722,7 +766,7 @@ TEST(BrainProfile, TwoForwardWheelsWithThePicoGyro) {
 
 TEST(BrainProfile, TwoForwardWheelsWithTheBrainVexImu) {
     Rig                          r;
-    const gatr2::RobotProfileDoc p = twoForward(gatr2::kImuSourceBrainVex);
+    const translagatr::RobotProfileDoc p = twoForward(translagatr::kImuSourceBrainVex);
     ready(r, p);
     EXPECT_EQ(r.system->localization().functionStatus().front().type,
               "brain_imu_parallel_bench");
@@ -739,7 +783,7 @@ TEST(BrainProfile, TwoForwardWheelsWithTheBrainVexImu) {
 
 TEST(BrainProfile, ThreeWheelsFuseAnIndependentPicoGyroOnce) {
     Rig                          r;
-    const gatr2::RobotProfileDoc p = threeWheel(gatr2::kImuSourcePico);
+    const translagatr::RobotProfileDoc p = threeWheel(translagatr::kImuSourcePico);
     ready(r, p);
     EXPECT_EQ(r.system->localization().estimatorType(), "weighted_planar_fusion");
     const std::vector<ObservationFunctionStatus> functions =
@@ -780,19 +824,19 @@ TEST(BrainProfile, ThreeWheelsFuseAnIndependentPicoGyroOnce) {
 
 TEST(BrainProfile, ThreeWheelRecalibrationRestartsTheFusedGyroBias) {
     Rig                          r;
-    const gatr2::RobotProfileDoc p = threeWheel(gatr2::kImuSourcePico);
+    const translagatr::RobotProfileDoc p = threeWheel(translagatr::kImuSourcePico);
     ready(r, p);
-    EXPECT_EQ(r.still(20).calibration, gatr2::kCalibrationDone);
+    EXPECT_EQ(r.still(20).calibration, translagatr::kCalibrationDone);
     const Pose2D held = r.pose();
     // the bias drifted; its first sample arrives with the request, which the
     // new window measures from
     r.bias_mdps                = 90.0;
-    const gatr2::BrainReply ok = r.control(gatr2::kControlRecalibrate);
-    EXPECT_EQ(ok.result, gatr2::kResultOk);
-    EXPECT_EQ(ok.calibration, gatr2::kCalibrationRunning);
+    const translagatr::BrainReply ok = r.control(translagatr::kControlRecalibrate);
+    EXPECT_EQ(ok.result, translagatr::kResultOk);
+    EXPECT_EQ(ok.calibration, translagatr::kCalibrationRunning);
     // 20 samples arrive in 400 ms; the profile's 500 ms window still runs
-    EXPECT_EQ(r.still(22).calibration, gatr2::kCalibrationRunning);
-    EXPECT_EQ(r.still(10).calibration, gatr2::kCalibrationDone);
+    EXPECT_EQ(r.still(22).calibration, translagatr::kCalibrationRunning);
+    EXPECT_EQ(r.still(10).calibration, translagatr::kCalibrationDone);
     r.still(50);   // the new bias holds the heading still
     EXPECT_NEAR(r.pose().x_m, held.x_m, 1e-9);
     EXPECT_NEAR(r.pose().y_m, held.y_m, 1e-9);
@@ -805,16 +849,16 @@ TEST(BrainProfile, ThreeWheelRecalibrationRestartsTheFusedGyroBias) {
 
 TEST(BrainProfile, ThreeWheelsWithoutAnImu) {
     Rig                          r;
-    const gatr2::RobotProfileDoc p = threeWheel(gatr2::kImuSourceNone);
+    const translagatr::RobotProfileDoc p = threeWheel(translagatr::kImuSourceNone);
     ready(r, p);
     EXPECT_EQ(r.system->localization().estimatorType(), "planar_motion_integrator");
     const Pose2D before = r.pose();
     r.turn(25000.0, 20, countsPerRad(p));   // the gyro is ignored; the wheels turn
     r.still(3);
     EXPECT_NEAR(wrapAngle(r.pose().heading_rad - before.heading_rad), degToRad(10.0), 2e-4);
-    const gatr2::BrainState s = r.still(1);
-    EXPECT_EQ(s.calibration, gatr2::kCalibrationNone);
-    EXPECT_EQ(s.health & gatr2::kHealthGyroFresh, 0);
+    const translagatr::BrainState s = r.still(1);
+    EXPECT_EQ(s.calibration, translagatr::kCalibrationNone);
+    EXPECT_EQ(s.health & translagatr::kHealthGyroFresh, 0);
 }
 
 // ---- one application per correction --------------------------------------
@@ -824,10 +868,10 @@ namespace
 
 // Port 0 forward and port 1 sideways, one revolution of raw counts each, with
 // only wheel 0 changed by the knob: wheel 1 stays the reference.
-void knobAppliesOnce(const std::function<void(gatr2::ProfileWheel&)>& knob, double forward,
-                     uint8_t imu_source = gatr2::kImuSourceBrainVex) {
+void knobAppliesOnce(const std::function<void(translagatr::ProfileWheel&)>& knob, double forward,
+                     uint8_t imu_source = translagatr::kImuSourceBrainVex) {
     Rig                    r;
-    gatr2::RobotProfileDoc p = perpendicular(imu_source);
+    translagatr::RobotProfileDoc p = perpendicular(imu_source);
     knob(p.wheels[0]);
     ready(r, p);
     r.translate({kCpr, kCpr, 0}, 10);
@@ -839,7 +883,7 @@ void knobAppliesOnce(const std::function<void(gatr2::ProfileWheel&)>& knob, doub
 // Forward and sideways wheels each calibrated on their own.
 void scalesArePerWheel(uint8_t imu_source) {
     Rig                    r;
-    gatr2::RobotProfileDoc p     = perpendicular(imu_source);
+    translagatr::RobotProfileDoc p     = perpendicular(imu_source);
     p.wheels[0].travel_scale_ppm = 1040000;
     p.wheels[1].travel_scale_ppm = 970000;
     ready(r, p);
@@ -853,10 +897,10 @@ void scalesArePerWheel(uint8_t imu_source) {
     EXPECT_NEAR(r.pose().y_m - 0.5, 0.97 * kRevolution, 1e-7);
 }
 
-const auto kAllCorrections = [](gatr2::ProfileWheel& w) {
+const auto kAllCorrections = [](translagatr::ProfileWheel& w) {
     w.counts_per_rev   = 8192;
     w.gear_micro       = 1500000;
-    w.flags            = gatr2::kWheelReversed;
+    w.flags            = translagatr::kWheelReversed;
     w.travel_scale_ppm = 950000;
     w.radius_um        = 30000;
 };
@@ -865,22 +909,22 @@ const double kAllCorrectionsForward = -(kCpr * 2.0 * kPi / (8192 * 1.5)) * 0.030
 } // namespace
 
 TEST(BrainProfile, CountsPerRevolutionApplyOnce) {
-    knobAppliesOnce([](gatr2::ProfileWheel& w) { w.counts_per_rev = 2 * kCpr; },
+    knobAppliesOnce([](translagatr::ProfileWheel& w) { w.counts_per_rev = 2 * kCpr; },
                     kRevolution / 2.0);
 }
 
 TEST(BrainProfile, GearingAppliesOnce) {
-    knobAppliesOnce([](gatr2::ProfileWheel& w) { w.gear_micro = 2500000; },   // 2.5:1
+    knobAppliesOnce([](translagatr::ProfileWheel& w) { w.gear_micro = 2500000; },   // 2.5:1
                     kRevolution / 2.5);
 }
 
 TEST(BrainProfile, PolarityAppliesOnce) {
-    knobAppliesOnce([](gatr2::ProfileWheel& w) { w.flags = gatr2::kWheelReversed; },
+    knobAppliesOnce([](translagatr::ProfileWheel& w) { w.flags = translagatr::kWheelReversed; },
                     -kRevolution);
 }
 
 TEST(BrainProfile, TravelScaleAppliesOnce) {
-    knobAppliesOnce([](gatr2::ProfileWheel& w) { w.travel_scale_ppm = 1050000; },
+    knobAppliesOnce([](translagatr::ProfileWheel& w) { w.travel_scale_ppm = 1050000; },
                     1.05 * kRevolution);
 }
 
@@ -889,15 +933,15 @@ TEST(BrainProfile, AllCorrectionsTogetherApplyOnceEach) {
 }
 
 TEST(BrainProfile, AllCorrectionsApplyOnceInTheTrackingWheelModel) {
-    knobAppliesOnce(kAllCorrections, kAllCorrectionsForward, gatr2::kImuSourcePico);
+    knobAppliesOnce(kAllCorrections, kAllCorrectionsForward, translagatr::kImuSourcePico);
 }
 
 TEST(BrainProfile, ForwardAndSidewaysScalesArePerWheelWithTheVexImu) {
-    scalesArePerWheel(gatr2::kImuSourceBrainVex);
+    scalesArePerWheel(translagatr::kImuSourceBrainVex);
 }
 
 TEST(BrainProfile, ForwardAndSidewaysScalesArePerWheelWithThePicoGyro) {
-    scalesArePerWheel(gatr2::kImuSourcePico);
+    scalesArePerWheel(translagatr::kImuSourcePico);
 }
 
 // ---- idempotence, continuity -----------------------------------------------
@@ -906,26 +950,26 @@ TEST(BrainProfile, ForwardAndSidewaysScalesArePerWheelWithThePicoGyro) {
 // the Brain VEX IMU it does (SensorLoss.ABrainRestartRestartsTheVexImu).
 TEST(BrainProfile, SameProfileReappliesWithoutResetting) {
     Rig                          r;
-    const gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourcePico);
+    const translagatr::RobotProfileDoc p = perpendicular(translagatr::kImuSourcePico);
     ready(r, p);
     r.translate({kCpr, 0, 0}, 10);
-    const gatr2::BrainState before = r.still(2);
+    const translagatr::BrainState before = r.still(2);
     const Pose2D            pose   = r.pose();
 
     const std::vector<uint8_t> doc = bytesOf(p);
-    const gatr2::BrainReply    again = r.apply(doc);
-    EXPECT_EQ(again.result, gatr2::kResultOk);   // at once, no boundary
-    EXPECT_EQ(again.profile_state, gatr2::kProfileApplied);
+    const translagatr::BrainReply    again = r.apply(doc);
+    EXPECT_EQ(again.result, translagatr::kResultOk);   // at once, no boundary
+    EXPECT_EQ(again.profile_state, translagatr::kProfileApplied);
 
     // a restarted Brain: new session, stages and applies the same profile
     const uint32_t old_session = r.session;
     r.rid                      = 1;
     EXPECT_NE(r.hello(0x5EED0002), old_session);
-    EXPECT_EQ(r.stageAndApply(doc).result, gatr2::kResultOk);
-    const gatr2::BrainState after = r.still(3);
+    EXPECT_EQ(r.stageAndApply(doc).result, translagatr::kResultOk);
+    const translagatr::BrainState after = r.still(3);
     EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
     EXPECT_EQ(after.anchor_revision, before.anchor_revision);
-    EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);   // the placement holds
+    EXPECT_NE(after.robot_flags & translagatr::kRobotLocalized, 0);   // the placement holds
     EXPECT_NEAR(r.pose().x_m, pose.x_m, 1e-9);
     EXPECT_NEAR(r.pose().y_m, pose.y_m, 1e-9);
     EXPECT_EQ(r.system->profileBinding()->generation, 1u);   // applied once
@@ -933,36 +977,36 @@ TEST(BrainProfile, SameProfileReappliesWithoutResetting) {
 
 TEST(BrainProfile, NewProfileResetsAndWithdrawsPlacement) {
     Rig                          r;
-    const gatr2::RobotProfileDoc a = perpendicular(gatr2::kImuSourceBrainVex);
+    const translagatr::RobotProfileDoc a = perpendicular(translagatr::kImuSourceBrainVex);
     ready(r, a);
     r.translate({kCpr, 0, 0}, 10);
-    const gatr2::BrainState placed = r.still(2);
-    EXPECT_NE(placed.robot_flags & gatr2::kRobotLocalized, 0);
+    const translagatr::BrainState placed = r.still(2);
+    EXPECT_NE(placed.robot_flags & translagatr::kRobotLocalized, 0);
     const SensorId encoder{"profile_encoder_0"};
     const uint64_t encoder_epoch = r.system->sensorMap().at(encoder).latest->epoch;
-    gatr2::RobotProfileDoc b = a;
+    translagatr::RobotProfileDoc b = a;
     b.wheels[0].radius_um    = 25000;   // a different robot description
     const std::vector<uint8_t> doc = bytesOf(b);
-    EXPECT_EQ(r.stageAndApply(doc).result, gatr2::kResultPending);
-    const gatr2::BrainState swapped = r.still(1);
-    EXPECT_EQ(swapped.profile_state, gatr2::kProfileApplied);
+    EXPECT_EQ(r.stageAndApply(doc).result, translagatr::kResultPending);
+    const translagatr::BrainState swapped = r.still(1);
+    EXPECT_EQ(swapped.profile_state, translagatr::kProfileApplied);
     EXPECT_EQ(swapped.profile_id, idOf(doc));
     EXPECT_GT(swapped.odometry_epoch, placed.odometry_epoch);
     EXPECT_EQ(swapped.anchor_revision, placed.anchor_revision);   // continued, never reused
-    EXPECT_EQ(swapped.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_EQ(swapped.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_EQ(r.system->robotFeed()->historySize(), 0u);
     // the rebuilt encoder sensor restarts under a new record epoch
     EXPECT_GT(r.system->sensorMap().at(encoder).latest->epoch, encoder_epoch);
 
     // the old SET_POSE never re-applies to the new odometry origin
-    const gatr2::BrainState moving = r.translate({kCpr, 0, 0}, 15);
-    EXPECT_EQ(moving.robot_flags & gatr2::kRobotLocalized, 0);
-    EXPECT_NE(moving.robot_flags & gatr2::kRobotPoseValid, 0);
+    const translagatr::BrainState moving = r.translate({kCpr, 0, 0}, 15);
+    EXPECT_EQ(moving.robot_flags & translagatr::kRobotLocalized, 0);
+    EXPECT_NE(moving.robot_flags & translagatr::kRobotPoseValid, 0);
 
     // a new placement is required and works
-    EXPECT_EQ(r.place(2000, 1000, 9000).result, gatr2::kResultOk);
-    const gatr2::BrainState replaced = r.still(2);
-    EXPECT_NE(replaced.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_EQ(r.place(2000, 1000, 9000).result, translagatr::kResultOk);
+    const translagatr::BrainState replaced = r.still(2);
+    EXPECT_NE(replaced.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_GT(replaced.anchor_revision, placed.anchor_revision);
     EXPECT_NEAR(r.pose().x_m, 2.0, 1e-9);
     EXPECT_NEAR(headingDeg(r), 90.0, 1e-9);
@@ -972,14 +1016,14 @@ TEST(BrainProfile, StagingInterruptedByANewSessionResumes) {
     Rig r;
     ASSERT_TRUE(r.ok()) << r.build_error;
     r.hello();
-    const std::vector<uint8_t> doc = bytesOf(perpendicular(gatr2::kImuSourceBrainVex));
+    const std::vector<uint8_t> doc = bytesOf(perpendicular(translagatr::kImuSourceBrainVex));
     r.stage(doc, 0, 40, 40);   // interrupted after one chunk
     r.rid = 1;
     r.hello(0x5EED0003);        // the Brain reconnects under a new session
     r.stage(doc, 40, static_cast<uint16_t>(doc.size()), 40);   // resumes at received
-    EXPECT_EQ(r.apply(doc).result, gatr2::kResultPending);
+    EXPECT_EQ(r.apply(doc).result, translagatr::kResultPending);
     r.cycle();
-    EXPECT_EQ(r.apply(doc).result, gatr2::kResultOk);
+    EXPECT_EQ(r.apply(doc).result, translagatr::kResultOk);
 }
 
 TEST(BrainProfile, TheLatestApplyWinsOverACandidateWaitingForTheBoundary) {
@@ -989,17 +1033,17 @@ TEST(BrainProfile, TheLatestApplyWinsOverACandidateWaitingForTheBoundary) {
         findChild(root, (std::string(kProfilePath) + "/Timing").c_str())
             ->SetAttribute("on_sensor_loss", "warn");
     });
-    const gatr2::RobotProfileDoc a = perpendicular(gatr2::kImuSourceBrainVex);
+    const translagatr::RobotProfileDoc a = perpendicular(translagatr::kImuSourceBrainVex);
     ready(r, a);
-    const gatr2::BrainState    before = r.still(2);
+    const translagatr::BrainState    before = r.still(2);
     const Pose2D               pose   = r.pose();
-    gatr2::RobotProfileDoc     b      = a;
+    translagatr::RobotProfileDoc     b      = a;
     b.wheels[0].radius_um             = 25000;
     const std::vector<uint8_t> doc_a  = bytesOf(a);
     const std::vector<uint8_t> doc_b  = bytesOf(b);
-    const auto only = [](const std::vector<gatr2::BrainReply>& replies) {
+    const auto only = [](const std::vector<translagatr::BrainReply>& replies) {
         EXPECT_EQ(replies.size(), 1u);
-        return replies.empty() ? gatr2::BrainReply{} : replies.front();
+        return replies.empty() ? translagatr::BrainReply{} : replies.front();
     };
     const auto dropped = [&r] {
         int n = 0;
@@ -1011,47 +1055,47 @@ TEST(BrainProfile, TheLatestApplyWinsOverACandidateWaitingForTheBoundary) {
 
     // worker mode: B is built, then the Brain stages and applies A again
     // before the main thread reaches the boundary
-    r.stage(doc_b, 0, static_cast<uint16_t>(doc_b.size()), gatr2::kProfileChunkMax);
+    r.stage(doc_b, 0, static_cast<uint16_t>(doc_b.size()), translagatr::kProfileChunkMax);
     EXPECT_EQ(only(r.exchangeWithWorkers(r.applyRequest(doc_b))).result,
-              gatr2::kResultPending);
-    EXPECT_EQ(only(r.exchangeWithWorkers(r.writeRequest(doc_a))).result, gatr2::kResultOk);
-    const gatr2::BrainReply again = only(r.exchangeWithWorkers(r.applyRequest(doc_a)));
-    EXPECT_EQ(again.result, gatr2::kResultOk);
-    EXPECT_EQ(again.profile_state, gatr2::kProfileApplied);
+              translagatr::kResultPending);
+    EXPECT_EQ(only(r.exchangeWithWorkers(r.writeRequest(doc_a))).result, translagatr::kResultOk);
+    const translagatr::BrainReply again = only(r.exchangeWithWorkers(r.applyRequest(doc_a)));
+    EXPECT_EQ(again.result, translagatr::kResultOk);
+    EXPECT_EQ(again.profile_state, translagatr::kProfileApplied);
     EXPECT_TRUE(r.system->applyPendingProfile());
     EXPECT_EQ(dropped(), 1);
     ASSERT_NE(r.system->profileBinding(), nullptr);
     EXPECT_EQ(r.system->profileBinding()->id, idOf(doc_a));
     EXPECT_EQ(r.system->profileBinding()->generation, 1u);
-    const gatr2::BrainState kept = r.still(2);
-    EXPECT_EQ(kept.profile_state, gatr2::kProfileApplied);
+    const translagatr::BrainState kept = r.still(2);
+    EXPECT_EQ(kept.profile_state, translagatr::kProfileApplied);
     EXPECT_EQ(kept.profile_id, idOf(doc_a));
     EXPECT_EQ(kept.odometry_epoch, before.odometry_epoch);
-    EXPECT_NE(kept.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_NE(kept.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_NEAR(r.pose().x_m, pose.x_m, 1e-9);
 
     // B applied later is built anew
     ASSERT_TRUE(r.applyProfile(b));
     EXPECT_EQ(r.system->profileBinding()->id, idOf(doc_b));
-    const gatr2::BrainState on_b = r.still(1);
+    const translagatr::BrainState on_b = r.still(1);
     EXPECT_GT(on_b.odometry_epoch, before.odometry_epoch);
 
     // a refused APPLY supersedes a waiting candidate too; B keeps running
-    gatr2::RobotProfileDoc bad = perpendicular(gatr2::kImuSourcePico);
+    translagatr::RobotProfileDoc bad = perpendicular(translagatr::kImuSourcePico);
     bad.imu_port               = 1;   // no such Pico IMU port on this Pi
     const std::vector<uint8_t> doc_bad = bytesOf(bad);
-    r.stage(doc_a, 0, static_cast<uint16_t>(doc_a.size()), gatr2::kProfileChunkMax);
+    r.stage(doc_a, 0, static_cast<uint16_t>(doc_a.size()), translagatr::kProfileChunkMax);
     EXPECT_EQ(only(r.exchangeWithWorkers(r.applyRequest(doc_a))).result,
-              gatr2::kResultPending);
-    EXPECT_EQ(only(r.exchangeWithWorkers(r.writeRequest(doc_bad))).result, gatr2::kResultOk);
-    const gatr2::BrainReply refused = only(r.exchangeWithWorkers(r.applyRequest(doc_bad)));
-    EXPECT_EQ(refused.result, gatr2::kResultProfileRejected);
-    EXPECT_EQ(refused.profile_reason, gatr2::kProfileReasonImuPort);
+              translagatr::kResultPending);
+    EXPECT_EQ(only(r.exchangeWithWorkers(r.writeRequest(doc_bad))).result, translagatr::kResultOk);
+    const translagatr::BrainReply refused = only(r.exchangeWithWorkers(r.applyRequest(doc_bad)));
+    EXPECT_EQ(refused.result, translagatr::kResultProfileRejected);
+    EXPECT_EQ(refused.profile_reason, translagatr::kProfileReasonImuPort);
     EXPECT_TRUE(r.system->applyPendingProfile());
     EXPECT_EQ(dropped(), 2);
     EXPECT_EQ(r.system->profileBinding()->id, idOf(doc_b));
-    const gatr2::BrainState after = r.still(1);
-    EXPECT_EQ(after.profile_state, gatr2::kProfileRejected);
+    const translagatr::BrainState after = r.still(1);
+    EXPECT_EQ(after.profile_state, translagatr::kProfileRejected);
     EXPECT_EQ(after.profile_id, idOf(doc_bad));
     EXPECT_EQ(after.odometry_epoch, on_b.odometry_epoch);
 }
@@ -1063,7 +1107,7 @@ namespace
 
 struct Refusal {
     const char*            what;
-    gatr2::RobotProfileDoc profile;
+    translagatr::RobotProfileDoc profile;
     uint8_t                reason;
     uint8_t                detail;
 };
@@ -1071,12 +1115,12 @@ struct Refusal {
 void expectRefused(Rig& r, const Refusal& refusal) {
     SCOPED_TRACE(refusal.what);
     const std::vector<uint8_t> doc   = bytesOf(refusal.profile);
-    const gatr2::BrainReply    reply = r.stageAndApply(doc);
-    EXPECT_EQ(reply.result, gatr2::kResultProfileRejected);
+    const translagatr::BrainReply    reply = r.stageAndApply(doc);
+    EXPECT_EQ(reply.result, translagatr::kResultProfileRejected);
     EXPECT_EQ(reply.profile_reason, refusal.reason);
     EXPECT_EQ(reply.profile_detail, refusal.detail);
-    const gatr2::BrainState s = r.still(1);
-    EXPECT_EQ(s.profile_state, gatr2::kProfileRejected);
+    const translagatr::BrainState s = r.still(1);
+    EXPECT_EQ(s.profile_state, translagatr::kProfileRejected);
     EXPECT_EQ(s.profile_id, idOf(doc));
     EXPECT_EQ(r.system->profileBinding(), nullptr);   // still waiting
     EXPECT_EQ(r.system->localization().estimatorType(), "noop");
@@ -1091,33 +1135,33 @@ TEST(BrainProfile, UnsupportedCombinationsAreRefusedExplicitly) {
     ASSERT_TRUE(r.ok()) << r.build_error;
     r.hello();
 
-    gatr2::RobotProfileDoc two_none = perpendicular(gatr2::kImuSourceNone);
+    translagatr::RobotProfileDoc two_none = perpendicular(translagatr::kImuSourceNone);
     two_none.vex_smart_port         = 0;
-    gatr2::RobotProfileDoc three_vex = threeWheel(gatr2::kImuSourceBrainVex);
-    gatr2::RobotProfileDoc collinear = perpendicular(gatr2::kImuSourcePico);
+    translagatr::RobotProfileDoc three_vex = threeWheel(translagatr::kImuSourceBrainVex);
+    translagatr::RobotProfileDoc collinear = perpendicular(translagatr::kImuSourcePico);
     collinear.wheels[1].angle_mdeg   = 180000;
-    gatr2::RobotProfileDoc sideways_forward = twoForward(gatr2::kImuSourcePico);
+    translagatr::RobotProfileDoc sideways_forward = twoForward(translagatr::kImuSourcePico);
     sideways_forward.wheels[1].angle_mdeg   = 90000;
-    gatr2::RobotProfileDoc same_port        = perpendicular(gatr2::kImuSourcePico);
+    translagatr::RobotProfileDoc same_port        = perpendicular(translagatr::kImuSourcePico);
     same_port.wheels[1].encoder_port        = 0;
-    gatr2::RobotProfileDoc unwired          = perpendicular(gatr2::kImuSourcePico);
+    translagatr::RobotProfileDoc unwired          = perpendicular(translagatr::kImuSourcePico);
     unwired.wheels[1].encoder_port          = 3;
-    gatr2::RobotProfileDoc imu_port         = perpendicular(gatr2::kImuSourcePico);
+    translagatr::RobotProfileDoc imu_port         = perpendicular(translagatr::kImuSourcePico);
     imu_port.imu_port                       = 1;
-    gatr2::RobotProfileDoc camera           = perpendicular(gatr2::kImuSourcePico);
+    translagatr::RobotProfileDoc camera           = perpendicular(translagatr::kImuSourcePico);
     camera.camera_count                     = 1;
 
     for (const Refusal& refusal : std::vector<Refusal>{
-             {"two wheels without an IMU", two_none, gatr2::kProfileReasonImuCombination, 0},
+             {"two wheels without an IMU", two_none, translagatr::kProfileReasonImuCombination, 0},
              {"three wheels with the Brain clock IMU", three_vex,
-              gatr2::kProfileReasonImuCombination, 0},
-             {"collinear wheels", collinear, gatr2::kProfileReasonObservability, 0},
+              translagatr::kProfileReasonImuCombination, 0},
+             {"collinear wheels", collinear, translagatr::kProfileReasonObservability, 0},
              {"a sideways wheel in the forward topology", sideways_forward,
-              gatr2::kProfileReasonObservability, 0},
-             {"one port twice", same_port, gatr2::kProfileReasonEncoderPort, 1},
-             {"a port this Pi does not have", unwired, gatr2::kProfileReasonEncoderPort, 1},
-             {"a Pico IMU port that does not exist", imu_port, gatr2::kProfileReasonImuPort, 0},
-             {"a camera slot this Pi does not have", camera, gatr2::kProfileReasonCamera, 0},
+              translagatr::kProfileReasonObservability, 0},
+             {"one port twice", same_port, translagatr::kProfileReasonEncoderPort, 1},
+             {"a port this Pi does not have", unwired, translagatr::kProfileReasonEncoderPort, 1},
+             {"a Pico IMU port that does not exist", imu_port, translagatr::kProfileReasonImuPort, 0},
+             {"a camera slot this Pi does not have", camera, translagatr::kProfileReasonCamera, 0},
          }) {
         expectRefused(r, refusal);
     }
@@ -1136,15 +1180,15 @@ TEST(BrainProfile, CapabilitiesFollowThePiConfiguration) {
         });
         ASSERT_TRUE(r.ok()) << r.build_error;
         r.hello();
-        expectRefused(r, {"port 2 unwired", threeWheel(gatr2::kImuSourceNone),
-                          gatr2::kProfileReasonEncoderPort, 2});
+        expectRefused(r, {"port 2 unwired", threeWheel(translagatr::kImuSourceNone),
+                          translagatr::kProfileReasonEncoderPort, 2});
     }
     {
         Rig r([](tinyxml2::XMLElement* root) { removeChild(root, kProfilePath, "Imu"); });
         ASSERT_TRUE(r.ok()) << r.build_error;
         r.hello();
-        expectRefused(r, {"no Pico IMU", perpendicular(gatr2::kImuSourcePico),
-                          gatr2::kProfileReasonImuSource, 0});
+        expectRefused(r, {"no Pico IMU", perpendicular(translagatr::kImuSourcePico),
+                          translagatr::kProfileReasonImuSource, 0});
     }
     {
         Rig r([](tinyxml2::XMLElement* root) {
@@ -1153,31 +1197,31 @@ TEST(BrainProfile, CapabilitiesFollowThePiConfiguration) {
         });
         ASSERT_TRUE(r.ok()) << r.build_error;
         r.hello();
-        expectRefused(r, {"no Brain IMU mailbox", perpendicular(gatr2::kImuSourceBrainVex),
-                          gatr2::kProfileReasonImuSource, 0});
+        expectRefused(r, {"no Brain IMU mailbox", perpendicular(translagatr::kImuSourceBrainVex),
+                          translagatr::kProfileReasonImuSource, 0});
     }
     {
         Rig r([](tinyxml2::XMLElement* root) { removeChild(root, kProfilePath, "Fusion"); });
         ASSERT_TRUE(r.ok()) << r.build_error;
         r.hello();
-        expectRefused(r, {"no fusion tuning", threeWheel(gatr2::kImuSourcePico),
-                          gatr2::kProfileReasonImuCombination, 0});
+        expectRefused(r, {"no fusion tuning", threeWheel(translagatr::kImuSourcePico),
+                          translagatr::kProfileReasonImuCombination, 0});
     }
 }
 
 TEST(BrainProfile, ARefusedProfileLeavesTheRunningOneRunning) {
     Rig                          r;
-    const gatr2::RobotProfileDoc a = perpendicular(gatr2::kImuSourceBrainVex);
+    const translagatr::RobotProfileDoc a = perpendicular(translagatr::kImuSourceBrainVex);
     ready(r, a);
-    const gatr2::BrainState before = r.still(1);
-    gatr2::RobotProfileDoc  bad    = a;
+    const translagatr::BrainState before = r.still(1);
+    translagatr::RobotProfileDoc  bad    = a;
     bad.camera_count               = 1;
-    const gatr2::BrainReply reply  = r.stageAndApply(bytesOf(bad));
-    EXPECT_EQ(reply.profile_reason, gatr2::kProfileReasonCamera);
-    const gatr2::BrainState after = r.translate({kCpr, 0, 0}, 10);
-    EXPECT_EQ(after.profile_state, gatr2::kProfileRejected);
+    const translagatr::BrainReply reply  = r.stageAndApply(bytesOf(bad));
+    EXPECT_EQ(reply.profile_reason, translagatr::kProfileReasonCamera);
+    const translagatr::BrainState after = r.translate({kCpr, 0, 0}, 10);
+    EXPECT_EQ(after.profile_state, translagatr::kProfileRejected);
     EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
-    EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_NE(after.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_EQ(r.system->profileBinding()->id, idOf(bytesOf(a)));
     r.still(2);
     EXPECT_NEAR(r.pose().x_m, 1.0 + kRevolution, 1e-6);
@@ -1187,9 +1231,9 @@ TEST(BrainProfile, ARefusedProfileLeavesTheRunningOneRunning) {
 
 TEST(BrainProfile, RecalibrateNeedsStillnessAndHoldsThePose) {
     Rig                          r;
-    const gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourcePico);
+    const translagatr::RobotProfileDoc p = perpendicular(translagatr::kImuSourcePico);
     ready(r, p);
-    EXPECT_EQ(r.still(1).calibration, gatr2::kCalibrationDone);
+    EXPECT_EQ(r.still(1).calibration, translagatr::kCalibrationDone);
 
     // moving now: nothing starts
     for (int i = 0; i < 4; ++i) {
@@ -1197,42 +1241,42 @@ TEST(BrainProfile, RecalibrateNeedsStillnessAndHoldsThePose) {
         r.cycle();
     }
     r.counts[0] += 200;
-    const gatr2::BrainReply moving = r.control(gatr2::kControlRecalibrate);
-    EXPECT_EQ(moving.result, gatr2::kResultNotStationary);
-    EXPECT_EQ(r.still(1).calibration, gatr2::kCalibrationDone);
+    const translagatr::BrainReply moving = r.control(translagatr::kControlRecalibrate);
+    EXPECT_EQ(moving.result, translagatr::kResultNotStationary);
+    EXPECT_EQ(r.still(1).calibration, translagatr::kCalibrationDone);
 
     // turning in place counts as moving too
     r.still(20);
     r.rate_mdps               = 5000.0;   // 5 deg/s
     r.still(20);
-    EXPECT_EQ(r.control(gatr2::kControlRecalibrate).result, gatr2::kResultNotStationary);
+    EXPECT_EQ(r.control(translagatr::kControlRecalibrate).result, translagatr::kResultNotStationary);
     r.rate_mdps = 0.0;
 
     // still for longer than the window: it restarts
     r.still(20);
     const Pose2D            held = r.pose();
-    const gatr2::BrainReply ok   = r.control(gatr2::kControlRecalibrate);
-    EXPECT_EQ(ok.result, gatr2::kResultOk);
-    EXPECT_EQ(ok.action, gatr2::kControlRecalibrate);
-    EXPECT_EQ(ok.calibration, gatr2::kCalibrationRunning);
+    const translagatr::BrainReply ok   = r.control(translagatr::kControlRecalibrate);
+    EXPECT_EQ(ok.result, translagatr::kResultOk);
+    EXPECT_EQ(ok.action, translagatr::kControlRecalibrate);
+    EXPECT_EQ(ok.calibration, translagatr::kCalibrationRunning);
     const uint16_t control_rid = static_cast<uint16_t>(r.rid - 1);
 
-    const gatr2::BrainState done = r.still(30);
-    EXPECT_EQ(done.calibration, gatr2::kCalibrationDone);
-    EXPECT_NE(done.health & gatr2::kHealthBiasCalibrated, 0);
-    EXPECT_NE(done.robot_flags & gatr2::kRobotLocalized, 0);   // still throughout
+    const translagatr::BrainState done = r.still(30);
+    EXPECT_EQ(done.calibration, translagatr::kCalibrationDone);
+    EXPECT_NE(done.health & translagatr::kHealthBiasCalibrated, 0);
+    EXPECT_NE(done.robot_flags & translagatr::kRobotLocalized, 0);   // still throughout
     EXPECT_NEAR(r.pose().x_m, held.x_m, 1e-9);
     EXPECT_NEAR(r.pose().y_m, held.y_m, 1e-9);
 
     // a lost acknowledgement: the same request id reports, never reruns
-    gatr2::BrainRequest dup = r.request(gatr2::kOpControl);
+    translagatr::BrainRequest dup = r.request(translagatr::kOpControl);
     r.rid--;
     dup.request_id = control_rid;
-    dup.action     = gatr2::kControlRecalibrate;
+    dup.action     = translagatr::kControlRecalibrate;
     r.picoFrame();
-    const gatr2::BrainReply again = r.one(dup);
-    EXPECT_EQ(again.result, gatr2::kResultOk);
-    EXPECT_EQ(again.calibration, gatr2::kCalibrationDone);   // not restarted
+    const translagatr::BrainReply again = r.one(dup);
+    EXPECT_EQ(again.result, translagatr::kResultOk);
+    EXPECT_EQ(again.calibration, translagatr::kCalibrationDone);   // not restarted
 
     // the calibrated bias is the one it measured
     const Pose2D before = r.pose();
@@ -1243,53 +1287,53 @@ TEST(BrainProfile, RecalibrateNeedsStillnessAndHoldsThePose) {
 
 TEST(BrainProfile, ReinitializeStartsANewUnplacedOdometry) {
     Rig                          r;
-    const gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourcePico);
+    const translagatr::RobotProfileDoc p = perpendicular(translagatr::kImuSourcePico);
     ready(r, p);
     r.still(20);
-    const gatr2::BrainState before = r.still(1);
-    const gatr2::BrainReply reply  = r.control(gatr2::kControlReinitialize);
-    EXPECT_EQ(reply.result, gatr2::kResultOk);
-    EXPECT_EQ(reply.calibration, gatr2::kCalibrationRunning);
-    const gatr2::BrainState after = r.still(30);
+    const translagatr::BrainState before = r.still(1);
+    const translagatr::BrainReply reply  = r.control(translagatr::kControlReinitialize);
+    EXPECT_EQ(reply.result, translagatr::kResultOk);
+    EXPECT_EQ(reply.calibration, translagatr::kCalibrationRunning);
+    const translagatr::BrainState after = r.still(30);
     EXPECT_GT(after.odometry_epoch, before.odometry_epoch);
-    EXPECT_EQ(after.robot_flags & gatr2::kRobotLocalized, 0);   // the old SET_POSE is withdrawn
-    EXPECT_EQ(after.calibration, gatr2::kCalibrationDone);
-    EXPECT_EQ(r.place(500, 500, 0).result, gatr2::kResultOk);
-    EXPECT_NE(r.still(1).robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_EQ(after.robot_flags & translagatr::kRobotLocalized, 0);   // the old SET_POSE is withdrawn
+    EXPECT_EQ(after.calibration, translagatr::kCalibrationDone);
+    EXPECT_EQ(r.place(500, 500, 0).result, translagatr::kResultOk);
+    EXPECT_NE(r.still(1).robot_flags & translagatr::kRobotLocalized, 0);
 }
 
 TEST(BrainProfile, CalibrationSettingsFromTheProfileReachTheModel) {
     Rig                    r;
-    gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourcePico);
+    translagatr::RobotProfileDoc p = perpendicular(translagatr::kImuSourcePico);
     p.calibration_window_ms  = 1000;   // longer than the samples the Pi needs
     p.still_travel_um        = 20;     // under one encoder count of travel
     ASSERT_TRUE(r.ok()) << r.build_error;
     r.hello();
     r.still(3);
     ASSERT_TRUE(r.applyProfile(p));
-    EXPECT_EQ(r.still(30).calibration, gatr2::kCalibrationRunning);   // 600 ms of samples
-    EXPECT_EQ(r.still(25).calibration, gatr2::kCalibrationDone);
+    EXPECT_EQ(r.still(30).calibration, translagatr::kCalibrationRunning);   // 600 ms of samples
+    EXPECT_EQ(r.still(25).calibration, translagatr::kCalibrationDone);
 
     // one count of travel restarts the window under this profile's limit
-    ASSERT_EQ(r.control(gatr2::kControlRecalibrate).result, gatr2::kResultOk);
+    ASSERT_EQ(r.control(translagatr::kControlRecalibrate).result, translagatr::kResultOk);
     r.still(30);
     r.counts[0] += 1;
-    EXPECT_EQ(r.still(30).calibration, gatr2::kCalibrationRunning);
-    EXPECT_EQ(r.still(30).calibration, gatr2::kCalibrationDone);
+    EXPECT_EQ(r.still(30).calibration, translagatr::kCalibrationRunning);
+    EXPECT_EQ(r.still(30).calibration, translagatr::kCalibrationDone);
 }
 
 TEST(BrainProfile, VexRecalibrateHasNothingToCalibrateOnThePi) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
     r.still(20);
-    const gatr2::BrainReply reply = r.control(gatr2::kControlRecalibrate);
-    EXPECT_EQ(reply.result, gatr2::kResultOk);
-    EXPECT_EQ(reply.calibration, gatr2::kCalibrationNone);
-    EXPECT_NE(r.still(1).robot_flags & gatr2::kRobotLocalized, 0);   // nothing reset
+    const translagatr::BrainReply reply = r.control(translagatr::kControlRecalibrate);
+    EXPECT_EQ(reply.result, translagatr::kResultOk);
+    EXPECT_EQ(reply.calibration, translagatr::kCalibrationNone);
+    EXPECT_NE(r.still(1).robot_flags & translagatr::kRobotLocalized, 0);   // nothing reset
     // the Pico IMU is no part of this profile
-    const gatr2::BrainReply reinit = r.control(gatr2::kControlReinitImu);
-    EXPECT_EQ(reinit.result, gatr2::kResultFailed);
-    EXPECT_EQ(reinit.control_detail, gatr2::kControlDetailImuUnused);
+    const translagatr::BrainReply reinit = r.control(translagatr::kControlReinitImu);
+    EXPECT_EQ(reinit.result, translagatr::kResultFailed);
+    EXPECT_EQ(reinit.control_detail, translagatr::kControlDetailImuUnused);
 }
 
 // ---- configuration ---------------------------------------------------------
@@ -1427,7 +1471,7 @@ TEST(BrainProfile, Rs485ConfigDiffersFromUsbOnlyInTheBrainLink) {
 
 TEST(BrainProfile, InspectionFollowsTheBoundary) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
     const std::shared_ptr<const BindingView> view = r.system->bindingView();
     ASSERT_NE(view, nullptr);
     EXPECT_TRUE(view->brain_profile);
@@ -1474,9 +1518,9 @@ bool has(const std::string& doc, const std::string& text) {
 // kTwoWheelVexImu): forward wheel on port 0 at (0, 0.15), sideways wheel on
 // port 1 at (0.15, 0), 0.024 m, 4000 counts, VEX IMU on Smart Port 1, 0.23 m
 // to each side, Pi calibration defaults. Placeholders there, test values here.
-gatr2::RobotProfileDoc currentBrainProfile() {
-    gatr2::RobotProfileDoc p =
-        baseProfile(gatr2::kTopologyTwoWheelImu, gatr2::kImuSourceBrainVex);
+translagatr::RobotProfileDoc currentBrainProfile() {
+    translagatr::RobotProfileDoc p =
+        baseProfile(translagatr::kTopologyTwoWheelImu, translagatr::kImuSourceBrainVex);
     p.wheel_count           = 2;
     p.wheels[0]             = wheel(0, 0, 150000, 0);
     p.wheels[1]             = wheel(1, 150000, 0, 90000);
@@ -1496,30 +1540,30 @@ void checkedInConfigRunsTheCurrentProfile(const char* config) {
     r.hello();
 
     // waiting: acquisition, the link and the field run; no pose, no placement
-    gatr2::BrainState s = r.still(5);
-    EXPECT_EQ(s.profile_state, gatr2::kProfileNone);
-    EXPECT_EQ(s.robot_flags & gatr2::kRobotPoseValid, 0);
+    translagatr::BrainState s = r.still(5);
+    EXPECT_EQ(s.profile_state, translagatr::kProfileNone);
+    EXPECT_EQ(s.robot_flags & translagatr::kRobotPoseValid, 0);
     EXPECT_NE(s.map_id, 0u);
-    EXPECT_EQ(r.place(1200, 1800, 0).result, gatr2::kResultNotReady);
+    EXPECT_EQ(r.place(1200, 1800, 0).result, translagatr::kResultNotReady);
     std::string snap = snapshotDocument(*r.system, InspectionServiceStats{}, hostTime(r.now));
     EXPECT_TRUE(inspection_test::validJson(snap));
     EXPECT_TRUE(has(snap, "\"profile\":{\"state\":\"none\",\"id\":null")) << snap;
 
-    const gatr2::RobotProfileDoc p = currentBrainProfile();
+    const translagatr::RobotProfileDoc p = currentBrainProfile();
     ASSERT_TRUE(r.applyProfile(p));
     s = r.still(3);
-    EXPECT_EQ(s.profile_state, gatr2::kProfileApplied);
+    EXPECT_EQ(s.profile_state, translagatr::kProfileApplied);
     EXPECT_EQ(s.profile_id, idOf(bytesOf(p)));
-    EXPECT_EQ(s.robot_flags & gatr2::kRobotLocalized, 0);   // needs placement
+    EXPECT_EQ(s.robot_flags & translagatr::kRobotLocalized, 0);   // needs placement
 
     // ready: fresh encoders and VEX IMU, nothing to calibrate on the Pi, placed
-    ASSERT_EQ(r.place(1200, 1800, 0).result, gatr2::kResultOk);
+    ASSERT_EQ(r.place(1200, 1800, 0).result, translagatr::kResultOk);
     s = r.still(3);
-    EXPECT_EQ(s.health & (gatr2::kHealthEncodersFresh | gatr2::kHealthGyroFresh),
-              gatr2::kHealthEncodersFresh | gatr2::kHealthGyroFresh);
-    EXPECT_EQ(s.calibration, gatr2::kCalibrationNone);
-    EXPECT_EQ(s.robot_flags & (gatr2::kRobotPoseValid | gatr2::kRobotLocalized),
-              gatr2::kRobotPoseValid | gatr2::kRobotLocalized);
+    EXPECT_EQ(s.health & (translagatr::kHealthEncodersFresh | translagatr::kHealthGyroFresh),
+              translagatr::kHealthEncodersFresh | translagatr::kHealthGyroFresh);
+    EXPECT_EQ(s.calibration, translagatr::kCalibrationNone);
+    EXPECT_EQ(s.robot_flags & (translagatr::kRobotPoseValid | translagatr::kRobotLocalized),
+              translagatr::kRobotPoseValid | translagatr::kRobotLocalized);
 
     // each wheel measures its own axis
     r.translate({kCpr, 0, 0}, 10);
@@ -1552,7 +1596,7 @@ TEST(BrainProfileInspection, HelloCarriesThePlanningFieldTheBrainReads) {
     Rig r;
     ASSERT_TRUE(r.ok()) << r.build_error;
     r.hello();
-    const gatr2::BrainState s     = r.still(2);
+    const translagatr::BrainState s     = r.still(2);
     const std::string       hello = helloDocument(*r.system, hostTime(r.now));
     ASSERT_TRUE(inspection_test::validJson(hello)) << hello;
     // the map the Brain is served, by the same id
@@ -1574,32 +1618,32 @@ TEST(BrainProfileInspection, HelloCarriesThePlanningFieldTheBrainReads) {
 TEST(BrainProfileInspection, SnapshotShowsProfileCalibrationWheelsPicoEventsAndPath) {
     Rig r(useFakePico);
     r.fake->state.status_known           = true;
-    r.fake->state.status.imu_state       = gatr2::kPicoImuReady;
-    r.fake->state.status.flags           = gatr2::kPicoImuEnabled;
-    r.fake->state.status.firmware        = gatr2::kPicoFirmwareBno08x;
+    r.fake->state.status.imu_state       = translagatr::kPicoImuReady;
+    r.fake->state.status.flags           = translagatr::kPicoImuEnabled;
+    r.fake->state.status.firmware        = translagatr::kPicoFirmwareBno08x;
     r.fake->state.status.last_request_id = 7;
-    r.fake->state.status.last_op         = gatr2::kPicoOpReinitImu;
-    r.fake->state.status.last_status     = gatr2::kPicoCommandCompleted;
-    gatr2::RobotProfileDoc p             = perpendicular(gatr2::kImuSourcePico);
-    p.wheels[1].gear_micro               = 2 * gatr2::kUnitMicro;
-    p.wheels[1].flags                    = gatr2::kWheelReversed;
+    r.fake->state.status.last_op         = translagatr::kPicoOpReinitImu;
+    r.fake->state.status.last_status     = translagatr::kPicoCommandCompleted;
+    translagatr::RobotProfileDoc p             = perpendicular(translagatr::kImuSourcePico);
+    p.wheels[1].gear_micro               = 2 * translagatr::kUnitMicro;
+    p.wheels[1].flags                    = translagatr::kWheelReversed;
     p.wheels[1].travel_scale_ppm         = 1010000;
     ready(r, p);
     r.counts[0] += kCpr;
     r.cycle();
 
     // the Brain reports its planned path
-    gatr2::BrainRequest path = r.request(gatr2::kOpPathReport);
+    translagatr::BrainRequest path = r.request(translagatr::kOpPathReport);
     path.command_id          = 42;
-    path.path_mode           = gatr2::kPathAvoiding;
+    path.path_mode           = translagatr::kPathAvoiding;
     path.point_count         = 3;
     path.points[0]           = {1000, 500};
     path.points[1]           = {1500, 900};
     path.points[2]           = {2000, 900};
-    const gatr2::BrainReply path_reply = r.one(path);
-    EXPECT_EQ(path_reply.result, gatr2::kResultOk);
+    const translagatr::BrainReply path_reply = r.one(path);
+    EXPECT_EQ(path_reply.result, translagatr::kResultOk);
     // an IMU reinitialization running on the Pico
-    ASSERT_EQ(r.control(gatr2::kControlReinitImu).result, gatr2::kResultPending);
+    ASSERT_EQ(r.control(translagatr::kControlReinitImu).result, translagatr::kResultPending);
 
     const std::string snap = snapshotDocument(*r.system, InspectionServiceStats{}, hostTime(r.now));
     ASSERT_TRUE(inspection_test::validJson(snap)) << snap;
@@ -1648,17 +1692,17 @@ TEST(BrainProfileInspection, SnapshotShowsProfileCalibrationWheelsPicoEventsAndP
     EXPECT_TRUE(has(snap, "\"text\":\"Pico IMU reinitialization requested\""));
 
     // a mode none report clears the path
-    gatr2::BrainRequest clear = r.request(gatr2::kOpPathReport);
+    translagatr::BrainRequest clear = r.request(translagatr::kOpPathReport);
     clear.command_id          = 42;
-    EXPECT_EQ(r.one(clear).result, gatr2::kResultOk);
+    EXPECT_EQ(r.one(clear).result, translagatr::kResultOk);
     EXPECT_TRUE(has(snapshotDocument(*r.system, InspectionServiceStats{}, hostTime(r.now)),
                     "\"path\":null"));
 }
 
 TEST(BrainProfile, ResetWaitsForAProfileAgain) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    const gatr2::BrainState before = r.still(1);
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    const translagatr::BrainState before = r.still(1);
     r.system->reset();
     EXPECT_EQ(r.system->profileBinding(), nullptr);
     EXPECT_EQ(r.system->localization().estimatorType(), "noop");
@@ -1673,16 +1717,16 @@ TEST(BrainProfile, WorkerModeBoundaryKeepsTheSessionAndInspection) {
     ASSERT_TRUE(r.ok()) << r.build_error;
     const uint32_t session = r.hello();
     r.still(2);
-    const uint32_t             pi_instance = r.one(r.request(gatr2::kOpGetState)).pi_instance;
-    const std::vector<uint8_t> doc         = bytesOf(perpendicular(gatr2::kImuSourceBrainVex));
-    r.stage(doc, 0, static_cast<uint16_t>(doc.size()), gatr2::kProfileChunkMax);
+    const uint32_t             pi_instance = r.one(r.request(translagatr::kOpGetState)).pi_instance;
+    const std::vector<uint8_t> doc         = bytesOf(perpendicular(translagatr::kImuSourceBrainVex));
+    r.stage(doc, 0, static_cast<uint16_t>(doc.size()), translagatr::kProfileChunkMax);
 
     // the APPLY waits in the link; the estimation worker prepares it
-    gatr2::BrainRequest apply = r.request(gatr2::kOpProfileApply);
+    translagatr::BrainRequest apply = r.request(translagatr::kOpProfileApply);
     apply.profile_id          = idOf(doc);
     apply.total_len           = static_cast<uint16_t>(doc.size());
-    std::array<uint8_t, gatr2::kMaxFrameLen> bytes{};
-    const uint16_t len = gatr2::encodeBrainRequest(apply, bytes.data(), bytes.size());
+    std::array<uint8_t, translagatr::kMaxFrameLen> bytes{};
+    const uint16_t len = translagatr::encodeBrainRequest(apply, bytes.data(), bytes.size());
     ASSERT_TRUE(r.brain->write({bytes.data(), len}).ok);
     r.pi_raw->input().feed(r.brain_raw->output().takeAll());
     r.pi_raw->setClock({});   // the workers run on real time
@@ -1716,7 +1760,7 @@ TEST(BrainProfile, WorkerModeBoundaryKeepsTheSessionAndInspection) {
     EXPECT_GT(documents.load(), 0);
     ASSERT_NE(r.system->profileBinding(), nullptr);
     EXPECT_EQ(r.system->profileBinding()->id, idOf(doc));
-    EXPECT_EQ(r.system->command().profile.state, gatr2::kProfileApplied);
+    EXPECT_EQ(r.system->command().profile.state, translagatr::kProfileApplied);
     EXPECT_EQ(r.system->command().session, session);
 
     // back inline: the same session and pi_instance answer
@@ -1724,10 +1768,10 @@ TEST(BrainProfile, WorkerModeBoundaryKeepsTheSessionAndInspection) {
     r.pi_raw->output().takeAll();
     r.now = std::max(r.now, HostClock::now().ms) + 1000;
     r.step();
-    const gatr2::BrainReply state = r.one(r.request(gatr2::kOpGetState));
-    EXPECT_EQ(state.result, gatr2::kResultOk);
+    const translagatr::BrainReply state = r.one(r.request(translagatr::kOpGetState));
+    EXPECT_EQ(state.result, translagatr::kResultOk);
     EXPECT_EQ(state.pi_instance, pi_instance);
-    EXPECT_EQ(state.state.profile_state, gatr2::kProfileApplied);
+    EXPECT_EQ(state.state.profile_state, translagatr::kProfileApplied);
 }
 
 // ---- stationary precheck ---------------------------------------------------
@@ -1864,7 +1908,7 @@ TEST(StationaryPrecheck, TheVexRotationMustHoldToo) {
     int32_t     mdeg = 0;
     const auto  feed = [&](int64_t t, int32_t step_mdeg) {
         mdeg += step_mdeg;
-        vex->accept(1, gatr2::kBenchImuValid, static_cast<uint32_t>(t), mdeg, hostTime(t));
+        vex->accept(1, translagatr::kBenchImuValid, static_cast<uint32_t>(t), mdeg, hostTime(t));
         check.update(map, hostTime(t));
     };
     for (int64_t t = 0; t <= 400; t += 20) {
@@ -1887,8 +1931,8 @@ namespace
 {
 
 // The Brain resends a CONTROL under its request id after a lost reply.
-gatr2::BrainReply repeatControl(Rig& r, uint16_t rid, uint8_t action) {
-    gatr2::BrainRequest dup = r.request(gatr2::kOpControl);
+translagatr::BrainReply repeatControl(Rig& r, uint16_t rid, uint8_t action) {
+    translagatr::BrainRequest dup = r.request(translagatr::kOpControl);
     r.rid--;
     dup.request_id = rid;
     dup.action     = action;
@@ -1896,9 +1940,9 @@ gatr2::BrainReply repeatControl(Rig& r, uint16_t rid, uint8_t action) {
     return r.one(dup);
 }
 
-gatr2::BrainReply readWheels(Rig& r) {
+translagatr::BrainReply readWheels(Rig& r) {
     r.picoFrame();
-    return r.one(r.request(gatr2::kOpReadWheels));
+    return r.one(r.request(translagatr::kOpReadWheels));
 }
 
 // Cycles with Pico frames and no Brain request, as when the cable is out.
@@ -1918,8 +1962,8 @@ void quietPico(Rig& r, int cycles, std::array<double, 3> delta = {}) {
         for (int i = 0; i < 3; ++i) {
             r.counts[i] += delta[i] / cycles;
         }
-        gatr2::BrainRequest q = r.request(gatr2::kOpGetState);
-        q.imu_flags           = gatr2::kBenchImuValid;
+        translagatr::BrainRequest q = r.request(translagatr::kOpGetState);
+        q.imu_flags           = translagatr::kBenchImuValid;
         q.imu_stamp_ms        = static_cast<uint32_t>(r.now);
         r.one(q);
     }
@@ -1932,14 +1976,14 @@ TEST(BrainRecovery, WheelReadingsReportRawTravelInProfileOrder) {
     ASSERT_TRUE(r.ok()) << r.build_error;
     r.hello();
     r.still(3);
-    EXPECT_EQ(readWheels(r).result, gatr2::kResultNotReady);   // no profile yet
+    EXPECT_EQ(readWheels(r).result, translagatr::kResultNotReady);   // no profile yet
 
     // profile order port 1 then port 0; port 1 geared 2:1 and reversed,
     // port 0 with a travel scale the readings never include
-    gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourceBrainVex);
+    translagatr::RobotProfileDoc p = perpendicular(translagatr::kImuSourceBrainVex);
     std::swap(p.wheels[0], p.wheels[1]);
-    p.wheels[0].gear_micro       = 2 * gatr2::kUnitMicro;
-    p.wheels[0].flags            = gatr2::kWheelReversed;
+    p.wheels[0].gear_micro       = 2 * translagatr::kUnitMicro;
+    p.wheels[0].flags            = translagatr::kWheelReversed;
     p.wheels[1].travel_scale_ppm = 1020000;
     ASSERT_TRUE(r.applyProfile(p));
     r.still(3);
@@ -1947,38 +1991,38 @@ TEST(BrainRecovery, WheelReadingsReportRawTravelInProfileOrder) {
     r.counts[1] += 1000;   // an eighth of one on port 1
     r.cycle();
 
-    const gatr2::BrainReply reply = readWheels(r);
-    ASSERT_EQ(reply.result, gatr2::kResultOk);
+    const translagatr::BrainReply reply = readWheels(r);
+    ASSERT_EQ(reply.result, translagatr::kResultOk);
     ASSERT_EQ(reply.wheel_count, 2);
-    const gatr2::WheelReading& a = reply.wheels[0];
-    const gatr2::WheelReading& b = reply.wheels[1];
+    const translagatr::WheelReading& a = reply.wheels[0];
+    const translagatr::WheelReading& b = reply.wheels[1];
     EXPECT_EQ(a.port, 1);
     EXPECT_EQ(b.port, 0);
     EXPECT_EQ(a.counts, 1000);
     EXPECT_EQ(b.counts, kCpr);
-    EXPECT_EQ(a.flags, gatr2::kWheelFresh | gatr2::kWheelValid);
-    EXPECT_EQ(b.flags, gatr2::kWheelFresh | gatr2::kWheelValid);
+    EXPECT_EQ(a.flags, translagatr::kWheelFresh | translagatr::kWheelValid);
+    EXPECT_EQ(b.flags, translagatr::kWheelFresh | translagatr::kWheelValid);
     EXPECT_EQ(a.discontinuity, 0);
     EXPECT_LE(a.age_ms, 2 * kCycleMs);
     EXPECT_NEAR(a.travel_um, -1000.0 / (kCpr * 2.0) * kRevolution * 1e6, 1.0);
     EXPECT_NEAR(b.travel_um, kRevolution * 1e6, 1.0);   // no 1.02
 
     // the same request again reads again
-    gatr2::BrainRequest again = r.request(gatr2::kOpReadWheels);
+    translagatr::BrainRequest again = r.request(translagatr::kOpReadWheels);
     r.rid--;
     again.request_id = static_cast<uint16_t>(r.rid - 1);
     r.counts[0] += kCpr;
     r.picoFrame();
-    const gatr2::BrainReply repeated = r.one(again);
-    ASSERT_EQ(repeated.result, gatr2::kResultOk);
+    const translagatr::BrainReply repeated = r.one(again);
+    ASSERT_EQ(repeated.result, translagatr::kResultOk);
     EXPECT_EQ(repeated.wheels[1].counts, 2 * kCpr);
 
     // a Pico restart shows as a new discontinuity; the travel stays continuous
     r.pico_zero = r.now - 20;
     r.counts    = {};
     r.still(3);
-    const gatr2::BrainReply restarted = readWheels(r);
-    ASSERT_EQ(restarted.result, gatr2::kResultOk);
+    const translagatr::BrainReply restarted = readWheels(r);
+    ASSERT_EQ(restarted.result, translagatr::kResultOk);
     EXPECT_NE(restarted.wheels[1].discontinuity, repeated.wheels[1].discontinuity);
     EXPECT_NEAR(restarted.wheels[1].travel_um, 2.0 * kRevolution * 1e6, 1.0);
 }
@@ -1986,152 +2030,152 @@ TEST(BrainRecovery, WheelReadingsReportRawTravelInProfileOrder) {
 
 TEST(BrainRecovery, ReinitImuRunsOnThePicoOnceThenNeedsAPlacement) {
     Rig r(useFakePico);
-    ready(r, perpendicular(gatr2::kImuSourcePico));
+    ready(r, perpendicular(translagatr::kImuSourcePico));
     r.still(20);
     const Pose2D held = r.pose();
 
-    const gatr2::BrainReply first = r.control(gatr2::kControlReinitImu);
-    EXPECT_EQ(first.result, gatr2::kResultPending);
-    EXPECT_EQ(first.action, gatr2::kControlReinitImu);
+    const translagatr::BrainReply first = r.control(translagatr::kControlReinitImu);
+    EXPECT_EQ(first.result, translagatr::kResultPending);
+    EXPECT_EQ(first.action, translagatr::kControlReinitImu);
     const uint16_t rid = static_cast<uint16_t>(r.rid - 1);
-    ASSERT_EQ(r.fake->count(gatr2::kPicoOpReinitImu), 1);
-    EXPECT_EQ(r.fake->last(gatr2::kPicoOpReinitImu).arg, 0);   // IMU port 0
+    ASSERT_EQ(r.fake->count(translagatr::kPicoOpReinitImu), 1);
+    EXPECT_EQ(r.fake->last(translagatr::kPicoOpReinitImu).arg, 0);   // IMU port 0
 
     // lost replies: the Brain resends the same id; the Pico runs it once
-    r.fake->settle(gatr2::kPicoOpReinitImu, PicoRequestState::kRunning);
+    r.fake->settle(translagatr::kPicoOpReinitImu, PicoRequestState::kRunning);
     for (int i = 0; i < 5; ++i) {
-        EXPECT_EQ(repeatControl(r, rid, gatr2::kControlReinitImu).result,
-                  gatr2::kResultPending);
+        EXPECT_EQ(repeatControl(r, rid, translagatr::kControlReinitImu).result,
+                  translagatr::kResultPending);
     }
-    EXPECT_EQ(r.fake->count(gatr2::kPicoOpReinitImu), 1);
-    EXPECT_NE(r.still(1).robot_flags & gatr2::kRobotLocalized, 0);   // placed while it runs
+    EXPECT_EQ(r.fake->count(translagatr::kPicoOpReinitImu), 1);
+    EXPECT_NE(r.still(1).robot_flags & translagatr::kRobotLocalized, 0);   // placed while it runs
 
-    r.fake->settle(gatr2::kPicoOpReinitImu, PicoRequestState::kCompleted);
-    const gatr2::BrainReply done = repeatControl(r, rid, gatr2::kControlReinitImu);
-    EXPECT_EQ(done.result, gatr2::kResultOk);
-    EXPECT_NE(done.calibration, gatr2::kCalibrationDone);   // recalibrating
-    EXPECT_EQ(repeatControl(r, rid, gatr2::kControlReinitImu).result, gatr2::kResultOk);
-    EXPECT_EQ(r.fake->count(gatr2::kPicoOpReinitImu), 1);
+    r.fake->settle(translagatr::kPicoOpReinitImu, PicoRequestState::kCompleted);
+    const translagatr::BrainReply done = repeatControl(r, rid, translagatr::kControlReinitImu);
+    EXPECT_EQ(done.result, translagatr::kResultOk);
+    EXPECT_NE(done.calibration, translagatr::kCalibrationDone);   // recalibrating
+    EXPECT_EQ(repeatControl(r, rid, translagatr::kControlReinitImu).result, translagatr::kResultOk);
+    EXPECT_EQ(r.fake->count(translagatr::kPicoOpReinitImu), 1);
 
     // a restarted IMU the profile uses: the pose needs a placement again
-    const gatr2::BrainState s = r.still(40);
-    EXPECT_EQ(s.calibration, gatr2::kCalibrationDone);
-    EXPECT_EQ(s.robot_flags & gatr2::kRobotLocalized, 0);
+    const translagatr::BrainState s = r.still(40);
+    EXPECT_EQ(s.calibration, translagatr::kCalibrationDone);
+    EXPECT_EQ(s.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_NEAR(r.pose().x_m, held.x_m, 1e-9);   // shown where it was
-    ASSERT_EQ(r.place(1000, 500, 0).result, gatr2::kResultOk);
-    EXPECT_NE(r.still(1).robot_flags & gatr2::kRobotLocalized, 0);
+    ASSERT_EQ(r.place(1000, 500, 0).result, translagatr::kResultOk);
+    EXPECT_NE(r.still(1).robot_flags & translagatr::kRobotLocalized, 0);
 }
 
 TEST(BrainRecovery, PicoCommandsFailClearly) {
     Rig r(useFakePico);
-    ready(r, perpendicular(gatr2::kImuSourcePico));
+    ready(r, perpendicular(translagatr::kImuSourcePico));
 
     r.fake->state.identity  = false;   // firmware without commands
-    gatr2::BrainReply reply = r.control(gatr2::kControlReinitImu);
-    EXPECT_EQ(reply.result, gatr2::kResultFailed);
-    EXPECT_EQ(reply.control_detail, gatr2::kControlDetailPicoLink);
+    translagatr::BrainReply reply = r.control(translagatr::kControlReinitImu);
+    EXPECT_EQ(reply.result, translagatr::kResultFailed);
+    EXPECT_EQ(reply.control_detail, translagatr::kControlDetailPicoLink);
     r.fake->state.identity     = true;
     r.fake->state.frames_fresh = false;   // no Pico frames
-    reply                      = r.control(gatr2::kControlReinitImu);
-    EXPECT_EQ(reply.control_detail, gatr2::kControlDetailPicoLink);
-    EXPECT_EQ(r.fake->count(gatr2::kPicoOpReinitImu), 0);
+    reply                      = r.control(translagatr::kControlReinitImu);
+    EXPECT_EQ(reply.control_detail, translagatr::kControlDetailPicoLink);
+    EXPECT_EQ(r.fake->count(translagatr::kPicoOpReinitImu), 0);
     r.fake->state.frames_fresh = true;
 
     // the Pico reports its failure, with its reason
-    reply = r.control(gatr2::kControlReinitImu);
-    ASSERT_EQ(reply.result, gatr2::kResultPending);
+    reply = r.control(translagatr::kControlReinitImu);
+    ASSERT_EQ(reply.result, translagatr::kResultPending);
     uint16_t rid = static_cast<uint16_t>(r.rid - 1);
-    r.fake->settle(gatr2::kPicoOpReinitImu, PicoRequestState::kFailed,
-                   gatr2::kControlDetailImuAbsent);
-    reply = repeatControl(r, rid, gatr2::kControlReinitImu);
-    EXPECT_EQ(reply.result, gatr2::kResultFailed);
-    EXPECT_EQ(reply.control_detail, gatr2::kControlDetailImuAbsent);
+    r.fake->settle(translagatr::kPicoOpReinitImu, PicoRequestState::kFailed,
+                   translagatr::kControlDetailImuAbsent);
+    reply = repeatControl(r, rid, translagatr::kControlReinitImu);
+    EXPECT_EQ(reply.result, translagatr::kResultFailed);
+    EXPECT_EQ(reply.control_detail, translagatr::kControlDetailImuAbsent);
 
     // never finishing: the bound ends it
-    reply = r.control(gatr2::kControlReinitImu);
-    ASSERT_EQ(reply.result, gatr2::kResultPending);
+    reply = r.control(translagatr::kControlReinitImu);
+    ASSERT_EQ(reply.result, translagatr::kResultPending);
     rid = static_cast<uint16_t>(r.rid - 1);
     r.still(static_cast<int>(System::kPicoOperationMs / kCycleMs) + 2);
-    reply = repeatControl(r, rid, gatr2::kControlReinitImu);
-    EXPECT_EQ(reply.result, gatr2::kResultFailed);
-    EXPECT_EQ(reply.control_detail, gatr2::kControlDetailTimedOut);
-    EXPECT_EQ(r.fake->count(gatr2::kPicoOpReinitImu), 2);
+    reply = repeatControl(r, rid, translagatr::kControlReinitImu);
+    EXPECT_EQ(reply.result, translagatr::kResultFailed);
+    EXPECT_EQ(reply.control_detail, translagatr::kControlDetailTimedOut);
+    EXPECT_EQ(r.fake->count(translagatr::kPicoOpReinitImu), 2);
 
     // a VEX profile does not use the Pico IMU
     Rig v(useFakePico);
-    ready(v, perpendicular(gatr2::kImuSourceBrainVex));
-    reply = v.control(gatr2::kControlReinitImu);
-    EXPECT_EQ(reply.result, gatr2::kResultFailed);
-    EXPECT_EQ(reply.control_detail, gatr2::kControlDetailImuUnused);
-    EXPECT_EQ(v.fake->count(gatr2::kPicoOpReinitImu), 0);
+    ready(v, perpendicular(translagatr::kImuSourceBrainVex));
+    reply = v.control(translagatr::kControlReinitImu);
+    EXPECT_EQ(reply.result, translagatr::kResultFailed);
+    EXPECT_EQ(reply.control_detail, translagatr::kControlDetailImuUnused);
+    EXPECT_EQ(v.fake->count(translagatr::kPicoOpReinitImu), 0);
 }
 
 TEST(BrainRecovery, AcquisitionRestartNeedsStillnessThenAPlacement) {
     Rig r(useFakePico);
-    ready(r, perpendicular(gatr2::kImuSourcePico));
+    ready(r, perpendicular(translagatr::kImuSourcePico));
     for (int i = 0; i < 5; ++i) {
         r.counts[0] += 200;
         r.cycle();
     }
     r.counts[0] += 200;
-    EXPECT_EQ(r.control(gatr2::kControlRestartAcquisition).result, gatr2::kResultNotStationary);
-    EXPECT_EQ(r.fake->count(gatr2::kPicoOpRestartAcquisition), 0);
+    EXPECT_EQ(r.control(translagatr::kControlRestartAcquisition).result, translagatr::kResultNotStationary);
+    EXPECT_EQ(r.fake->count(translagatr::kPicoOpRestartAcquisition), 0);
 
     r.still(20);
-    const gatr2::BrainReply reply = r.control(gatr2::kControlRestartAcquisition);
-    ASSERT_EQ(reply.result, gatr2::kResultPending);
+    const translagatr::BrainReply reply = r.control(translagatr::kControlRestartAcquisition);
+    ASSERT_EQ(reply.result, translagatr::kResultPending);
     const uint16_t rid = static_cast<uint16_t>(r.rid - 1);
-    EXPECT_EQ(r.fake->count(gatr2::kPicoOpRestartAcquisition), 1);
+    EXPECT_EQ(r.fake->count(translagatr::kPicoOpRestartAcquisition), 1);
 
     // completed on the Pico, but no frame of the new epoch yet
-    r.fake->settle(gatr2::kPicoOpRestartAcquisition, PicoRequestState::kCompleted);
-    EXPECT_EQ(repeatControl(r, rid, gatr2::kControlRestartAcquisition).result,
-              gatr2::kResultPending);
-    EXPECT_NE(r.still(1).robot_flags & gatr2::kRobotLocalized, 0);
+    r.fake->settle(translagatr::kPicoOpRestartAcquisition, PicoRequestState::kCompleted);
+    EXPECT_EQ(repeatControl(r, rid, translagatr::kControlRestartAcquisition).result,
+              translagatr::kResultPending);
+    EXPECT_NE(r.still(1).robot_flags & translagatr::kRobotLocalized, 0);
     r.fake->state.acq_epoch = 1;
     r.fake->state.restarts  = 1;
-    EXPECT_EQ(repeatControl(r, rid, gatr2::kControlRestartAcquisition).result,
-              gatr2::kResultOk);
-    EXPECT_EQ(r.fake->count(gatr2::kPicoOpRestartAcquisition), 1);
-    EXPECT_EQ(r.still(3).robot_flags & gatr2::kRobotLocalized, 0);   // counters restarted
+    EXPECT_EQ(repeatControl(r, rid, translagatr::kControlRestartAcquisition).result,
+              translagatr::kResultOk);
+    EXPECT_EQ(r.fake->count(translagatr::kPicoOpRestartAcquisition), 1);
+    EXPECT_EQ(r.still(3).robot_flags & translagatr::kRobotLocalized, 0);   // counters restarted
 }
 
 TEST(BrainRecovery, HealthCarriesThePicoLinkAndItsImuState) {
     // a VEX profile: the Pico IMU state is reported, never used
     Rig r(useFakePico);
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    gatr2::BrainState s = r.still(1);
-    EXPECT_NE(s.health & gatr2::kHealthPicoLink, 0);
-    EXPECT_EQ(s.health & (gatr2::kHealthImuInitializing | gatr2::kHealthImuFailed), 0);
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    translagatr::BrainState s = r.still(1);
+    EXPECT_NE(s.health & translagatr::kHealthPicoLink, 0);
+    EXPECT_EQ(s.health & (translagatr::kHealthImuInitializing | translagatr::kHealthImuFailed), 0);
 
     r.fake->state.status_known     = true;
-    r.fake->state.status.imu_state = gatr2::kPicoImuAligning;
-    EXPECT_NE(r.still(1).health & gatr2::kHealthImuInitializing, 0);
-    r.fake->state.status.imu_state = gatr2::kPicoImuRetrying;
-    EXPECT_NE(r.still(1).health & gatr2::kHealthImuInitializing, 0);
-    r.fake->state.status.imu_state = gatr2::kPicoImuFailed;
+    r.fake->state.status.imu_state = translagatr::kPicoImuAligning;
+    EXPECT_NE(r.still(1).health & translagatr::kHealthImuInitializing, 0);
+    r.fake->state.status.imu_state = translagatr::kPicoImuRetrying;
+    EXPECT_NE(r.still(1).health & translagatr::kHealthImuInitializing, 0);
+    r.fake->state.status.imu_state = translagatr::kPicoImuFailed;
     s                              = r.still(1);
-    EXPECT_NE(s.health & gatr2::kHealthImuFailed, 0);
-    EXPECT_EQ(s.health & gatr2::kHealthImuInitializing, 0);
-    r.fake->state.status.imu_state = gatr2::kPicoImuReady;
+    EXPECT_NE(s.health & translagatr::kHealthImuFailed, 0);
+    EXPECT_EQ(s.health & translagatr::kHealthImuInitializing, 0);
+    r.fake->state.status.imu_state = translagatr::kPicoImuReady;
     r.fake->state.frames_fresh     = false;
     s                              = r.still(1);
-    EXPECT_EQ(s.health & (gatr2::kHealthPicoLink | gatr2::kHealthImuFailed), 0);
-    EXPECT_NE(s.robot_flags & gatr2::kRobotLocalized, 0);   // nothing used was lost
+    EXPECT_EQ(s.health & (translagatr::kHealthPicoLink | translagatr::kHealthImuFailed), 0);
+    EXPECT_NE(s.robot_flags & translagatr::kRobotLocalized, 0);   // nothing used was lost
 }
 
 TEST(BrainRecovery, StillnessReportsZeroVelocityAndMovementClearsIt) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourcePico));
-    gatr2::BrainState s = r.still(1);
-    EXPECT_NE(s.health & gatr2::kHealthStationary, 0);   // still since ready
+    ready(r, perpendicular(translagatr::kImuSourcePico));
+    translagatr::BrainState s = r.still(1);
+    EXPECT_NE(s.health & translagatr::kHealthStationary, 0);   // still since ready
     EXPECT_EQ(r.system->robot().vx_m_s, 0.0);
     EXPECT_EQ(r.system->robot().yaw_rate_rad_s, 0.0);
 
     // moving: not stationary, and the velocity is what the wheels say
     r.counts[0] += 400;
     s = r.cycle().state;
-    EXPECT_EQ(s.health & gatr2::kHealthStationary, 0);
+    EXPECT_EQ(s.health & translagatr::kHealthStationary, 0);
     r.counts[0] += 400;
     r.cycle();
     EXPECT_GT(r.system->robot().vx_m_s, 0.5);
@@ -2139,24 +2183,24 @@ TEST(BrainRecovery, StillnessReportsZeroVelocityAndMovementClearsIt) {
     r.still(30);
     const Pose2D kept = r.pose();
     s                 = r.still(1);
-    EXPECT_NE(s.health & gatr2::kHealthStationary, 0);
+    EXPECT_NE(s.health & translagatr::kHealthStationary, 0);
     EXPECT_EQ(r.system->robot().vx_m_s, 0.0);
     EXPECT_NEAR(r.pose().x_m, kept.x_m, 1e-12);
-    EXPECT_NE(s.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_NE(s.robot_flags & translagatr::kRobotLocalized, 0);
 }
 
 TEST(BrainRecovery, VexStillnessWatchesTheVexRotation) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    EXPECT_NE(r.still(30).health & gatr2::kHealthStationary, 0);
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    EXPECT_NE(r.still(30).health & translagatr::kHealthStationary, 0);
     EXPECT_EQ(r.system->robot().yaw_rate_rad_s, 0.0);
     // the VEX IMU turns while the wheels read nothing: not stationary
-    gatr2::BrainState s;
+    translagatr::BrainState s;
     for (int i = 0; i < 5; ++i) {
         r.theta_mdeg += 200.0;
         s = r.cycle().state;
     }
-    EXPECT_EQ(s.health & gatr2::kHealthStationary, 0);
+    EXPECT_EQ(s.health & translagatr::kHealthStationary, 0);
     EXPECT_NE(r.system->robot().yaw_rate_rad_s, 0.0);
 }
 
@@ -2164,13 +2208,13 @@ TEST(BrainRecovery, VexProfileIsReadyWhileThePicoImuHasFailed) {
     Rig r(useFakePico);
     r.send_gyro                    = false;
     r.fake->state.status_known     = true;
-    r.fake->state.status.imu_state = gatr2::kPicoImuFailed;
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    const gatr2::BrainState s = r.translate({kCpr, 0, 0}, 10);
-    EXPECT_NE(s.robot_flags & gatr2::kRobotLocalized, 0);
-    EXPECT_NE(s.health & gatr2::kHealthGyroFresh, 0);   // the VEX IMU
-    EXPECT_NE(s.health & gatr2::kHealthImuFailed, 0);   // reported, not blocking
-    EXPECT_EQ(s.calibration, gatr2::kCalibrationNone);
+    r.fake->state.status.imu_state = translagatr::kPicoImuFailed;
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    const translagatr::BrainState s = r.translate({kCpr, 0, 0}, 10);
+    EXPECT_NE(s.robot_flags & translagatr::kRobotLocalized, 0);
+    EXPECT_NE(s.health & translagatr::kHealthGyroFresh, 0);   // the VEX IMU
+    EXPECT_NE(s.health & translagatr::kHealthImuFailed, 0);   // reported, not blocking
+    EXPECT_EQ(s.calibration, translagatr::kCalibrationNone);
     r.still(2);
     EXPECT_NEAR(r.pose().x_m, 1.0 + kRevolution, 1e-6);
 }
@@ -2191,15 +2235,15 @@ bool eventNamed(const Rig& r, const std::string& text) {
 
 // Expects the robot unplaced in a new epoch, then placed again by a new
 // SET_POSE and not before.
-void expectLostThenPlacedAgain(Rig& r, const gatr2::BrainState& before) {
-    gatr2::BrainState after = r.still(2);
-    EXPECT_EQ(after.robot_flags & gatr2::kRobotLocalized, 0);
+void expectLostThenPlacedAgain(Rig& r, const translagatr::BrainState& before) {
+    translagatr::BrainState after = r.still(2);
+    EXPECT_EQ(after.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_GT(after.odometry_epoch, before.odometry_epoch);
     after = r.still(10);   // the old SET_POSE never re-applies
-    EXPECT_EQ(after.robot_flags & gatr2::kRobotLocalized, 0);
-    ASSERT_EQ(r.place(1200, 500, 0).result, gatr2::kResultOk);
+    EXPECT_EQ(after.robot_flags & translagatr::kRobotLocalized, 0);
+    ASSERT_EQ(r.place(1200, 500, 0).result, translagatr::kResultOk);
     after = r.still(3);
-    EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_NE(after.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_NEAR(r.pose().x_m, 1.2, 1e-9);
 }
 
@@ -2207,8 +2251,8 @@ void expectLostThenPlacedAgain(Rig& r, const gatr2::BrainState& before) {
 
 TEST(SensorLoss, AStaleVexImuEndsContinuityEvenStandingStill) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    const gatr2::BrainState before = r.still(1);
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    const translagatr::BrainState before = r.still(1);
     const Pose2D            held   = r.pose();
     quietLink(r, 20);   // 400 ms without a Brain request
     EXPECT_NEAR(r.pose().x_m, held.x_m, 1e-9);   // shown where it was
@@ -2219,19 +2263,19 @@ TEST(SensorLoss, AStaleVexImuEndsContinuityEvenStandingStill) {
 
 TEST(SensorLoss, ABlipShorterThanTheLimitKeepsThePlacement) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    const gatr2::BrainState before = r.still(1);
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    const translagatr::BrainState before = r.still(1);
     quietLink(r, 10);   // 200 ms
-    const gatr2::BrainState after = r.still(3);
-    EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+    const translagatr::BrainState after = r.still(3);
+    EXPECT_NE(after.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
     EXPECT_FALSE(eventNamed(r, "sensor lost"));
 }
 
 TEST(SensorLoss, AnInvalidVexSampleIsARestart) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    const gatr2::BrainState before = r.still(1);
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    const translagatr::BrainState before = r.still(1);
     r.vex_valid = false;   // the Brain recalibrates its IMU
     r.cycle();
     r.vex_valid = true;
@@ -2247,7 +2291,7 @@ TEST(SensorLoss, AnInvalidVexSampleIsOneRestart) {
         findChild(root, (std::string(kProfilePath) + "/Timing").c_str())
             ->SetAttribute("on_sensor_loss", "warn");
     });
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
     r.vex_valid = false;
     r.cycle();
     r.vex_valid = true;
@@ -2262,12 +2306,12 @@ TEST(SensorLoss, AnInvalidVexSampleIsOneRestart) {
 
 TEST(SensorLoss, ABrainRestartRestartsTheVexImu) {
     Rig r;
-    const gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourceBrainVex);
+    const translagatr::RobotProfileDoc p = perpendicular(translagatr::kImuSourceBrainVex);
     ready(r, p);
-    const gatr2::BrainState before = r.still(1);
+    const translagatr::BrainState before = r.still(1);
     r.rid = 1;
     r.hello(0x5EED0002);   // a new Brain program: a new session, a new IMU epoch
-    EXPECT_EQ(r.stageAndApply(bytesOf(p)).result, gatr2::kResultOk);   // no boundary
+    EXPECT_EQ(r.stageAndApply(bytesOf(p)).result, translagatr::kResultOk);   // no boundary
     r.still(1);
     EXPECT_TRUE(eventNamed(r, "sensor lost: brain_vex_imu restarted"));
     EXPECT_EQ(r.system->profileBinding()->generation, 1u);
@@ -2277,17 +2321,17 @@ TEST(SensorLoss, ABrainRestartRestartsTheVexImu) {
 TEST(SensorLoss, StaleOrMissingEncodersEndContinuity) {
     {
         Rig r;
-        ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-        const gatr2::BrainState before = r.still(1);
+        ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+        const translagatr::BrainState before = r.still(1);
         quietPico(r, 20);   // no Pico frames for 400 ms
         EXPECT_TRUE(eventNamed(r, "sensor lost: encoder port"));
         expectLostThenPlacedAgain(r, before);
     }
     {
         Rig r;
-        ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-        const gatr2::BrainState before = r.still(1);
-        r.mask_drop = gatr2::kSensorEnc1;   // frames keep coming without port 1
+        ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+        const translagatr::BrainState before = r.still(1);
+        r.mask_drop = translagatr::kSensorEnc1;   // frames keep coming without port 1
         r.still(20);
         r.mask_drop = 0;
         EXPECT_TRUE(eventNamed(r, "sensor lost: encoder port 1 stale"));
@@ -2296,31 +2340,31 @@ TEST(SensorLoss, StaleOrMissingEncodersEndContinuity) {
     {
         // a port the profile does not use never matters
         Rig r;
-        ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-        const gatr2::BrainState before = r.still(1);
-        r.mask_drop = gatr2::kSensorEnc2;
-        const gatr2::BrainState after = r.still(20);
-        EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+        ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+        const translagatr::BrainState before = r.still(1);
+        r.mask_drop = translagatr::kSensorEnc2;
+        const translagatr::BrainState after = r.still(20);
+        EXPECT_NE(after.robot_flags & translagatr::kRobotLocalized, 0);
         EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
     }
 }
 
 TEST(SensorLoss, APicoRebootEndsContinuityAndRestartsTheBias) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourcePico));
-    const gatr2::BrainState before = r.still(1);
-    ASSERT_EQ(before.calibration, gatr2::kCalibrationDone);
+    ready(r, perpendicular(translagatr::kImuSourcePico));
+    const translagatr::BrainState before = r.still(1);
+    ASSERT_EQ(before.calibration, translagatr::kCalibrationDone);
     const Pose2D held = r.pose();
     // the Pico restarts: its clock and its counters start over
     r.pico_zero               = r.now - 20;
     r.counts                  = {};
-    const gatr2::BrainState s = r.still(1);
-    EXPECT_NE(s.calibration, gatr2::kCalibrationDone);   // the IMU restarted with it
-    EXPECT_EQ(s.robot_flags & gatr2::kRobotLocalized, 0);
+    const translagatr::BrainState s = r.still(1);
+    EXPECT_NE(s.calibration, translagatr::kCalibrationDone);   // the IMU restarted with it
+    EXPECT_EQ(s.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_TRUE(eventNamed(r, "restarted"));
     EXPECT_NEAR(r.pose().x_m, held.x_m, 1e-9);
     EXPECT_NEAR(r.pose().y_m, held.y_m, 1e-9);
-    EXPECT_EQ(r.still(40).calibration, gatr2::kCalibrationDone);
+    EXPECT_EQ(r.still(40).calibration, translagatr::kCalibrationDone);
     expectLostThenPlacedAgain(r, before);
 }
 
@@ -2329,64 +2373,64 @@ TEST(SensorLoss, APicoRebootEndsContinuityAndRestartsTheBias) {
 // withdrawn with the old ones.
 TEST(SensorLoss, AnEncoderRestartEndsContinuityWithoutPicoIdentity) {
     Rig r(useFakePico);   // the fake link never reports a reboot
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    const gatr2::BrainState before = r.still(1);
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    const translagatr::BrainState before = r.still(1);
     r.pico_zero = r.now - 20;
     r.counts    = {};
-    EXPECT_EQ(r.place(1500, 500, 0).result, gatr2::kResultPending);
-    const gatr2::BrainState after = r.still(2);
+    EXPECT_EQ(r.place(1500, 500, 0).result, translagatr::kResultPending);
+    const translagatr::BrainState after = r.still(2);
     EXPECT_TRUE(eventNamed(r, "sensor lost: encoder port 0 restarted"));
-    EXPECT_EQ(after.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_EQ(after.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_GT(after.odometry_epoch, before.odometry_epoch);
-    ASSERT_EQ(r.place(1200, 500, 0).result, gatr2::kResultOk);
-    EXPECT_NE(r.still(1).robot_flags & gatr2::kRobotLocalized, 0);
+    ASSERT_EQ(r.place(1200, 500, 0).result, translagatr::kResultOk);
+    EXPECT_NE(r.still(1).robot_flags & translagatr::kRobotLocalized, 0);
 }
 
 TEST(SensorLoss, APicoImuMattersOnlyWhenTheProfileUsesIt) {
     {
         Rig r;
-        ready(r, perpendicular(gatr2::kImuSourcePico));
-        const gatr2::BrainState before = r.still(1);
+        ready(r, perpendicular(translagatr::kImuSourcePico));
+        const translagatr::BrainState before = r.still(1);
         r.send_gyro = false;   // the IMU drops out, standing still
         r.still(20);
         r.send_gyro = true;
         EXPECT_TRUE(eventNamed(r, "sensor lost: pico_imu port 0 stale"));
-        EXPECT_EQ(r.still(1).calibration, gatr2::kCalibrationDone);   // a gap is no restart
+        EXPECT_EQ(r.still(1).calibration, translagatr::kCalibrationDone);   // a gap is no restart
         expectLostThenPlacedAgain(r, before);
     }
     {
         Rig r(useFakePico);
-        ready(r, perpendicular(gatr2::kImuSourcePico));
-        const gatr2::BrainState before = r.still(1);
+        ready(r, perpendicular(translagatr::kImuSourcePico));
+        const translagatr::BrainState before = r.still(1);
         r.fake->state.status_known     = true;
-        r.fake->state.status.imu_state = gatr2::kPicoImuFailed;
+        r.fake->state.status.imu_state = translagatr::kPicoImuFailed;
         r.still(1);
         EXPECT_TRUE(eventNamed(r, "sensor lost: pico_imu failed"));
-        r.fake->state.status.imu_state = gatr2::kPicoImuReady;
+        r.fake->state.status.imu_state = translagatr::kPicoImuReady;
         expectLostThenPlacedAgain(r, before);
     }
     {
         Rig r;
-        ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-        const gatr2::BrainState before = r.still(1);
+        ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+        const translagatr::BrainState before = r.still(1);
         r.send_gyro                    = false;
-        const gatr2::BrainState after  = r.still(20);
-        EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+        const translagatr::BrainState after  = r.still(20);
+        EXPECT_NE(after.robot_flags & translagatr::kRobotLocalized, 0);
         EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
     }
 }
 
 TEST(SensorLoss, PlacingWhileASourceIsStillLostDoesNotHold) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourcePico));
+    ready(r, perpendicular(translagatr::kImuSourcePico));
     r.send_gyro = false;
     r.still(20);
-    EXPECT_EQ(r.place(1200, 500, 0).result, gatr2::kResultOk);
-    EXPECT_EQ(r.still(2).robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_EQ(r.place(1200, 500, 0).result, translagatr::kResultOk);
+    EXPECT_EQ(r.still(2).robot_flags & translagatr::kRobotLocalized, 0);
     r.send_gyro = true;
     r.still(2);
-    ASSERT_EQ(r.place(1200, 500, 0).result, gatr2::kResultOk);
-    EXPECT_NE(r.still(3).robot_flags & gatr2::kRobotLocalized, 0);
+    ASSERT_EQ(r.place(1200, 500, 0).result, translagatr::kResultOk);
+    EXPECT_NE(r.still(3).robot_flags & translagatr::kRobotLocalized, 0);
 }
 
 TEST(SensorLoss, WarnOnlyKeepsThePoseAndLogsOnce) {
@@ -2394,11 +2438,11 @@ TEST(SensorLoss, WarnOnlyKeepsThePoseAndLogsOnce) {
         findChild(root, (std::string(kProfilePath) + "/Timing").c_str())
             ->SetAttribute("on_sensor_loss", "warn");
     });
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    const gatr2::BrainState before = r.still(1);
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    const translagatr::BrainState before = r.still(1);
     quietLink(r, 40);
-    const gatr2::BrainState after = r.still(2);
-    EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+    const translagatr::BrainState after = r.still(2);
+    EXPECT_NE(after.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
     int warnings = 0;
     for (const RuntimeEvent& e : r.system->events()) {
@@ -2413,28 +2457,28 @@ TEST(SensorLoss, GapsUnderTheLimitLoseNoTravelWhileRolling) {
     const std::array<double, 3> half = {kCpr / 2.0, 0, 0};
     {
         Rig r;
-        ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-        const gatr2::BrainState before = r.still(1);
+        ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+        const translagatr::BrainState before = r.still(1);
         r.translate(half, 10);
         quietLink(r, 10, half);   // the next VEX sample 220 ms after the last
         r.translate(half, 10);
         quietPico(r, 10, half);   // the next wheel sample 220 ms after the last
         r.translate(half, 10);
-        const gatr2::BrainState after = r.still(2);
-        EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+        const translagatr::BrainState after = r.still(2);
+        EXPECT_NE(after.robot_flags & translagatr::kRobotLocalized, 0);
         EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
         EXPECT_NEAR(r.pose().x_m, 1.0 + 2.5 * kRevolution, 1e-6);
         EXPECT_FALSE(eventNamed(r, "sensor lost") || eventNamed(r, "motion lost"));
     }
     {
         Rig r;
-        ready(r, perpendicular(gatr2::kImuSourcePico));
-        const gatr2::BrainState before = r.still(1);
+        ready(r, perpendicular(translagatr::kImuSourcePico));
+        const translagatr::BrainState before = r.still(1);
         r.translate(half, 10);
         quietPico(r, 10, half);   // a 220 ms gyro and wheel gap, under max_gap_ms
         r.translate(half, 10);
-        const gatr2::BrainState after = r.still(2);
-        EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+        const translagatr::BrainState after = r.still(2);
+        EXPECT_NE(after.robot_flags & translagatr::kRobotLocalized, 0);
         EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
         EXPECT_NEAR(r.pose().x_m, 1.0 + 1.5 * kRevolution, 1e-6);
         EXPECT_FALSE(eventNamed(r, "sensor lost") || eventNamed(r, "motion lost"));
@@ -2450,7 +2494,7 @@ TEST(SensorLoss, AGapPastTheLimitBetweenChecksEndsContinuity) {
         SCOPED_TRACE(why);
         Rig r;
         ready(r, perpendicular(imu_source));
-        const gatr2::BrainState before = r.still(1);
+        const translagatr::BrainState before = r.still(1);
         r.translate(half, 10);
         if (link_gap) {
             quietLink(r, 12, half);
@@ -2462,17 +2506,17 @@ TEST(SensorLoss, AGapPastTheLimitBetweenChecksEndsContinuity) {
         EXPECT_FALSE(eventNamed(r, "sensor lost"));
         expectLostThenPlacedAgain(r, before);
     };
-    run(gatr2::kImuSourceBrainVex, true, "no VEX IMU and wheel pair for 260 ms");
-    run(gatr2::kImuSourceBrainVex, false, "no VEX IMU and wheel pair for 260 ms");
-    run(gatr2::kImuSourcePico, false, "gyro gap");
+    run(translagatr::kImuSourceBrainVex, true, "no VEX IMU and wheel pair for 260 ms");
+    run(translagatr::kImuSourceBrainVex, false, "no VEX IMU and wheel pair for 260 ms");
+    run(translagatr::kImuSourcePico, false, "gyro gap");
 }
 
 // A VEX rotation that jumps (an unannounced zeroing) is no measurement: the
 // bench model drops that step, and the placement goes with it.
 TEST(SensorLoss, AVexRotationJumpEndsContinuity) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    const gatr2::BrainState before = r.still(1);
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    const translagatr::BrainState before = r.still(1);
     r.theta_mdeg += 90000.0;   // 90 degrees within one 20 ms poll
     r.still(1);
     EXPECT_TRUE(eventNamed(r, "motion lost: profile_motion: VEX IMU rotation jumped"));
@@ -2483,17 +2527,17 @@ TEST(SensorLoss, AVexRotationJumpEndsContinuity) {
 // with the earlier ones.
 TEST(SensorLoss, APlacementInTheCycleOfADroppedIntervalIsWithdrawn) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourcePico));
-    const gatr2::BrainState before = r.still(1);
+    ready(r, perpendicular(translagatr::kImuSourcePico));
+    const translagatr::BrainState before = r.still(1);
     quietPico(r, 12, {kCpr / 2.0, 0, 0});
-    EXPECT_EQ(r.place(1500, 500, 0).result, gatr2::kResultPending);   // with the 260 ms frame
+    EXPECT_EQ(r.place(1500, 500, 0).result, translagatr::kResultPending);   // with the 260 ms frame
     EXPECT_FALSE(r.system->robotFeed()->latest().initialized);   // published at once
-    const gatr2::BrainState after = r.still(2);
+    const translagatr::BrainState after = r.still(2);
     EXPECT_TRUE(eventNamed(r, "motion lost: profile_motion: gyro gap"));
-    EXPECT_EQ(after.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_EQ(after.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_GT(after.odometry_epoch, before.odometry_epoch);
-    ASSERT_EQ(r.place(1200, 500, 0).result, gatr2::kResultOk);
-    EXPECT_NE(r.still(1).robot_flags & gatr2::kRobotLocalized, 0);
+    ASSERT_EQ(r.place(1200, 500, 0).result, translagatr::kResultOk);
+    EXPECT_NE(r.still(1).robot_flags & translagatr::kRobotLocalized, 0);
 }
 
 // The Brain VEX IMU bench model takes its step limit from sensor_loss_ms,
@@ -2503,28 +2547,28 @@ TEST(SensorLoss, TheVexStepLimitIsTheProfileLossLimit) {
         findChild(root, (std::string(kProfilePath) + "/Timing").c_str())
             ->SetAttribute("sensor_loss_ms", 400);
     });
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
-    const gatr2::BrainState before = r.still(1);
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    const translagatr::BrainState before = r.still(1);
     const std::array<double, 3> half = {kCpr / 2.0, 0, 0};
     quietLink(r, 16, half);   // 340 ms between VEX samples, rolling
     r.translate(half, 10);
-    gatr2::BrainState s = r.still(2);
-    EXPECT_NE(s.robot_flags & gatr2::kRobotLocalized, 0);
+    translagatr::BrainState s = r.still(2);
+    EXPECT_NE(s.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_NEAR(r.pose().x_m, 1.0 + kRevolution, 1e-6);
     quietLink(r, 20, half);   // 420 ms
     s = r.still(2);
-    EXPECT_EQ(s.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_EQ(s.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_GT(s.odometry_epoch, before.odometry_epoch);
 
     // the encoder sensors' own freshness (Encoders stale_after_ms, 250) still
     // ends a step: 300 ms without Pico frames loses the placement
-    ASSERT_EQ(r.place(1200, 500, 0).result, gatr2::kResultOk);
-    const gatr2::BrainState placed = r.still(2);
-    ASSERT_NE(placed.robot_flags & gatr2::kRobotLocalized, 0);
+    ASSERT_EQ(r.place(1200, 500, 0).result, translagatr::kResultOk);
+    const translagatr::BrainState placed = r.still(2);
+    ASSERT_NE(placed.robot_flags & translagatr::kRobotLocalized, 0);
     quietPico(r, 15);
     s = r.still(2);
     EXPECT_TRUE(eventNamed(r, "missing or stale: place again"));
-    EXPECT_EQ(s.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_EQ(s.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_GT(s.odometry_epoch, placed.odometry_epoch);
 }
 
@@ -2532,7 +2576,7 @@ TEST(SensorLoss, TheVexStepLimitIsTheProfileLossLimit) {
 // drop under a new profile still ends continuity.
 TEST(SensorLoss, ADroppedIntervalAfterANewProfileStillCounts) {
     Rig                    r;
-    gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourceBrainVex);
+    translagatr::RobotProfileDoc p = perpendicular(translagatr::kImuSourceBrainVex);
     ready(r, p);
     quietLink(r, 12, {kCpr / 2.0, 0, 0});
     r.still(2);
@@ -2540,12 +2584,12 @@ TEST(SensorLoss, ADroppedIntervalAfterANewProfileStillCounts) {
     p.wheels[0].travel_scale_ppm = 1001000;   // a calibrated scale: a new profile
     ASSERT_TRUE(r.applyProfile(p));
     r.still(3);
-    ASSERT_EQ(r.place(1000, 500, 0).result, gatr2::kResultOk);
-    const gatr2::BrainState before = r.still(2);
-    ASSERT_NE(before.robot_flags & gatr2::kRobotLocalized, 0);
+    ASSERT_EQ(r.place(1000, 500, 0).result, translagatr::kResultOk);
+    const translagatr::BrainState before = r.still(2);
+    ASSERT_NE(before.robot_flags & translagatr::kRobotLocalized, 0);
     quietLink(r, 12, {kCpr / 2.0, 0, 0});
-    const gatr2::BrainState after = r.still(2);
-    EXPECT_EQ(after.robot_flags & gatr2::kRobotLocalized, 0);
+    const translagatr::BrainState after = r.still(2);
+    EXPECT_EQ(after.robot_flags & translagatr::kRobotLocalized, 0);
     EXPECT_GT(after.odometry_epoch, before.odometry_epoch);
 }
 
@@ -2553,18 +2597,18 @@ TEST(SensorLoss, ADroppedIntervalAfterANewProfileStillCounts) {
 // meanwhile is never integrated, so a placed robot that moves before the
 // window completes is unplaced. Left still, the placement holds.
 TEST(BrainRecovery, MovingWhileTheGyroBiasCalibratesEndsContinuity) {
-    const gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourcePico);
+    const translagatr::RobotProfileDoc p = perpendicular(translagatr::kImuSourcePico);
     {
         // CONTROL 1 on a placed robot, then it rolls
         Rig r;
         ready(r, p);
         r.still(20);
-        const gatr2::BrainState before = r.still(1);
-        ASSERT_EQ(r.control(gatr2::kControlRecalibrate).result, gatr2::kResultOk);
+        const translagatr::BrainState before = r.still(1);
+        ASSERT_EQ(r.control(translagatr::kControlRecalibrate).result, translagatr::kResultOk);
         r.translate({kCpr, 0, 0}, 10);
         EXPECT_TRUE(eventNamed(r, "motion lost: profile_motion:"));
         EXPECT_TRUE(eventNamed(r, "while the gyro bias calibrated"));
-        EXPECT_EQ(r.still(60).calibration, gatr2::kCalibrationDone);
+        EXPECT_EQ(r.still(60).calibration, translagatr::kCalibrationDone);
         expectLostThenPlacedAgain(r, before);
     }
     {
@@ -2574,10 +2618,10 @@ TEST(BrainRecovery, MovingWhileTheGyroBiasCalibratesEndsContinuity) {
         r.hello();
         r.still(3);
         ASSERT_TRUE(r.applyProfile(p));
-        ASSERT_EQ(r.place(1000, 500, 0).result, gatr2::kResultOk);
-        const gatr2::BrainState before = r.still(1);
-        EXPECT_NE(before.robot_flags & gatr2::kRobotLocalized, 0);
-        EXPECT_NE(before.calibration, gatr2::kCalibrationDone);
+        ASSERT_EQ(r.place(1000, 500, 0).result, translagatr::kResultOk);
+        const translagatr::BrainState before = r.still(1);
+        EXPECT_NE(before.robot_flags & translagatr::kRobotLocalized, 0);
+        EXPECT_NE(before.calibration, translagatr::kCalibrationDone);
         r.translate({kCpr, 0, 0}, 10);
         EXPECT_TRUE(eventNamed(r, "moved while the gyro bias calibrated"));
         expectLostThenPlacedAgain(r, before);
@@ -2589,17 +2633,17 @@ TEST(BrainRecovery, MovingWhileTheGyroBiasCalibratesEndsContinuity) {
         r.hello();
         r.still(3);
         ASSERT_TRUE(r.applyProfile(p));
-        ASSERT_EQ(r.place(1000, 500, 0).result, gatr2::kResultOk);
-        const gatr2::BrainState before = r.still(1);
-        const gatr2::BrainState after  = r.still(40);
-        EXPECT_EQ(after.calibration, gatr2::kCalibrationDone);
-        EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+        ASSERT_EQ(r.place(1000, 500, 0).result, translagatr::kResultOk);
+        const translagatr::BrainState before = r.still(1);
+        const translagatr::BrainState after  = r.still(40);
+        EXPECT_EQ(after.calibration, translagatr::kCalibrationDone);
+        EXPECT_NE(after.robot_flags & translagatr::kRobotLocalized, 0);
         EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
         EXPECT_FALSE(eventNamed(r, "sensor lost") || eventNamed(r, "motion lost"));
         r.translate({kCpr, 0, 0}, 10);   // calibrated: rolling is measured
         r.still(2);
         EXPECT_NEAR(r.pose().x_m, 1.0 + kRevolution, 1e-6);
-        EXPECT_NE(r.still(1).robot_flags & gatr2::kRobotLocalized, 0);
+        EXPECT_NE(r.still(1).robot_flags & translagatr::kRobotLocalized, 0);
     }
 }
 
@@ -2611,23 +2655,23 @@ TEST(BrainRecovery, CalibrationFailsAfterItsBoundAndRecalibrateRetries) {
     ASSERT_TRUE(r.ok()) << r.build_error;
     r.hello();
     r.still(3);
-    ASSERT_TRUE(r.applyProfile(perpendicular(gatr2::kImuSourcePico)));
-    gatr2::BrainState s;
+    ASSERT_TRUE(r.applyProfile(perpendicular(translagatr::kImuSourcePico)));
+    translagatr::BrainState s;
     for (int i = 0; i < 70; ++i) {   // never still for a window
         r.counts[0] += 100;
         s = r.cycle().state;
     }
-    EXPECT_EQ(s.calibration, gatr2::kCalibrationFailed);
-    EXPECT_EQ(s.robot_flags & gatr2::kRobotPoseValid, 0);            // nothing integrated
-    EXPECT_EQ(r.still(40).calibration, gatr2::kCalibrationFailed);   // bounded, stays
-    const gatr2::BrainReply retry = r.control(gatr2::kControlRecalibrate);
-    EXPECT_EQ(retry.result, gatr2::kResultOk);
-    EXPECT_EQ(r.still(40).calibration, gatr2::kCalibrationDone);
+    EXPECT_EQ(s.calibration, translagatr::kCalibrationFailed);
+    EXPECT_EQ(s.robot_flags & translagatr::kRobotPoseValid, 0);            // nothing integrated
+    EXPECT_EQ(r.still(40).calibration, translagatr::kCalibrationFailed);   // bounded, stays
+    const translagatr::BrainReply retry = r.control(translagatr::kControlRecalibrate);
+    EXPECT_EQ(retry.result, translagatr::kResultOk);
+    EXPECT_EQ(r.still(40).calibration, translagatr::kCalibrationDone);
 }
 
 TEST(BrainProfileInspection, SensorLossAndStillnessShowInTheSnapshot) {
     Rig r;
-    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
     r.still(30);
     std::string snap = snapshotDocument(*r.system, InspectionServiceStats{}, hostTime(r.now));
     EXPECT_TRUE(has(snap, "\"stationary\":true,\"continuity_breaks\":0")) << snap;
@@ -2652,4 +2696,231 @@ TEST(BrainProfileInspection, SensorLossAndStillnessShowInTheSnapshot) {
     snap = snapshotDocument(*r.system, InspectionServiceStats{}, hostTime(r.now));
     EXPECT_TRUE(has(snap, "\"link_open\":true"));
     EXPECT_TRUE(has(snap, "\"last_request_age_ms\":0"));
+}
+
+// ---- camera preview without field correction ---------------------------------
+
+namespace
+{
+
+const char* kCameraConfig = "brain_profile_usb_camera.xml";
+
+Edit cameraType(const char* type) {
+    return [type](tinyxml2::XMLElement* root) {
+        tinyxml2::XMLElement* resources = root->FirstChildElement("Resources");
+        for (auto* e = resources->FirstChildElement("Resource"); e != nullptr;
+             e = e->NextSiblingElement("Resource")) {
+            if (ConfigNode{e}.attr("id") == "front_camera_device") {
+                e->DeleteChildren();
+                e->SetAttribute("type", type);
+            }
+        }
+    };
+}
+
+// The perpendicular VEX profile on the camera configuration: the same
+// placement and axis checks as without a camera.
+void cameraConfigLocalizes(Rig& r) {
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    r.translate({kCpr, 0, 0}, 10);
+    r.translate({0, kCpr, 0}, 10);
+    r.still(3);
+    EXPECT_NEAR(r.pose().x_m, 1.0 + kRevolution, 1e-6);
+    EXPECT_NEAR(r.pose().y_m, 0.5 + kRevolution, 1e-6);
+    EXPECT_TRUE(r.system->robot().valid);
+    EXPECT_TRUE(r.system->robot().initialized);
+    // no field correction exists: the world estimator is noop and the field
+    // keeps its nominal definition
+    const auto field = r.system->fieldSnapshot();
+    ASSERT_NE(field, nullptr);
+    EXPECT_TRUE(field->observations.empty());
+    EXPECT_TRUE(field->associations.empty());
+    for (const auto& kv : field->field.objects) {
+        EXPECT_FALSE(kv.second.observed) << kv.first.value;
+        EXPECT_NE(kv.second.source, EstimateSource::kObserved) << kv.first.value;
+    }
+}
+
+} // namespace
+
+TEST(BrainProfileCamera, PreviewConfigIsTheUsbConfigPlusOnlyTheCamera) {
+    const auto load = [](const char* name, tinyxml2::XMLDocument& doc) {
+        ResolvedConfiguration config;
+        std::string           err;
+        ASSERT_TRUE(resolveConfiguration(std::string(NAVIGATR_CONFIG_DIR) + "/override/" + name,
+                                         config, err))
+            << err;
+        ASSERT_EQ(doc.Parse(config.xml.c_str()), tinyxml2::XML_SUCCESS);
+    };
+    const auto print = [](const tinyxml2::XMLNode* e) {
+        tinyxml2::XMLPrinter printer;
+        e->Accept(&printer);
+        return std::string(printer.CStr());
+    };
+    // comments explain each file differently; only elements must match
+    std::function<void(tinyxml2::XMLNode*)> uncomment = [&](tinyxml2::XMLNode* n) {
+        for (tinyxml2::XMLNode* c = n->FirstChild(); c != nullptr;) {
+            tinyxml2::XMLNode* next = c->NextSibling();
+            if (c->ToComment() != nullptr) {
+                n->DeleteChild(c);
+            } else {
+                uncomment(c);
+            }
+            c = next;
+        }
+    };
+    tinyxml2::XMLDocument usb, camera;
+    load("brain_profile_usb.xml", usb);
+    load(kCameraConfig, camera);
+    uncomment(&usb);
+    uncomment(&camera);
+
+    // the camera adds one resource and one sensor, and nothing reads the sensor
+    tinyxml2::XMLElement* resources = camera.RootElement()->FirstChildElement("Resources");
+    tinyxml2::XMLElement* device    = nullptr;
+    for (auto* e = resources->FirstChildElement("Resource"); e != nullptr;
+         e = e->NextSiblingElement("Resource")) {
+        if (ConfigNode{e}.attr("id") == "front_camera_device") {
+            device = e;
+        }
+    }
+    ASSERT_NE(device, nullptr);
+    EXPECT_EQ(ConfigNode{device}.attr("type"), "libcamera_camera");
+    EXPECT_EQ(device->FirstChildElement("Calibration"), nullptr);   // preview needs none
+    resources->DeleteChild(device);
+    tinyxml2::XMLElement* sensors = camera.RootElement()->FirstChildElement("Sensors");
+    ASSERT_NE(sensors, nullptr);
+    const std::string pipeline = print(findChild(camera.RootElement(), "Pipeline"));
+    EXPECT_EQ(pipeline.find("front_camera"), std::string::npos);
+    camera.RootElement()->DeleteChild(sensors);
+
+    EXPECT_EQ(print(findChild(usb.RootElement(), "Resources")),
+              print(findChild(camera.RootElement(), "Resources")));
+    EXPECT_EQ(print(findChild(usb.RootElement(), "Pipeline")), pipeline);
+    // the world estimator stays noop: no detector, no association, no landmark update
+    tinyxml2::XMLElement* world = findChild(camera.RootElement(), "Pipeline/WorldEstimation");
+    ASSERT_NE(world, nullptr);
+    EXPECT_EQ(ConfigNode{world->FirstChildElement("Estimator")}.attr("type"), "noop");
+
+    // preview is bounded by the inspection budget
+    const tinyxml2::XMLElement* inspection = camera.RootElement()->FirstChildElement("Inspection");
+    ASSERT_NE(inspection, nullptr);
+    EXPECT_STREQ(inspection->Attribute("preview_hz"), "5");
+    EXPECT_STREQ(inspection->Attribute("preview_max_width"), "640");
+}
+
+TEST(BrainProfileCamera, MissingCameraNeverStopsLocalization) {
+    Rig r(kCameraConfig, cameraType("test_dead_camera"));
+    ASSERT_TRUE(r.ok()) << r.build_error;
+    cameraConfigLocalizes(r);
+    const SensorMap& sensors = r.system->sensorMap();
+    const auto       camera  = sensors.find(SensorId{"front_camera"});
+    ASSERT_NE(camera, sensors.end());
+    EXPECT_NE(camera->second.state, SourceState::kValid);
+    EXPECT_FALSE(camera->second.latest.has_value());
+    EXPECT_TRUE(r.system->detectionFrames().empty());
+
+    // the Brain sees a healthy, placed robot throughout
+    const translagatr::BrainState s = r.still(2);
+    EXPECT_EQ(s.robot_flags & (translagatr::kRobotPoseValid | translagatr::kRobotLocalized),
+              translagatr::kRobotPoseValid | translagatr::kRobotLocalized);
+    EXPECT_EQ(s.health & translagatr::kHealthVisionAlive, 0);
+}
+
+TEST(BrainProfileCamera, LiveCameraPreviewsRawFramesAndCorrectsNothing) {
+    Rig r(kCameraConfig, cameraType("test_live_camera"));
+    ASSERT_TRUE(r.ok()) << r.build_error;
+    cameraConfigLocalizes(r);
+    const auto frames = r.system->detectionFrames();
+    const auto it     = frames.find(SensorId{"front_camera"});
+    ASSERT_NE(it, frames.end());
+    EXPECT_FALSE(it->second->has_observations);   // preview only, nothing decoded
+    EXPECT_FALSE(it->second->has_trace);
+    EXPECT_EQ(it->second->width_px, 16);
+    EXPECT_EQ(it->second->intrinsics, nullptr);   // uncalibrated, metric output unavailable
+}
+
+TEST(BrainProfileCamera, SameProfileSamePoseWithAndWithoutTheCamera) {
+    Rig plain;
+    Rig camera(kCameraConfig, cameraType("test_live_camera"));
+    ASSERT_TRUE(plain.ok()) << plain.build_error;
+    ASSERT_TRUE(camera.ok()) << camera.build_error;
+    for (Rig* r : {&plain, &camera}) {
+        ready(*r, perpendicular(translagatr::kImuSourceBrainVex));
+        r->translate({kCpr / 3.0, -kCpr / 5.0, 0}, 12);
+        r->still(2);
+    }
+    EXPECT_DOUBLE_EQ(plain.pose().x_m, camera.pose().x_m);
+    EXPECT_DOUBLE_EQ(plain.pose().y_m, camera.pose().y_m);
+    EXPECT_DOUBLE_EQ(plain.pose().heading_rad, camera.pose().heading_rad);
+}
+
+// ---- Pico diagnostics and attitude in the Brain profile configs -----------------
+
+TEST(BrainProfileConfigs, EveryBrainProfileConfigAsksForPicoDiagnostics) {
+    for (const char* name : {"brain_profile_usb.xml", "brain_profile_rs485.xml", kCameraConfig}) {
+        ResolvedConfiguration config;
+        std::string           err;
+        ASSERT_TRUE(resolveConfiguration(std::string(NAVIGATR_CONFIG_DIR) + "/override/" + name,
+                                         config, err))
+            << err;
+        tinyxml2::XMLDocument doc;
+        ASSERT_EQ(doc.Parse(config.xml.c_str()), tinyxml2::XML_SUCCESS);
+        const tinyxml2::XMLElement* found = nullptr;
+        tinyxml2::XMLElement* resources   = doc.RootElement()->FirstChildElement("Resources");
+        for (auto* e = resources->FirstChildElement("Resource"); e != nullptr;
+             e = e->NextSiblingElement("Resource")) {
+            if (ConfigNode{e}.attr("type") == "pico_telemetry") {
+                found = e->FirstChildElement("Diagnostics");
+            }
+        }
+        ASSERT_NE(found, nullptr) << name;
+        EXPECT_STREQ(found->Attribute("hz"), "1") << name;
+    }
+}
+
+TEST(BrainProfile, VexProfileShowsTheTelemetryTiltAsAttitude) {
+    Rig r;
+    ready(r, perpendicular(translagatr::kImuSourceBrainVex));
+    // configured but nothing measured: unavailable, never an invented tilt
+    Attitude a = r.system->robot().attitude;
+    EXPECT_FALSE(a.valid);
+    EXPECT_EQ(a.source, kProfileAttitudeId);
+    EXPECT_FALSE(a.measuredAt.isSet());
+
+    const Pose2D before = r.pose();
+    translagatr::BrainRequest t = r.request(translagatr::kOpTelemetry);
+    t.telemetry.flags      = translagatr::kTelemetryAttitude | translagatr::kTelemetryMotion;
+    t.telemetry.stamp_ms   = static_cast<uint32_t>(r.now);
+    t.telemetry.roll_cdeg  = -500;
+    t.telemetry.pitch_cdeg = 250;
+    t.telemetry.cmd_vx_mm_s = 900;   // a command report changes nothing on the Pi
+    r.picoFrame();
+    EXPECT_EQ(r.one(t).result, translagatr::kResultOk);
+    a = r.system->robot().attitude;
+    ASSERT_TRUE(a.valid);
+    double roll = 0, pitch = 0, yaw = 0;
+    attitudeEuler(a, roll, pitch, yaw);
+    EXPECT_NEAR(radToDeg(roll), -5.0, 1e-9);
+    EXPECT_NEAR(radToDeg(pitch), 2.5, 1e-9);
+    EXPECT_DOUBLE_EQ(r.pose().x_m, before.x_m);
+    EXPECT_DOUBLE_EQ(r.pose().y_m, before.y_m);
+
+    // no new report: stale after 250 ms, the pose still valid and placed
+    r.still(14);
+    a = r.system->robot().attitude;
+    EXPECT_FALSE(a.valid);
+    EXPECT_TRUE(a.assumed_level);
+    EXPECT_TRUE(a.measuredAt.isSet());
+    EXPECT_TRUE(r.system->robot().valid);
+    EXPECT_TRUE(r.system->robot().initialized);
+}
+
+TEST(BrainProfile, PicoImuProfilesCarryNoAttitude) {
+    Rig r;
+    ready(r, perpendicular(translagatr::kImuSourcePico));
+    const Attitude a = r.system->robot().attitude;
+    EXPECT_FALSE(a.valid);
+    EXPECT_TRUE(a.assumed_level);
+    EXPECT_TRUE(a.source.empty());   // no source configured: assumed level
 }

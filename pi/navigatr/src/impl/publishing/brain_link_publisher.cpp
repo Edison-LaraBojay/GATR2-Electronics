@@ -6,6 +6,10 @@
 #include <cmath>
 #include <utility>
 
+#include <cstdio>
+
+#include "diagnostics/hub.h"
+#include "impl/commands/brain_link_commands.h"
 #include "math/angles.h"
 #include "resources/resource_store.h"
 #include "runtime/pico_control_ref.h"
@@ -17,14 +21,14 @@ namespace navigatr
 namespace
 {
 
-static_assert(static_cast<uint8_t>(BiasCalibration::kNone) == gatr2::kCalibrationNone &&
-                  static_cast<uint8_t>(BiasCalibration::kRunning) == gatr2::kCalibrationRunning &&
-                  static_cast<uint8_t>(BiasCalibration::kDone) == gatr2::kCalibrationDone &&
+static_assert(static_cast<uint8_t>(BiasCalibration::kNone) == translagatr::kCalibrationNone &&
+                  static_cast<uint8_t>(BiasCalibration::kRunning) == translagatr::kCalibrationRunning &&
+                  static_cast<uint8_t>(BiasCalibration::kDone) == translagatr::kCalibrationDone &&
                   static_cast<uint8_t>(BiasCalibration::kWaitingStill) ==
-                      gatr2::kCalibrationWaitingStill &&
+                      translagatr::kCalibrationWaitingStill &&
                   static_cast<uint8_t>(BiasCalibration::kWaitingData) ==
-                      gatr2::kCalibrationWaitingData &&
-                  static_cast<uint8_t>(BiasCalibration::kFailed) == gatr2::kCalibrationFailed,
+                      translagatr::kCalibrationWaitingData &&
+                  static_cast<uint8_t>(BiasCalibration::kFailed) == translagatr::kCalibrationFailed,
               "BiasCalibration values are the wire CalibrationState values");
 
 int32_t toWireMm(double meters) {
@@ -125,6 +129,12 @@ std::unique_ptr<Publishing> BrainLinkPublisher::create(const ConfigNode& node,
     }
     publisher->diagnostics_id_ = link_id.value;
     publisher->profile_host_   = context.brain_profile;
+    if (context.diagnostics != nullptr) {
+        publisher->hub_       = context.diagnostics;
+        publisher->source_id_ = context.diagnostics->sourceId(link_id.value);
+        // the commands slot, built first, named the monitor and its kind
+        publisher->monitor_ = context.diagnostics->links().monitor(link_id.value, "brain_serial");
+    }
 
     const ConfigNode health = node.child("Health");
     if (health.valid() && publisher->profile_host_ != nullptr &&
@@ -195,6 +205,45 @@ void BrainLinkPublisher::reset() {
     }
 }
 
+// The reply as the link took it: attempted versus accepted bytes, the
+// decoded summary, and the processed request's record completed with the
+// result and length actually sent (0 when nothing went out).
+void BrainLinkPublisher::noteReply(const translagatr::BrainReply& reply, const uint8_t* frame,
+                                   uint16_t len, const SerialWriteResult& written) {
+    if (monitor_ == nullptr) {
+        return;
+    }
+    // a SerialLink write is whole or nothing: a refused one (expired window,
+    // input pending, error) was attempted and accepted nothing
+    monitor_->tx(frame, len, written.ok ? len : 0);
+    std::string fields;
+    if (monitor_->decodedOn()) {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "rid=%u result=%s%s", static_cast<unsigned>(reply.request_id),
+                      brainResultName(reply.result),
+                      written.ok              ? ""
+                      : written.expired       ? " not sent: window expired"
+                      : written.input_pending ? " not sent: input pending"
+                                              : " write failed");
+        fields = buf;
+    }
+    monitor_->frame(false, brainOpName(reply.op), fields);
+
+    DiagBrainRequest r;
+    if (hub_ == nullptr || !monitor_->takeStagedRequest(r)) {
+        return;
+    }
+    if (r.request_id == reply.request_id && r.op == reply.op) {
+        r.result    = reply.result;
+        r.reply_len = written.ok ? static_cast<uint8_t>(len) : 0;
+    }
+    DiagRecord record;
+    record.kind    = DiagKind::kBrainRequest;
+    record.source  = source_id_;
+    record.payload = r;
+    hub_->post(std::move(record));
+}
+
 bool BrainLinkPublisher::sensorFresh(const SensorMap& results, const SensorId& id,
                                      MonotonicTime now) const {
     const auto it = results.find(id);
@@ -212,37 +261,37 @@ uint8_t BrainLinkPublisher::calibration(const PublishingInput& in,
             ? (profile != nullptr ? profile->bias_function : std::string())
             : bias_cal_function_;
     if (function.empty()) {
-        return gatr2::kCalibrationNone;
+        return translagatr::kCalibrationNone;
     }
     const ObservationFunctionStatus* f = in.localization.find(function);
     if (f == nullptr) {
-        return gatr2::kCalibrationNone;
+        return translagatr::kCalibrationNone;
     }
     if (f->stillness.monitored) {
         // BiasCalibration values are the wire CalibrationState values
         return static_cast<uint8_t>(f->stillness.calibration);
     }
-    return f->ready ? gatr2::kCalibrationDone : gatr2::kCalibrationRunning;
+    return f->ready ? translagatr::kCalibrationDone : translagatr::kCalibrationRunning;
 }
 
-gatr2::BrainState BrainLinkPublisher::state(const PublishingInput& in) const {
+translagatr::BrainState BrainLinkPublisher::state(const PublishingInput& in) const {
     const RobotState& robot = in.robot;
-    gatr2::BrainState s;
+    translagatr::BrainState s;
 
     if (robot.valid) {
-        s.robot_flags |= gatr2::kRobotPoseValid;
+        s.robot_flags |= translagatr::kRobotPoseValid;
     }
     if (robot.initialized) {
-        s.robot_flags |= gatr2::kRobotLocalized;
+        s.robot_flags |= translagatr::kRobotLocalized;
     }
     if (hostSet(robot.measuredAtHost) && hostSet(in.now)) {
-        s.robot_flags |= gatr2::kRobotAgeKnown;
+        s.robot_flags |= translagatr::kRobotAgeKnown;
         s.robot_age_ms = clampAgeMs(in.now - robot.measuredAtHost);
     }
     if (robot.placement_origin == "command") {
-        s.robot_flags |= gatr2::kRobotAnchorCommand;
+        s.robot_flags |= translagatr::kRobotAnchorCommand;
     } else if (robot.placement_origin == "configuration") {
-        s.robot_flags |= gatr2::kRobotAnchorConfigured;
+        s.robot_flags |= translagatr::kRobotAnchorConfigured;
     }
     const Pose2D field_pose = robot.fieldPose();
     s.x_mm                  = toWireMm(field_pose.x_m);
@@ -262,7 +311,7 @@ gatr2::BrainState BrainLinkPublisher::state(const PublishingInput& in) const {
             all_fresh = all_fresh && sensorFresh(in.sensors, id, in.now);
         }
         if (all_fresh) {
-            s.health |= gatr2::kHealthEncodersFresh;
+            s.health |= translagatr::kHealthEncodersFresh;
         }
     }
     bool gyro_fresh = false;
@@ -276,35 +325,35 @@ gatr2::BrainState BrainLinkPublisher::state(const PublishingInput& in) const {
                      (in.now - bench.received) <= fresh_ms_;
     }
     if (gyro_fresh) {
-        s.health |= gatr2::kHealthGyroFresh;
+        s.health |= translagatr::kHealthGyroFresh;
     }
     if (!in.observations.empty()) {
-        s.health |= gatr2::kHealthVisionAlive;
+        s.health |= translagatr::kHealthVisionAlive;
     }
     if (pico_ != nullptr) {
         const PicoLinkState link = pico_->link();
         if (link.frames_fresh) {
-            s.health |= gatr2::kHealthPicoLink;
+            s.health |= translagatr::kHealthPicoLink;
         }
         if (link.status_known) {
             switch (link.status.imu_state) {
-            case gatr2::kPicoImuInitializing:
-            case gatr2::kPicoImuAligning:
-            case gatr2::kPicoImuRetrying: s.health |= gatr2::kHealthImuInitializing; break;
-            case gatr2::kPicoImuFailed: s.health |= gatr2::kHealthImuFailed; break;
+            case translagatr::kPicoImuInitializing:
+            case translagatr::kPicoImuAligning:
+            case translagatr::kPicoImuRetrying: s.health |= translagatr::kHealthImuInitializing; break;
+            case translagatr::kPicoImuFailed: s.health |= translagatr::kHealthImuFailed; break;
             default: break;
             }
         }
     }
     if (in.localization.stationary()) {
-        s.health |= gatr2::kHealthStationary;
+        s.health |= translagatr::kHealthStationary;
     }
     s.calibration = calibration(in, profile.get());
     const bool bias_calibrated = profile_host_ != nullptr
-                                     ? s.calibration == gatr2::kCalibrationDone
+                                     ? s.calibration == translagatr::kCalibrationDone
                                      : bias_cal_seen_;
     if (bias_calibrated) {
-        s.health |= gatr2::kHealthBiasCalibrated;
+        s.health |= translagatr::kHealthBiasCalibrated;
     }
 
     const ProfileStatus& status = in.command.profile;
@@ -338,7 +387,7 @@ PublishingOutput BrainLinkPublisher::run(const PublishingInput& in) {
         return out;   // the brain initiates; nothing is unsolicited
     }
 
-    gatr2::BrainReply reply;
+    translagatr::BrainReply reply;
     reply.op             = ctx.op;
     reply.session        = ctx.session;
     reply.request_id     = ctx.request_id;
@@ -352,41 +401,41 @@ PublishingOutput BrainLinkPublisher::run(const PublishingInput& in) {
     reply.profile_detail = ctx.profile_detail;
     reply.action         = ctx.action;
     switch (ctx.op) {
-    case gatr2::kOpSetPose:
-        if (ctx.result == gatr2::kResultPending) {
+    case translagatr::kOpSetPose:
+        if (ctx.result == translagatr::kResultPending) {
             // Ok only once localization applied exactly this placement
             const bool applied = in.robot.placement_origin == "command" &&
                                  in.robot.placement_session == ctx.session &&
                                  in.robot.placement_sequence == ctx.placement_sequence;
-            reply.result          = applied ? gatr2::kResultOk : gatr2::kResultPending;
+            reply.result          = applied ? translagatr::kResultOk : translagatr::kResultPending;
             reply.odometry_epoch  = static_cast<uint32_t>(in.robot.odometry_epoch);
             reply.anchor_revision = static_cast<uint32_t>(in.robot.anchor_revision);
         }
         break;
-    case gatr2::kOpGetState:
-        if (ctx.result == gatr2::kResultOk) {
+    case translagatr::kOpGetState:
+        if (ctx.result == translagatr::kResultOk) {
             reply.state = *out.brain_state;
         }
         break;
-    case gatr2::kOpReadDoc:
-        if (ctx.result == gatr2::kResultOk) {
+    case translagatr::kOpReadDoc:
+        if (ctx.result == translagatr::kResultOk) {
             reply.result = documents_ == nullptr
-                               ? static_cast<uint8_t>(gatr2::kResultUnavailable)
+                               ? static_cast<uint8_t>(translagatr::kResultUnavailable)
                                : documents_->read(ctx.doc_kind, ctx.doc_id, ctx.doc_offset,
                                                   ctx.doc_max_len, reply);
         }
         break;
-    case gatr2::kOpControl: {
+    case translagatr::kOpControl: {
         const std::shared_ptr<const ProfileBinding> profile =
             profile_host_ != nullptr ? profile_host_->applied() : nullptr;
         reply.calibration    = calibration(in, profile.get());
         reply.control_detail = ctx.control_detail;
         break;
     }
-    case gatr2::kOpReadWheels:
-        if (ctx.result == gatr2::kResultOk) {
+    case translagatr::kOpReadWheels:
+        if (ctx.result == translagatr::kResultOk) {
             reply.wheel_count = ctx.wheel_count;
-            for (uint8_t i = 0; i < ctx.wheel_count && i < gatr2::kWheelReadingsMax; ++i) {
+            for (uint8_t i = 0; i < ctx.wheel_count && i < translagatr::kWheelReadingsMax; ++i) {
                 reply.wheels[i] = ctx.wheels[i];
             }
         }
@@ -396,13 +445,14 @@ PublishingOutput BrainLinkPublisher::run(const PublishingInput& in) {
 
     LinkStats* stats =
         in.diagnostics != nullptr ? &in.diagnostics->links[diagnostics_id_] : nullptr;
-    uint8_t        buf[gatr2::kMaxFrameLen];
-    const uint16_t len = gatr2::encodeBrainReply(reply, buf, sizeof(buf));
+    uint8_t        buf[translagatr::kMaxFrameLen];
+    const uint16_t len = translagatr::encodeBrainReply(reply, buf, sizeof(buf));
     if (len == 0) {
         out.status = FunctionStatus::kFault;
         return out;
     }
     const SerialWriteResult written = link_->write(ByteSpan{buf, len}, ctx.window);
+    noteReply(reply, buf, len, written);
     if (stats != nullptr) {
         if (written.ok) {
             ++stats->replies;

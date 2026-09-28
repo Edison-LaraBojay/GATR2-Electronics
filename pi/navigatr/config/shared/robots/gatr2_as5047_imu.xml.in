@@ -15,7 +15,7 @@ wheel/IMU-only profiles never depend on it. Pipeline fragments only
 reference these ids and never restate a measurement.
 
 Known-good values already filled in: the Pico link (/dev/ttyAMA0 at 115200,
-pico/src/config.h) and the brain link (UART5 /dev/ttyAMA5 at 115200, RS-485
+pico/aggreGATR/src/config.h) and the brain link (UART5 /dev/ttyAMA5 at 115200, RS-485
 driver enable GPIO 6, half duplex: the Pi answers Brain requests,
 docs/hardware.md). gpio is the sysfs number; check it on the Pi kernel.
 

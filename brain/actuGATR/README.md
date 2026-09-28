@@ -1,7 +1,8 @@
 # actuGATR
 
 Brain-side movement: `Motion` (`goToDirect`, `goToAvoiding`), path followers,
-tank and mecanum drive kinematics, the drive owner and PROS motor adapters.
+tank and mecanum drive kinematics, the drive owner, PROS motor adapters, and
+the TELEMETRY movement and wheel groups (`telemetryOf`).
 Plans come from investiGATR; robot state and the field come from any
 `investigatr::StateSource` (communiGATR over the Pi link).
 

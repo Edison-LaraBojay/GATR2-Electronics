@@ -7,8 +7,11 @@
 //
 // Priority of the next request: HELLO without a session, placement,
 // control, profile sync, the due state poll, wheel readings, map chunk,
-// estimate chunk, path report. Reads and transfers go while the state poll
-// is not due, or after four due polls in a row held one back.
+// estimate chunk, path report, telemetry. Reads and transfers go while the
+// state poll is not due, or after four due polls in a row held one back.
+// Telemetry only ever goes in the first slot after a state reply: on time
+// with the poll not due and nothing waiting, or half a period late ahead of
+// the due poll or a waiting transfer.
 
 #pragma once
 #include <cstddef>
@@ -16,7 +19,7 @@
 #include <functional>
 #include <vector>
 
-#include "common/frame_codec.h"
+#include "translaGATR/frame_codec.h"
 #include "communigatr/byte_port.h"
 #include "communigatr/doc_assembly.h"
 #include "communigatr/robot_profile.h"
@@ -55,6 +58,7 @@ struct ClientConfig {
     Seconds hello_backoff      = 1.0;   // HELLO period after an unsupported version or op
     Seconds field_period       = 0.5;   // between field estimate reads
     Seconds transfer_backoff   = 1.0;   // after 3 failed transfers of one kind in a row
+    Seconds telemetry_period   = 0.1;   // TELEMETRY sends on this grid, never within half of it
 
     // Brain robot profile. Not configured: the Pi uses its XML localization
     // and nothing is uploaded.
@@ -78,7 +82,7 @@ enum class PlacementResult : uint8_t {
 struct PlacementStatus {
     PlacementTicket ticket          = 0;
     PlacementResult state           = PlacementResult::kNone;
-    uint8_t         result          = gatr2::kResultOk; // last reply result
+    uint8_t         result          = translagatr::kResultOk; // last reply result
     uint32_t        odometry_epoch  = 0;                // from the Ok reply
     uint32_t        anchor_revision = 0;
 };
@@ -100,11 +104,11 @@ enum class ControlResult : uint8_t {
 
 struct ControlStatus {
     ControlTicket ticket      = 0;
-    uint8_t       action      = 0; // gatr2::ControlAction
+    uint8_t       action      = 0; // translagatr::ControlAction
     ControlResult state       = ControlResult::kNone;
-    uint8_t       result      = gatr2::kResultOk;
-    uint8_t       calibration = gatr2::kCalibrationNone;    // last Ok or Pending reply
-    uint8_t       detail      = gatr2::kControlDetailNone; // Failed and Pending
+    uint8_t       result      = translagatr::kResultOk;
+    uint8_t       calibration = translagatr::kCalibrationNone;    // last Ok or Pending reply
+    uint8_t       detail      = translagatr::kControlDetailNone; // Failed and Pending
 };
 
 // READ_WHEELS readings: the profile wheels as the Pi last received them.
@@ -112,9 +116,9 @@ struct WheelReadings {
     uint32_t            sequence    = 0; // Ok replies so far, 0 = none
     Seconds             received_at = 0;
     Seconds             round_trip  = 0;
-    uint8_t             result      = gatr2::kResultOk; // last reply result
+    uint8_t             result      = translagatr::kResultOk; // last reply result
     uint8_t             count       = 0;
-    gatr2::WheelReading wheels[gatr2::kWheelReadingsMax];
+    translagatr::WheelReading wheels[translagatr::kWheelReadingsMax];
     bool                busy = false; // ProsLink only: link busy, nothing above is current
 };
 
@@ -132,7 +136,7 @@ enum class WheelResult : uint8_t {
 struct WheelStatus {
     WheelTicket   ticket = 0;
     WheelResult   state  = WheelResult::kNone;
-    uint8_t       result = gatr2::kResultOk; // this read's reply result
+    uint8_t       result = translagatr::kResultOk; // this read's reply result
     WheelReadings readings;                  // kOk: this read's readings
 };
 
@@ -149,9 +153,9 @@ enum class ProfileSync : uint8_t {
 struct ProfileStatus {
     ProfileSync state    = ProfileSync::kNone;
     uint32_t    id       = 0; // crc32 of the configured document
-    uint8_t     reason   = gatr2::kProfileReasonNone; // Brain or Pi reason
+    uint8_t     reason   = translagatr::kProfileReasonNone; // Brain or Pi reason
     uint8_t     detail   = 0;
-    uint8_t     result   = gatr2::kResultOk; // last PROFILE_* reply result
+    uint8_t     result   = translagatr::kResultOk; // last PROFILE_* reply result
     uint16_t    received = 0;                // bytes the Pi holds of this document
 };
 
@@ -162,7 +166,7 @@ struct StateSample {
     bool              valid       = false;
     uint32_t          pi_instance = 0;
     uint32_t          session     = 0;
-    gatr2::BrainState state;
+    translagatr::BrainState state;
     Seconds           received_at = 0;
     Seconds           round_trip  = 0; // this request's write to its reply
 };
@@ -215,6 +219,12 @@ struct ClientStats {
     uint32_t estimates       = 0; // estimates published
     uint32_t path_reports    = 0; // sent
     uint32_t paths_dropped   = 0; // replaced before sending, or no session
+
+    uint32_t telemetry_reports  = 0; // TELEMETRY sent
+    uint32_t telemetry_overdue  = 0; // of those, half a period late, ahead of a due poll or a transfer
+    uint32_t telemetry_replaced = 0; // a newer report replaced an unsent one
+    uint32_t telemetry_dropped  = 0; // no session, refused this session, bad body, session lost
+    uint32_t telemetry_refused  = 0; // UnsupportedOp or InvalidArgument answers
 };
 
 class Client {
@@ -235,7 +245,7 @@ public:
     PlacementStatus placementStatus(PlacementTicket ticket) const;
     bool            placementPending() const;
 
-    // Pi control, a gatr2::ControlAction. 0 (refused) unless ready and no
+    // Pi control, a translagatr::ControlAction. 0 (refused) unless ready and no
     // other control is pending. The Pi checks the stationary condition. A
     // Pending answer is asked again with the same request id every
     // control_retry until it settles; a duplicate never runs twice. Before
@@ -243,10 +253,10 @@ public:
     // answered, the Pi holds its record and only control_wait does, so
     // lost replies (a pulled cable) do not end it.
     ControlTicket control(uint8_t action);
-    ControlTicket recalibrate() { return control(gatr2::kControlRecalibrate); }
-    ControlTicket reinitialize() { return control(gatr2::kControlReinitialize); }
-    ControlTicket reinitImu() { return control(gatr2::kControlReinitImu); }
-    ControlTicket restartAcquisition() { return control(gatr2::kControlRestartAcquisition); }
+    ControlTicket recalibrate() { return control(translagatr::kControlRecalibrate); }
+    ControlTicket reinitialize() { return control(translagatr::kControlReinitialize); }
+    ControlTicket reinitImu() { return control(translagatr::kControlReinitImu); }
+    ControlTicket restartAcquisition() { return control(translagatr::kControlRestartAcquisition); }
     ControlStatus controlStatus(ControlTicket ticket) const;
     bool          controlPending() const;
 
@@ -280,8 +290,23 @@ public:
     // one attempt, a newer report replaces an unsent one, dropped without a
     // session. More than kPathReportMaxPoints points are thinned to that many,
     // first and last kept. False when dropped at once.
-    bool reportPath(uint32_t command_id, uint8_t path_mode, const gatr2::PathPoint* points,
+    bool reportPath(uint32_t command_id, uint8_t path_mode, const translagatr::PathPoint* points,
                     std::size_t count);
+
+    // Robot telemetry for Pi display and recording. Best effort, lowest
+    // priority: one attempt, a newer report replaces an unsent one, sends on
+    // a telemetry_period grid, only in the first slot after a state reply.
+    // On time it waits for a slot with the state poll not due; half a period
+    // late it takes that slot from the due poll or a waiting transfer, so a
+    // slow link delays it instead of starving it. Dropped without a session,
+    // with unknown flags or too many wheels, once the Pi refused TELEMETRY in
+    // this session (UnsupportedOp from an older Pi, or InvalidArgument; the
+    // session itself stays), and when still unsent two periods later (a link
+    // outage). False when dropped at once.
+    bool reportTelemetry(const translagatr::BrainTelemetry& telemetry);
+
+    // The Pi refused TELEMETRY in this session; cleared by a new session.
+    bool telemetryUnsupported() const { return telemetry_unsupported_; }
 
     const FieldPublication& field() const { return field_; }
     FieldSyncStatus         fieldSync() const;
@@ -326,11 +351,12 @@ private:
         kMapChunk,
         kEstimateChunk,
         kPathReport,
+        kTelemetry,
     };
 
     struct Transaction {
-        gatr2::BrainRequest request;
-        uint8_t             frame[gatr2::kMaxFrameLen] = {};
+        translagatr::BrainRequest request;
+        uint8_t             frame[translagatr::kMaxFrameLen] = {};
         uint16_t            len                        = 0; // 0 = no transaction
         int                 attempts                   = 0;
         Seconds             first_sent                 = 0;
@@ -345,24 +371,26 @@ private:
 
     void receive(Seconds now);
     void handleFrame(const uint8_t* frame, uint16_t len, Seconds now);
-    bool correlates(const gatr2::BrainReply& reply) const;
-    void handleReply(const gatr2::BrainReply& reply, Seconds now);
-    void handleHello(const gatr2::BrainReply& reply, Seconds now);
-    void handlePlacement(const gatr2::BrainReply& reply, Seconds now);
-    void handleControl(const gatr2::BrainReply& reply, Seconds now);
-    void handleWheels(const gatr2::BrainReply& reply, Seconds now, Seconds round_trip);
-    void handleProfileWrite(const gatr2::BrainReply& reply);
-    void handleProfileApply(const gatr2::BrainReply& reply, Seconds now);
-    void handleState(const gatr2::BrainReply& reply, Seconds now, Seconds round_trip);
-    void handleMapChunk(const gatr2::BrainReply& reply, Seconds now);
-    void handleEstimateChunk(const gatr2::BrainReply& reply, Seconds now);
-    void incompatible(Kind kind, const gatr2::BrainReply& reply, Seconds now);
+    bool correlates(const translagatr::BrainReply& reply) const;
+    void handleReply(const translagatr::BrainReply& reply, Seconds now);
+    void handleHello(const translagatr::BrainReply& reply, Seconds now);
+    void handlePlacement(const translagatr::BrainReply& reply, Seconds now);
+    void handleControl(const translagatr::BrainReply& reply, Seconds now);
+    void handleWheels(const translagatr::BrainReply& reply, Seconds now, Seconds round_trip);
+    void handleProfileWrite(const translagatr::BrainReply& reply);
+    void handleProfileApply(const translagatr::BrainReply& reply, Seconds now);
+    void handleState(const translagatr::BrainReply& reply, Seconds now, Seconds round_trip);
+    void handleMapChunk(const translagatr::BrainReply& reply, Seconds now);
+    void handleEstimateChunk(const translagatr::BrainReply& reply, Seconds now);
+    void incompatible(Kind kind, const translagatr::BrainReply& reply, Seconds now);
 
     void attemptFailed(Seconds now);
     void transmit(Seconds now);
     Kind choose(Seconds now);
     Kind statePoll();
-    void start(Transaction& tx, gatr2::BrainRequest request);
+    bool telemetrySlot(Seconds now, Seconds late) const;
+    bool startTelemetry();
+    void start(Transaction& tx, translagatr::BrainRequest request);
     void drain();
     void loseSession();
 
@@ -373,7 +401,7 @@ private:
     void settleWheels(WheelResult state, uint8_t result);
 
     void configureProfile(const ProfileDocument& doc);
-    void profileFromState(const gatr2::BrainState& state);
+    void profileFromState(const translagatr::BrainState& state);
     void profileFailure(uint8_t result);
     void settleProfileRejected(uint8_t result, uint8_t reason, uint8_t detail);
 
@@ -390,7 +418,7 @@ private:
     BytePort&                 port_;
     std::function<uint32_t()> nonce_source_;
     ClientConfig              config_;
-    gatr2::FrameReader        reader_;
+    translagatr::FrameReader        reader_;
     ClientStats               stats_;
 
     // Exchange.
@@ -399,7 +427,7 @@ private:
     Transaction         control_tx_;
     Transaction         once_tx_; // every request sent once: state, profile, docs, path
     Kind                outstanding_ = Kind::kNone;
-    gatr2::BrainRequest sent_; // the outstanding request
+    translagatr::BrainRequest sent_; // the outstanding request
     Seconds             sent_at_          = 0;
     Seconds             sent_timeout_     = 0;
     Seconds             next_send_        = 0;
@@ -426,7 +454,7 @@ private:
     // Placement.
     PlacementStatus     placement_;
     PlacementTicket     last_ticket_ = 0;
-    gatr2::BrainRequest placement_request_;
+    translagatr::BrainRequest placement_request_;
     bool                placement_acked_ = false;
     uint32_t            placement_mark_  = 0; // state_count_ at the Ok
     Seconds             next_placement_  = 0;
@@ -469,7 +497,17 @@ private:
 
     // Path report.
     bool                path_pending_ = false;
-    gatr2::BrainRequest path_request_;
+    translagatr::BrainRequest path_request_;
+
+    // Telemetry.
+    bool                      telemetry_pending_     = false;
+    bool                      telemetry_unsupported_ = false; // this session
+    bool                      after_state_           = false; // nothing sent since a state reply
+    Seconds                   state_reply_at_        = 0;
+    Seconds                   next_telemetry_        = 0;
+    Seconds                   telemetry_at_          = 0; // last poll time before the report
+    Seconds                   last_poll_             = 0;
+    translagatr::BrainRequest telemetry_request_;
 };
 
 } // namespace communigatr

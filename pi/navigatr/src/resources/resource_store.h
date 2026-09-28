@@ -32,13 +32,16 @@ namespace navigatr
 {
 
 class ResourceStoreBuilder;
+class DiagnosticsHub;
 
 // What a resource factory receives. resources resolves dependencies on other
-// declared resources, building them on demand.
+// declared resources, building them on demand. diagnostics is the System's
+// DiagnosticsHub, null when a resource is built outside a System.
 struct ResourceInitializationContext {
-    ResourceStoreBuilder*     resolver  = nullptr;
-    const FunctionRegistry*   functions = nullptr;
-    std::vector<std::string>* warnings  = nullptr;
+    ResourceStoreBuilder*     resolver    = nullptr;
+    const FunctionRegistry*   functions   = nullptr;
+    std::vector<std::string>* warnings    = nullptr;
+    DiagnosticsHub*           diagnostics = nullptr;
 
     template <typename Contract>
     std::shared_ptr<Contract> require(const ResourceId& id, std::string& err);
@@ -90,6 +93,8 @@ public:
                          std::vector<std::string>* warnings)
         : functions_(functions), warnings_(warnings) {}
 
+    void setDiagnostics(DiagnosticsHub* diagnostics) { diagnostics_ = diagnostics; }
+
     // False on duplicate id or missing id/type. Node views must stay valid
     // until buildAll returns.
     bool index(const ConfigNode& node, std::string& err);
@@ -112,6 +117,7 @@ public:
     ResourceStore take() { return std::move(store_); }
 
 private:
+    DiagnosticsHub* diagnostics_ = nullptr;
     enum class State { kUnbuilt, kBuilding, kBuilt, kFailed };
 
     struct Definition {

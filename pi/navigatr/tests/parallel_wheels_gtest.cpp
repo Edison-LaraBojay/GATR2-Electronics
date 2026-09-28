@@ -19,8 +19,8 @@
 #include <string>
 #include <vector>
 
-#include "common/frame_codec.h"
-#include "common/link_documents.h"
+#include "translaGATR/frame_codec.h"
+#include "translaGATR/link_documents.h"
 #include "config/composition.h"
 #include "impl/localization/tracking_wheel_motion.h"
 #include "impl/resources/serial_links.h"
@@ -397,15 +397,15 @@ std::string wirePathConfig(bool right_inverted) {
 
 std::vector<uint8_t> sensorPacket(uint8_t seq, uint32_t stamp, int32_t enc0, int32_t enc1,
                                   int32_t gyro_mdps) {
-    gatr2::SensorSample s{};
+    translagatr::SensorSample s{};
     s.seq      = seq;
     s.stamp_ms = stamp;
-    s.mask     = gatr2::kSensorEnc0 | gatr2::kSensorEnc1 | gatr2::kSensorGyroZ;
+    s.mask     = translagatr::kSensorEnc0 | translagatr::kSensorEnc1 | translagatr::kSensorGyroZ;
     s.enc[0]   = enc0;
     s.enc[1]   = enc1;
     s.gyro_z   = gyro_mdps;
-    std::vector<uint8_t> buf(gatr2::kMaxFrameLen);
-    buf.resize(gatr2::encodeSensorFrame(s, buf.data(), gatr2::kMaxFrameLen));
+    std::vector<uint8_t> buf(translagatr::kMaxFrameLen);
+    buf.resize(translagatr::encodeSensorFrame(s, buf.data(), translagatr::kMaxFrameLen));
     return buf;
 }
 
@@ -841,24 +841,24 @@ TEST(ParallelWheelProfiles, NoCameraPipelineTracksARigThroughTheOrdinaryExecutor
 namespace
 {
 
-std::vector<uint8_t> requestBytes(const gatr2::BrainRequest& r) {
-    std::vector<uint8_t> buf(gatr2::kMaxFrameLen);
-    buf.resize(gatr2::encodeBrainRequest(r, buf.data(), gatr2::kMaxFrameLen));
+std::vector<uint8_t> requestBytes(const translagatr::BrainRequest& r) {
+    std::vector<uint8_t> buf(translagatr::kMaxFrameLen);
+    buf.resize(translagatr::encodeBrainRequest(r, buf.data(), translagatr::kMaxFrameLen));
     EXPECT_FALSE(buf.empty());
     return buf;
 }
 
 // Every brain reply the Pi wrote since the last call.
-std::vector<gatr2::BrainReply> takeReplies(MemoryLink& link) {
-    std::vector<gatr2::BrainReply> out;
-    gatr2::FrameReader             reader;
+std::vector<translagatr::BrainReply> takeReplies(MemoryLink& link) {
+    std::vector<translagatr::BrainReply> out;
+    translagatr::FrameReader             reader;
     for (uint8_t b : link.output().takeAll()) {
         if (!reader.push(b)) {
             continue;
         }
         do {
-            gatr2::BrainReply reply;
-            EXPECT_TRUE(gatr2::decodeBrainReply(reader.frame(), reader.frameLen(), reply));
+            translagatr::BrainReply reply;
+            EXPECT_TRUE(translagatr::decodeBrainReply(reader.frame(), reader.frameLen(), reply));
             out.push_back(reply);
         } while (reader.next());
     }
@@ -889,11 +889,11 @@ TEST(ParallelWheelProfiles, BrainPlacesTheRobotAndReadsTheField) {
         system->step(hostTime(now_ms));
         return takeReplies(*brain);
     };
-    const auto ask = [&](const gatr2::BrainRequest& r) {
+    const auto ask = [&](const translagatr::BrainRequest& r) {
         brain->input().feed(requestBytes(r));
-        const std::vector<gatr2::BrainReply> replies = step();
+        const std::vector<translagatr::BrainReply> replies = step();
         EXPECT_EQ(replies.size(), 1u);
-        return replies.empty() ? gatr2::BrainReply{} : replies.front();
+        return replies.empty() ? translagatr::BrainReply{} : replies.front();
     };
     step();   // the first drain after start never replies
 
@@ -904,37 +904,37 @@ TEST(ParallelWheelProfiles, BrainPlacesTheRobotAndReadsTheField) {
     ASSERT_TRUE(system->robot().valid);
     EXPECT_FALSE(system->robot().initialized);
 
-    gatr2::BrainRequest hello;
-    hello.op                      = gatr2::kOpHello;
+    translagatr::BrainRequest hello;
+    hello.op                      = translagatr::kOpHello;
     hello.request_id              = 1;
     hello.nonce                   = 0x5eed;
-    const gatr2::BrainReply opened = ask(hello);
-    ASSERT_EQ(opened.result, gatr2::kResultOk);
+    const translagatr::BrainReply opened = ask(hello);
+    ASSERT_EQ(opened.result, translagatr::kResultOk);
     const uint32_t session = opened.session;
 
-    gatr2::BrainRequest get;
-    get.op         = gatr2::kOpGetState;
+    translagatr::BrainRequest get;
+    get.op         = translagatr::kOpGetState;
     get.session    = session;
     get.request_id = 2;
-    gatr2::BrainReply state = ask(get);
-    ASSERT_EQ(state.result, gatr2::kResultOk);
-    EXPECT_TRUE(state.state.robot_flags & gatr2::kRobotPoseValid);
-    EXPECT_FALSE(state.state.robot_flags & gatr2::kRobotLocalized);   // odometry only
+    translagatr::BrainReply state = ask(get);
+    ASSERT_EQ(state.result, translagatr::kResultOk);
+    EXPECT_TRUE(state.state.robot_flags & translagatr::kRobotPoseValid);
+    EXPECT_FALSE(state.state.robot_flags & translagatr::kRobotLocalized);   // odometry only
 
     // the Brain supplies the starting field pose; here the rig's truth
     const Pose2D        start = rig->truthAt(system->robot().measuredAtHost).pose;
-    gatr2::BrainRequest place;
-    place.op           = gatr2::kOpSetPose;
+    translagatr::BrainRequest place;
+    place.op           = translagatr::kOpSetPose;
     place.session      = session;
     place.request_id   = 3;
     place.x_mm         = static_cast<int32_t>(std::llround(start.x_m * 1000.0));
     place.y_mm         = static_cast<int32_t>(std::llround(start.y_m * 1000.0));
     place.heading_cdeg = static_cast<int32_t>(std::llround(radToDeg(start.heading_rad) * 100.0));
-    gatr2::BrainReply placed = ask(place);
-    for (int i = 0; i < 20 && placed.result == gatr2::kResultPending; ++i) {
+    translagatr::BrainReply placed = ask(place);
+    for (int i = 0; i < 20 && placed.result == translagatr::kResultPending; ++i) {
         placed = ask(place);   // same request id: a retry, never a second placement
     }
-    ASSERT_EQ(placed.result, gatr2::kResultOk);
+    ASSERT_EQ(placed.result, translagatr::kResultOk);
     EXPECT_TRUE(system->robot().initialized);
     EXPECT_EQ(system->robot().placement_origin, "command");
     EXPECT_EQ(system->robot().placement_session, session);
@@ -954,60 +954,60 @@ TEST(ParallelWheelProfiles, BrainPlacesTheRobotAndReadsTheField) {
     // placed frame, every object nominal with noop world estimation
     get.request_id = 4;
     state          = ask(get);
-    ASSERT_EQ(state.result, gatr2::kResultOk);
+    ASSERT_EQ(state.result, translagatr::kResultOk);
     EXPECT_NE(state.state.map_id, 0u);
     EXPECT_NE(state.state.estimate_id, 0u);
     uint16_t   rid       = 5;
     const auto readWhole = [&](uint8_t kind, uint32_t doc_id) {
         std::vector<uint8_t> bytes;
-        gatr2::BrainRequest  read;
-        read.op       = gatr2::kOpReadDoc;
+        translagatr::BrainRequest  read;
+        read.op       = translagatr::kOpReadDoc;
         read.session  = session;
         read.doc_kind = kind;
         read.doc_id   = doc_id;
-        read.max_len  = gatr2::kDocChunkMax;
+        read.max_len  = translagatr::kDocChunkMax;
         for (;;) {
             read.request_id             = rid++;
             read.doc_offset             = static_cast<uint16_t>(bytes.size());
-            const gatr2::BrainReply got = ask(read);
-            EXPECT_EQ(got.result, gatr2::kResultOk);
-            if (got.result != gatr2::kResultOk || got.data_len == 0) {
+            const translagatr::BrainReply got = ask(read);
+            EXPECT_EQ(got.result, translagatr::kResultOk);
+            if (got.result != translagatr::kResultOk || got.data_len == 0) {
                 return bytes;
             }
             bytes.insert(bytes.end(), got.data, got.data + got.data_len);
             if (bytes.size() >= got.doc_total_len) {
-                EXPECT_EQ(gatr2::crc32(bytes.data(), static_cast<uint32_t>(bytes.size())),
+                EXPECT_EQ(translagatr::crc32(bytes.data(), static_cast<uint32_t>(bytes.size())),
                           got.doc_crc32);
                 return bytes;
             }
         }
     };
-    const std::vector<uint8_t> map = readWhole(gatr2::kDocFieldMap, state.state.map_id);
-    EXPECT_EQ(map.size(), gatr2::fieldMapLen(17));
-    EXPECT_EQ(gatr2::crc32(map.data(), static_cast<uint32_t>(map.size())), state.state.map_id);
+    const std::vector<uint8_t> map = readWhole(translagatr::kDocFieldMap, state.state.map_id);
+    EXPECT_EQ(map.size(), translagatr::fieldMapLen(17));
+    EXPECT_EQ(translagatr::crc32(map.data(), static_cast<uint32_t>(map.size())), state.state.map_id);
     const std::vector<uint8_t> estimate =
-        readWhole(gatr2::kDocFieldEstimate, state.state.estimate_id);
-    ASSERT_EQ(gatr2::validateFieldEstimate(estimate.data(), static_cast<uint16_t>(estimate.size()),
+        readWhole(translagatr::kDocFieldEstimate, state.state.estimate_id);
+    ASSERT_EQ(translagatr::validateFieldEstimate(estimate.data(), static_cast<uint16_t>(estimate.size()),
                                            map.data(), static_cast<uint16_t>(map.size()),
                                            state.state.map_id),
-              gatr2::DocError::kNone);
-    gatr2::FieldEstimateHeader header;
-    ASSERT_TRUE(gatr2::decodeFieldEstimateHeader(estimate.data(),
+              translagatr::DocError::kNone);
+    translagatr::FieldEstimateHeader header;
+    ASSERT_TRUE(translagatr::decodeFieldEstimateHeader(estimate.data(),
                                                  static_cast<uint16_t>(estimate.size()), header));
     EXPECT_EQ(header.anchor_revision, 1u);
     EXPECT_EQ(header.odometry_epoch, state.state.odometry_epoch);
     for (uint16_t i = 0; i < header.object_count; ++i) {
-        gatr2::FieldEstimateRecord r;
-        ASSERT_TRUE(gatr2::decodeFieldEstimateRecord(estimate.data(),
+        translagatr::FieldEstimateRecord r;
+        ASSERT_TRUE(translagatr::decodeFieldEstimateRecord(estimate.data(),
                                                      static_cast<uint16_t>(estimate.size()), i, r));
-        EXPECT_EQ(r.source, gatr2::kEstimateSourceNominal);
+        EXPECT_EQ(r.source, translagatr::kEstimateSourceNominal);
     }
     get.request_id = rid++;
     state          = ask(get);
-    ASSERT_EQ(state.result, gatr2::kResultOk);
-    EXPECT_EQ(state.state.profile_state, gatr2::kProfileNone);   // XML robot, no profile
-    EXPECT_TRUE(state.state.robot_flags & gatr2::kRobotLocalized);
-    EXPECT_TRUE(state.state.robot_flags & gatr2::kRobotAnchorCommand);
+    ASSERT_EQ(state.result, translagatr::kResultOk);
+    EXPECT_EQ(state.state.profile_state, translagatr::kProfileNone);   // XML robot, no profile
+    EXPECT_TRUE(state.state.robot_flags & translagatr::kRobotLocalized);
+    EXPECT_TRUE(state.state.robot_flags & translagatr::kRobotAnchorCommand);
     EXPECT_EQ(system->robot().anchor_revision, 1u);   // nothing moved the anchor again
 
     const std::string snap = snapshotDocument(*system, InspectionServiceStats{}, hostTime(now_ms));

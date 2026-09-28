@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <random>
 #include <set>
 #include <stdexcept>
@@ -80,7 +81,7 @@ class System::ProfileHost : public BrainProfileHost
 public:
     explicit ProfileHost(System& system) : system_(system) {}
 
-    bool prepare(const gatr2::RobotProfileDoc& profile, uint32_t profile_id, uint8_t& reason,
+    bool prepare(const translagatr::RobotProfileDoc& profile, uint32_t profile_id, uint8_t& reason,
                  uint8_t& detail) override {
         return system_.prepareProfile(profile, profile_id, reason, detail);
     }
@@ -98,7 +99,7 @@ public:
         return system_.controlProgress(action, now, detail);
     }
 
-    uint8_t readWheels(MonotonicTime now, uint8_t& count, gatr2::WheelReading* wheels) override {
+    uint8_t readWheels(MonotonicTime now, uint8_t& count, translagatr::WheelReading* wheels) override {
         return system_.readWheels(now, count, wheels);
     }
 
@@ -135,7 +136,14 @@ std::unique_ptr<System> System::buildFromString(const char*             xml,
     return system;
 }
 
-System::~System() { stop(); }
+System::~System() {
+    // the recorder first: it closes a running capture while every source of
+    // its metadata is still alive
+    if (capture_ != nullptr) {
+        capture_->stop();
+    }
+    stop();
+}
 
 bool System::build(const char* xml, const FunctionRegistry& functions,
                    const BuildOptions& options, std::string& err) {
@@ -156,8 +164,8 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     }
     const ConfigNode root{root_e};
 
-    if (!checkChildren(root, {"Loop", "Resources", "Sensors", "Pipeline", "Inspection"}, {},
-                       err)) {
+    if (!checkChildren(root, {"Loop", "Resources", "Sensors", "Pipeline", "Inspection", "Capture"},
+                       {}, err)) {
         return false;
     }
 
@@ -171,15 +179,19 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
             return false;
         }
     }
-    if (!parseInspectionConfig(root.child("Inspection"), inspection_, err)) {
+    if (!parseInspectionConfig(root.child("Inspection"), inspection_, err) ||
+        !parseCaptureConfig(root.child("Capture"), capture_config_, err)) {
         return false;
     }
+    event_source_ = diag_hub_->sourceId("system");
 
     // Aggregate stages: each builder visits its declarations once and
     // returns one captured executor. Node views die with doc; everything an
     // executor keeps was copied by its factory.
+    BuildOptions resource_options = options;
+    resource_options.diagnostics  = diag_hub_.get();
     std::optional<ResourceBuild> resources =
-        make_resources(root.child("Resources"), functions, options, &warnings_, err);
+        make_resources(root.child("Resources"), functions, resource_options, &warnings_, err);
     if (!resources.has_value()) {
         return false;
     }
@@ -212,6 +224,7 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     slot_context.functions    = &functions;
     slot_context.warnings     = &warnings_;
     slot_context.loop_rate_hz = loop_rate_hz_;
+    slot_context.diagnostics  = diag_hub_.get();
 
     // A Brain-profiled Localization: the host exists before Command
     // Collection, which hands it every validated profile.
@@ -286,6 +299,8 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     execute_localization_ = std::move(*localization);
     robot_                = execute_localization_.state();
     feed_                 = execute_localization_.feed();
+    // the robot state tap; the feed outlives profile boundaries
+    feed_->setDiagnostics(diag_hub_);
     for (const ObservationFunctionStatus& f : execute_localization_.functionStatus()) {
         slot_context.observation_functions.push_back(f.id);
     }
@@ -329,7 +344,10 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
 
     estimation_stats_.setPeriodTarget(1000.0 / loop_rate_hz_);
     publishBindingView();
-    return true;
+
+    // after the pipeline: every producer already holds the hub
+    capture_ = makeCaptureRecorder(*this, capture_config_);
+    return capture_ != nullptr;
 }
 
 bool System::buildProfileHost(const ConfigNode& pipeline, const ConfigNode& profile,
@@ -400,7 +418,7 @@ LocalizationRequests System::requestsFrom(const CommandState& command) const {
 
 // ---- Brain profile ---------------------------------------------------------
 
-bool System::prepareProfile(const gatr2::RobotProfileDoc& profile, uint32_t id, uint8_t& reason,
+bool System::prepareProfile(const translagatr::RobotProfileDoc& profile, uint32_t id, uint8_t& reason,
                             uint8_t& detail) {
     if (!checkProfileCapabilities(profile_config_, profile, reason, detail)) {
         noteEvent(last_now_, "profile " + hexId(id) + " refused: " + profileReasonName(reason) +
@@ -429,12 +447,12 @@ bool System::prepareProfile(const gatr2::RobotProfileDoc& profile, uint32_t id, 
         localization = make_localization(root.child("Localization"), profile_functions_, catalog,
                                          resources_, &warnings, err);
     }
-    if (!profile_config_.brain_imu.empty() && profile.imu_source == gatr2::kImuSourceBrainVex) {
+    if (!profile_config_.brain_imu.empty() && profile.imu_source == translagatr::kImuSourceBrainVex) {
         binding->bench_imu = resources_.require<BrainImuBench>(profile_config_.brain_imu, err);
     }
     if (!sensors.has_value() || !localization.has_value() ||
-        (profile.imu_source == gatr2::kImuSourceBrainVex && binding->bench_imu == nullptr)) {
-        reason = gatr2::kProfileReasonBuild;
+        (profile.imu_source == translagatr::kImuSourceBrainVex && binding->bench_imu == nullptr)) {
+        reason = translagatr::kProfileReasonBuild;
         detail = 0;
         noteEvent(last_now_, "profile " + hexId(id) + " not built: " + err);
         return false;
@@ -455,10 +473,10 @@ bool System::prepareProfile(const gatr2::RobotProfileDoc& profile, uint32_t id, 
 }
 
 uint8_t System::controlProfile(uint8_t action, uint8_t, MonotonicTime now, uint8_t& detail) {
-    detail = gatr2::kControlDetailNone;
+    detail = translagatr::kControlDetailNone;
     const std::shared_ptr<const ProfileBinding> binding = profileBinding();
     if (binding == nullptr) {
-        return gatr2::kResultNotReady;
+        return translagatr::kResultNotReady;
     }
     const auto stationary = [&](const char* name) {
         std::string why;
@@ -469,54 +487,54 @@ uint8_t System::controlProfile(uint8_t action, uint8_t, MonotonicTime now, uint8
         return false;
     };
     switch (action) {
-    case gatr2::kControlRecalibrate: {
+    case translagatr::kControlRecalibrate: {
         if (!stationary("recalibrate")) {
-            return gatr2::kResultNotStationary;
+            return translagatr::kResultNotStationary;
         }
         const bool any = execute_localization_.recalibrate();
         noteEvent(now, any ? "IMU bias recalibration started; the pose holds while the robot "
                              "stays still"
                            : "recalibrate: nothing to calibrate on the Pi for this profile");
-        return gatr2::kResultOk;
+        return translagatr::kResultOk;
     }
-    case gatr2::kControlReinitialize:
+    case translagatr::kControlReinitialize:
         if (!stationary("reinitialize")) {
-            return gatr2::kResultNotStationary;
+            return translagatr::kResultNotStationary;
         }
         execute_localization_.reset();
         placement_floor_ = command_.init_sequence;
         noteEvent(now, "localization reinitialized: odometry epoch " +
                            std::to_string(execute_localization_.state().odometry_epoch) +
                            ", placement withdrawn, bias recalibrating");
-        return gatr2::kResultOk;
-    case gatr2::kControlReinitImu: {
-        if (binding->profile.imu_source != gatr2::kImuSourcePico) {
-            detail = gatr2::kControlDetailImuUnused;
+        return translagatr::kResultOk;
+    case translagatr::kControlReinitImu: {
+        if (binding->profile.imu_source != translagatr::kImuSourcePico) {
+            detail = translagatr::kControlDetailImuUnused;
             noteEvent(now, "IMU reinitialization refused: the profile does not use the Pico IMU");
-            return gatr2::kResultFailed;
+            return translagatr::kResultFailed;
         }
         const uint32_t handle =
-            submitPico(gatr2::kPicoOpReinitImu, binding->profile.imu_port, now, detail);
+            submitPico(translagatr::kPicoOpReinitImu, binding->profile.imu_port, now, detail);
         if (handle == 0) {
-            return gatr2::kResultFailed;
+            return translagatr::kResultFailed;
         }
         pico_op_         = PicoOperation{};
         pico_op_.active  = true;
         pico_op_.action  = action;
         pico_op_.handle  = handle;
         pico_op_.started = now;
-        pico_op_.result  = gatr2::kResultPending;
+        pico_op_.result  = translagatr::kResultPending;
         noteEvent(now, "Pico IMU reinitialization requested");
-        return gatr2::kResultPending;
+        return translagatr::kResultPending;
     }
-    case gatr2::kControlRestartAcquisition: {
+    case translagatr::kControlRestartAcquisition: {
         if (!stationary("acquisition restart")) {
-            return gatr2::kResultNotStationary;
+            return translagatr::kResultNotStationary;
         }
         const PicoLinkState link = pico_ != nullptr ? pico_->link() : PicoLinkState{};
-        const uint32_t handle = submitPico(gatr2::kPicoOpRestartAcquisition, 0, now, detail);
+        const uint32_t handle = submitPico(translagatr::kPicoOpRestartAcquisition, 0, now, detail);
         if (handle == 0) {
-            return gatr2::kResultFailed;
+            return translagatr::kResultFailed;
         }
         pico_op_           = PicoOperation{};
         pico_op_.active    = true;
@@ -525,16 +543,16 @@ uint8_t System::controlProfile(uint8_t action, uint8_t, MonotonicTime now, uint8
         pico_op_.started   = now;
         pico_op_.acq_epoch = link.acq_epoch;
         pico_op_.restarts  = link.restarts;
-        pico_op_.result    = gatr2::kResultPending;
+        pico_op_.result    = translagatr::kResultPending;
         noteEvent(now, "Pico acquisition restart requested");
-        return gatr2::kResultPending;
+        return translagatr::kResultPending;
     }
-    default: return gatr2::kResultInvalidArgument;
+    default: return translagatr::kResultInvalidArgument;
     }
 }
 
 uint32_t System::submitPico(uint8_t op, uint8_t arg, MonotonicTime now, uint8_t& detail) {
-    detail = gatr2::kControlDetailPicoLink;
+    detail = translagatr::kControlDetailPicoLink;
     if (pico_ == nullptr) {
         noteEvent(now, "Pico command refused: no Pico link configured");
         return 0;
@@ -551,15 +569,15 @@ uint32_t System::submitPico(uint8_t op, uint8_t arg, MonotonicTime now, uint8_t&
         noteEvent(now, "Pico command refused by the Pico link");
         return 0;
     }
-    detail = gatr2::kControlDetailNone;
+    detail = translagatr::kControlDetailNone;
     return handle;
 }
 
 uint8_t System::controlProgress(uint8_t action, MonotonicTime now, uint8_t& detail) {
     updatePicoOperation(now);
     if (!pico_op_.active || pico_op_.action != action) {
-        detail = gatr2::kControlDetailPicoLink;   // nothing is running under this request
-        return gatr2::kResultFailed;
+        detail = translagatr::kControlDetailPicoLink;   // nothing is running under this request
+        return translagatr::kResultFailed;
     }
     detail = pico_op_.detail;
     return pico_op_.result;
@@ -567,10 +585,10 @@ uint8_t System::controlProgress(uint8_t action, MonotonicTime now, uint8_t& deta
 
 void System::updatePicoOperation(MonotonicTime now) {
     PicoOperation& op = pico_op_;
-    if (!op.active || op.result != gatr2::kResultPending || pico_ == nullptr) {
+    if (!op.active || op.result != translagatr::kResultPending || pico_ == nullptr) {
         return;
     }
-    const bool reinit = op.action == gatr2::kControlReinitImu;
+    const bool reinit = op.action == translagatr::kControlReinitImu;
     const auto settle = [&](uint8_t result, uint8_t detail, const std::string& text) {
         op.result = result;
         op.detail = detail;
@@ -580,14 +598,14 @@ void System::updatePicoOperation(MonotonicTime now) {
     const PicoLinkState     link   = pico_->link();
     switch (status.state) {
     case PicoRequestState::kFailed:
-        settle(gatr2::kResultFailed,
-               status.detail != gatr2::kControlDetailNone
+        settle(translagatr::kResultFailed,
+               status.detail != translagatr::kControlDetailNone
                    ? status.detail
-                   : static_cast<uint8_t>(gatr2::kControlDetailPicoRefused),
+                   : static_cast<uint8_t>(translagatr::kControlDetailPicoRefused),
                reinit ? "Pico IMU reinitialization failed" : "Pico acquisition restart failed");
         return;
     case PicoRequestState::kUnknown:
-        settle(gatr2::kResultFailed, gatr2::kControlDetailPicoLink,
+        settle(translagatr::kResultFailed, translagatr::kControlDetailPicoLink,
                reinit ? "Pico IMU reinitialization lost with the Pico link"
                       : "Pico acquisition restart lost with the Pico link");
         return;
@@ -595,13 +613,13 @@ void System::updatePicoOperation(MonotonicTime now) {
         // a used source restarted: the pose needs a placement again (8.10)
         if (reinit) {
             execute_localization_.recalibrate();
-            settle(gatr2::kResultOk, gatr2::kControlDetailNone,
+            settle(translagatr::kResultOk, translagatr::kControlDetailNone,
                    "Pico IMU reinitialized; bias recalibration started");
             losePlacement(now, "sensor lost: pico_imu reinitialized", true);
             return;
         }
         if (link.acq_epoch != op.acq_epoch || link.restarts != op.restarts) {
-            settle(gatr2::kResultOk, gatr2::kControlDetailNone,
+            settle(translagatr::kResultOk, translagatr::kControlDetailNone,
                    "Pico acquisition restarted (acquisition epoch " +
                        std::to_string(link.acq_epoch) + "); encoders rebased");
             losePlacement(now, "sensor lost: Pico acquisition restarted", true);
@@ -612,24 +630,24 @@ void System::updatePicoOperation(MonotonicTime now) {
     case PicoRequestState::kRunning: break;
     }
     if (sameDomain(now, op.started) && now - op.started > kPicoOperationMs) {
-        settle(gatr2::kResultFailed, gatr2::kControlDetailTimedOut,
+        settle(translagatr::kResultFailed, translagatr::kControlDetailTimedOut,
                reinit ? "Pico IMU reinitialization timed out"
                       : "Pico acquisition restart timed out");
     }
 }
 
-uint8_t System::readWheels(MonotonicTime now, uint8_t& count, gatr2::WheelReading* wheels) const {
+uint8_t System::readWheels(MonotonicTime now, uint8_t& count, translagatr::WheelReading* wheels) const {
     count = 0;
     const std::shared_ptr<const ProfileBinding> binding = profileBinding();
     if (binding == nullptr) {
-        return gatr2::kResultNotReady;
+        return translagatr::kResultNotReady;
     }
     const SensorMap&   sensors   = execute_sensors_.retained();
     const ResourceMap& resources = execute_resources_.retained();
     const auto         resource  = resources.find(profile_config_.encoder_resource);
-    for (uint8_t i = 0; i < binding->profile.wheel_count && i < gatr2::kWheelReadingsMax; ++i) {
-        const gatr2::ProfileWheel& w = binding->profile.wheels[i];
-        gatr2::WheelReading        r;
+    for (uint8_t i = 0; i < binding->profile.wheel_count && i < translagatr::kWheelReadingsMax; ++i) {
+        const translagatr::ProfileWheel& w = binding->profile.wheels[i];
+        translagatr::WheelReading        r;
         r.port = w.encoder_port;
         if (resource != resources.end() && w.encoder_port < kProfileEncoderPorts) {
             const auto out = resource->second.outputs.find(profile_config_.ports[w.encoder_port]);
@@ -645,7 +663,7 @@ uint8_t System::readWheels(MonotonicTime now, uint8_t& count, gatr2::WheelReadin
             const StoredSample&  stored = *it->second.latest;
             const EncoderSample* sample = stored.payload.get<EncoderSample>();
             if (sample != nullptr) {
-                r.flags |= gatr2::kWheelValid;
+                r.flags |= translagatr::kWheelValid;
                 // wheel angle already carries counts per revolution, gearing
                 // and polarity; the radius makes it raw travel, no travel scale
                 const double um = std::round(sample->angle_rad * w.radius_um);
@@ -657,13 +675,13 @@ uint8_t System::readWheels(MonotonicTime now, uint8_t& count, gatr2::WheelReadin
                 const int64_t age = host ? now - stored.receivedAt : 0;
                 r.age_ms = static_cast<uint16_t>(std::clamp<int64_t>(age, 0, 65535));
                 if (it->second.state == SourceState::kValid && host && age <= kWheelFreshMs) {
-                    r.flags |= gatr2::kWheelFresh;
+                    r.flags |= translagatr::kWheelFresh;
                 }
             }
         }
         wheels[count++] = r;
     }
-    return gatr2::kResultOk;
+    return translagatr::kResultOk;
 }
 
 void System::watchSensors(const SensorMap& sensors, MonotonicTime now) {
@@ -711,6 +729,7 @@ void System::losePlacement(MonotonicTime now, const std::string& why, bool note)
     placement_floor_ = command_.init_sequence;
     noteEvent(now, why + ": place again (odometry epoch " +
                        std::to_string(robot_.odometry_epoch) + ")");
+    noteFault(CaptureFault::kContinuityLost, why);
 }
 
 void System::noteRecovery(MonotonicTime now) {
@@ -727,6 +746,7 @@ void System::noteRecovery(MonotonicTime now) {
                now - s.last_request > 1000) {
         s.brain_active = false;
         noteEvent(now, "Brain link quiet for 1 s");
+        noteFault(CaptureFault::kLinkLost, "Brain link quiet for 1 s");
     }
     if (command_.session != s.session) {
         if (command_.session != 0) {
@@ -741,10 +761,15 @@ void System::noteRecovery(MonotonicTime now) {
         if (s.pico_known) {
             if (link.frames_fresh != s.pico_fresh) {
                 noteEvent(now, link.frames_fresh ? "Pico frames restored" : "Pico frames lost");
+                if (!link.frames_fresh) {
+                    noteFault(CaptureFault::kLinkLost, "Pico frames lost");
+                }
             }
             if (link.reboots != s.reboots) {
                 noteEvent(now, "Pico rebooted (boot " + std::to_string(link.boot_id) +
                                    "); encoders rebased, IMU bias recalibrates");
+                noteFault(CaptureFault::kPicoReboot,
+                          "Pico rebooted (boot " + std::to_string(link.boot_id) + ")");
             }
             if (link.restarts != s.restarts) {
                 noteEvent(now, "Pico acquisition epoch " + std::to_string(link.acq_epoch));
@@ -810,7 +835,7 @@ void System::swapProfile() {
         return;
     }
     ProfileStatus& status = command_.profile;
-    if (status.state != gatr2::kProfileApplying || status.id != c->binding->id) {
+    if (status.state != translagatr::kProfileApplying || status.id != c->binding->id) {
         // a later APPLY (the running profile again, or a refused one) won
         noteEvent(last_now_, "profile " + hexId(c->binding->id) +
                                  " dropped: superseded before the boundary");
@@ -824,8 +849,8 @@ void System::swapProfile() {
     placement_floor_ = command_.init_sequence;
 
     status.applied_id = c->binding->id;
-    status.state      = gatr2::kProfileApplied;
-    status.reason     = gatr2::kProfileReasonNone;
+    status.state      = translagatr::kProfileApplied;
+    status.reason     = translagatr::kProfileReasonNone;
     status.detail     = 0;
     c->binding->generation = ++profile_applies_;
 
@@ -854,6 +879,7 @@ void System::swapProfile() {
     noteEvent(last_now_, "profile " + hexId(c->binding->id) + " applied (" +
                              c->binding->summary + "); odometry epoch " +
                              std::to_string(robot_.odometry_epoch) + ", placement required");
+    noteFault(CaptureFault::kProfileChanged, "profile " + hexId(c->binding->id) + " applied");
 }
 
 void System::swapToWaiting() {
@@ -933,10 +959,28 @@ std::shared_ptr<const BindingView> System::bindingView() const {
 }
 
 void System::noteEvent(MonotonicTime at, std::string text) {
+    // events are rare: post unconditionally, so hub.latest() has the newest
+    DiagRecord record;
+    record.kind   = DiagKind::kEvent;
+    record.source = event_source_;
+    DiagEvent e;
+    const std::size_t n = std::min(text.size(), sizeof(e.text) - 1);
+    std::memcpy(e.text, text.data(), n);
+    e.text[n]      = '\0';
+    record.payload = e;
+    diag_hub_->post(std::move(record));
+
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
     events_.push_back(RuntimeEvent{++event_count_, at, std::move(text)});
     if (events_.size() > kEventsKept) {
         events_.erase(events_.begin());
+    }
+}
+
+void System::noteFault(CaptureFault fault, const std::string& text) {
+    // queues a note for the recorder thread; never waits for capture work
+    if (capture_ != nullptr) {
+        capture_->fault(fault, text);
     }
 }
 
@@ -1041,9 +1085,9 @@ void System::reportingCycle(MonotonicTime now) {
     reporting->brain_state    = pub_out.brain_state;
     reporting->pico_operation = pico_op_;
     if (profiled_) {
-        std::array<gatr2::WheelReading, gatr2::kWheelReadingsMax> wheels{};
+        std::array<translagatr::WheelReading, translagatr::kWheelReadingsMax> wheels{};
         uint8_t                                                    count = 0;
-        if (readWheels(now, count, wheels.data()) == gatr2::kResultOk) {
+        if (readWheels(now, count, wheels.data()) == translagatr::kResultOk) {
             reporting->wheels.assign(wheels.begin(), wheels.begin() + count);
         }
     }
@@ -1288,6 +1332,11 @@ void System::resetStages() {
 void System::reset() {
     std::lock_guard<std::mutex> lifecycle(lifecycle_mutex_);
     const bool                  was_running = pauseWorkers();
+    // the boundary before the stages publish their power-on state, so
+    // capture rows from here on carry the new reset count
+    if (capture_ != nullptr) {
+        capture_->noteReset(reset_count_.load() + 1);
+    }
     resetStages();
     reset_count_.fetch_add(1);
     if (was_running) {

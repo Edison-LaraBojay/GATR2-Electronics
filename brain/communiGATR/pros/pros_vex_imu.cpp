@@ -34,6 +34,19 @@ BenchImuSample ProsVexImu::sample() const {
     return s;
 }
 
+VexAttitude ProsVexImu::attitude() const {
+    VexAttitude a;
+    a.stamp_ms = pros::millis();
+    if (imu_.get_status() == pros::ImuStatus::error || imu_.is_calibrating()) {
+        return a;
+    }
+    // PROS_ERR_F (infinity) on a failed read.
+    a.roll_deg  = imu_.get_roll();
+    a.pitch_deg = imu_.get_pitch();
+    a.valid     = std::isfinite(a.roll_deg) && std::isfinite(a.pitch_deg);
+    return a;
+}
+
 bool ProsVexImu::recalibrate() {
     return imu_.reset(false) == 1;
 }

@@ -57,33 +57,33 @@ bool boundaryMm(double m, bool lower, int32_t& out) {
     return true;
 }
 
-bool fillPose(const Pose2D& pose, gatr2::FieldObjectRecord& r) {
+bool fillPose(const Pose2D& pose, translagatr::FieldObjectRecord& r) {
     r.heading_cdeg = radToCdeg(pose.heading_rad);
     return std::isfinite(pose.heading_rad) && roundMm(pose.x_m, r.x_mm) &&
            roundMm(pose.y_m, r.y_mm);
 }
 
-bool fillBox(const CollisionBoxDecl& box, gatr2::FieldObjectRecord& r) {
+bool fillBox(const CollisionBoxDecl& box, translagatr::FieldObjectRecord& r) {
     if (!box.declared) {
         return true;
     }
     if (!std::isfinite(box.center.heading_rad)) {
         return false;
     }
-    r.flags |= gatr2::kObjectObstacle;
+    r.flags |= translagatr::kObjectObstacle;
     r.box_heading_cdeg = static_cast<int16_t>(radToCdeg(box.center.heading_rad));
     return boxOffsetMm(box.center.x_m, r.box_x_mm) && boxOffsetMm(box.center.y_m, r.box_y_mm) &&
            boxSizeMm(box.size_x_m, r.box_length_mm) && boxSizeMm(box.size_y_m, r.box_width_mm);
 }
 
-bool sameContent(const std::vector<gatr2::FieldEstimateRecord>& a,
-                 const std::vector<gatr2::FieldEstimateRecord>& b) {
+bool sameContent(const std::vector<translagatr::FieldEstimateRecord>& a,
+                 const std::vector<translagatr::FieldEstimateRecord>& b) {
     if (a.size() != b.size()) {
         return false;
     }
     for (std::size_t i = 0; i < a.size(); ++i) {
-        const gatr2::FieldEstimateRecord& x = a[i];
-        const gatr2::FieldEstimateRecord& y = b[i];
+        const translagatr::FieldEstimateRecord& x = a[i];
+        const translagatr::FieldEstimateRecord& y = b[i];
         if (x.object_id != y.object_id || x.source != y.source || x.flags != y.flags ||
             x.x_mm != y.x_mm || x.y_mm != y.y_mm || x.heading_cdeg != y.heading_cdeg) {
             return false;
@@ -139,9 +139,9 @@ bool buildFieldMapDocument(const FieldMap& map, FieldMapDocument& out, std::stri
         return false;
     }
     const std::size_t count = map.landmarks.size() + map.obstacles.size();
-    if (count > gatr2::kFieldMaxObjects) {
+    if (count > translagatr::kFieldMaxObjects) {
         err = "field map has " + std::to_string(count) + " objects; a map document holds " +
-              std::to_string(gatr2::kFieldMaxObjects);
+              std::to_string(translagatr::kFieldMaxObjects);
         return false;
     }
 
@@ -155,8 +155,8 @@ bool buildFieldMapDocument(const FieldMap& map, FieldMapDocument& out, std::stri
         o.name             = l.id.value;
         o.landmark         = true;
         o.record.object_id = l.wire_id;
-        o.record.kind      = gatr2::kObjectLandmark;
-        o.record.flags     = gatr2::kObjectEstimated | gatr2::kObjectReference;
+        o.record.kind      = translagatr::kObjectLandmark;
+        o.record.flags     = translagatr::kObjectEstimated | translagatr::kObjectReference;
         if (!fillPose(l.nominal, o.record) || !fillBox(l.box, o.record)) {
             err = "Landmark " + l.id.value + " pose or CollisionBox is outside the wire range";
             return false;
@@ -167,7 +167,7 @@ bool buildFieldMapDocument(const FieldMap& map, FieldMapDocument& out, std::stri
         FieldMapDocument::Object o;
         o.name             = ob.id;
         o.record.object_id = ob.wire_id;
-        o.record.kind      = gatr2::kObjectFixed;
+        o.record.kind      = translagatr::kObjectFixed;
         if (!fillPose(ob.pose, o.record) || !fillBox(ob.box, o.record)) {
             err = "Obstacle " + ob.id + " pose or CollisionBox is outside the wire range";
             return false;
@@ -179,7 +179,7 @@ bool buildFieldMapDocument(const FieldMap& map, FieldMapDocument& out, std::stri
                   return a.record.object_id < b.record.object_id;
               });
 
-    gatr2::FieldMapHeader header;
+    translagatr::FieldMapHeader header;
     header.revision     = map.revision;
     header.object_count = static_cast<uint16_t>(objects.size());
     const FieldBoundaryDecl& b = map.boundary;
@@ -192,20 +192,20 @@ bool buildFieldMapDocument(const FieldMap& map, FieldMapDocument& out, std::stri
         return false;
     }
 
-    std::vector<uint8_t> bytes(gatr2::fieldMapLen(header.object_count));
+    std::vector<uint8_t> bytes(translagatr::fieldMapLen(header.object_count));
     const uint16_t       len = static_cast<uint16_t>(bytes.size());
-    bool                 ok  = gatr2::encodeFieldMapHeader(header, bytes.data(), len);
+    bool                 ok  = translagatr::encodeFieldMapHeader(header, bytes.data(), len);
     for (uint16_t i = 0; ok && i < header.object_count; ++i) {
-        ok = gatr2::encodeFieldObjectRecord(objects[i].record, i, bytes.data(), len);
+        ok = translagatr::encodeFieldObjectRecord(objects[i].record, i, bytes.data(), len);
     }
-    const gatr2::DocError check = ok ? gatr2::validateFieldMap(bytes.data(), len)
-                                     : gatr2::DocError::kLength;
-    if (check != gatr2::DocError::kNone) {
+    const translagatr::DocError check = ok ? translagatr::validateFieldMap(bytes.data(), len)
+                                     : translagatr::DocError::kLength;
+    if (check != translagatr::DocError::kNone) {
         err = "field map document failed validation (DocError " +
               std::to_string(static_cast<int>(check)) + ")";
         return false;
     }
-    const uint32_t id = gatr2::crc32(bytes.data(), len);
+    const uint32_t id = translagatr::crc32(bytes.data(), len);
     if (id == 0) {
         err = "field map id is 0, which means no field on the wire; bump the revision";
         return false;
@@ -217,17 +217,17 @@ bool buildFieldMapDocument(const FieldMap& map, FieldMapDocument& out, std::stri
     return true;
 }
 
-std::vector<gatr2::FieldEstimateRecord> fieldEstimateRecords(const FieldMapDocument& map,
+std::vector<translagatr::FieldEstimateRecord> fieldEstimateRecords(const FieldMapDocument& map,
                                                             const FieldState& field,
                                                             const RobotState& robot,
                                                             MonotonicTime     now) {
-    std::vector<gatr2::FieldEstimateRecord> out;
+    std::vector<translagatr::FieldEstimateRecord> out;
     out.reserve(map.objects.size());
     for (const FieldMapDocument::Object& o : map.objects) {
-        gatr2::FieldEstimateRecord r;
+        translagatr::FieldEstimateRecord r;
         r.object_id    = o.record.object_id;
-        r.source       = gatr2::kEstimateSourceNominal;
-        r.flags        = gatr2::kEstimateValid;
+        r.source       = translagatr::kEstimateSourceNominal;
+        r.flags        = translagatr::kEstimateValid;
         r.x_mm         = o.record.x_mm;
         r.y_mm         = o.record.y_mm;
         r.heading_cdeg = o.record.heading_cdeg;
@@ -244,7 +244,7 @@ std::vector<gatr2::FieldEstimateRecord> fieldEstimateRecords(const FieldMapDocum
                 if (usable) {
                     const Pose2D p = compose(robot.field_from_odom, s.T_odom_object);
                     if (roundMm(p.x_m, x) && roundMm(p.y_m, y) && std::isfinite(p.heading_rad)) {
-                        r.source       = gatr2::kEstimateSourceObserved;
+                        r.source       = translagatr::kEstimateSourceObserved;
                         r.x_mm         = x;
                         r.y_mm         = y;
                         r.heading_cdeg = radToCdeg(p.heading_rad);
@@ -273,7 +273,7 @@ bool fieldReferencesHeader(const FieldMapDocument& map, const std::string& sourc
     text += line;
     std::vector<std::string> names = {"Origin", "RobotAtStart", "kMapId", "kRevision"};
     for (const FieldMapDocument::Object& o : map.objects) {
-        if ((o.record.flags & gatr2::kObjectReference) == 0) {
+        if ((o.record.flags & translagatr::kObjectReference) == 0) {
             continue;
         }
         const std::string name = camelCase(o.name);
@@ -302,7 +302,7 @@ uint32_t FieldDocuments::estimateId() const {
 
 void FieldDocuments::update(const FieldState& field, const RobotState& robot,
                             MonotonicTime now) {
-    std::vector<gatr2::FieldEstimateRecord> records =
+    std::vector<translagatr::FieldEstimateRecord> records =
         fieldEstimateRecords(map_, field, robot, now);
     const uint32_t epoch  = static_cast<uint32_t>(robot.odometry_epoch);
     const uint32_t anchor = static_cast<uint32_t>(robot.anchor_revision);
@@ -315,7 +315,7 @@ void FieldDocuments::update(const FieldState& field, const RobotState& robot,
     }
 
     last_id_ = last_id_ == UINT32_MAX ? 1 : last_id_ + 1;
-    gatr2::FieldEstimateHeader header;
+    translagatr::FieldEstimateHeader header;
     header.object_count    = static_cast<uint16_t>(records.size());
     header.map_id          = map_.map_id;
     header.estimate_id     = last_id_;
@@ -324,13 +324,13 @@ void FieldDocuments::update(const FieldState& field, const RobotState& robot,
 
     Estimate e;
     e.id = last_id_;
-    e.bytes.resize(gatr2::fieldEstimateLen(header.object_count));
+    e.bytes.resize(translagatr::fieldEstimateLen(header.object_count));
     const uint16_t len = static_cast<uint16_t>(e.bytes.size());
-    gatr2::encodeFieldEstimateHeader(header, e.bytes.data(), len);
+    translagatr::encodeFieldEstimateHeader(header, e.bytes.data(), len);
     for (uint16_t i = 0; i < header.object_count; ++i) {
-        gatr2::encodeFieldEstimateRecord(records[i], i, e.bytes.data(), len);
+        translagatr::encodeFieldEstimateRecord(records[i], i, e.bytes.data(), len);
     }
-    e.crc = gatr2::crc32(e.bytes.data(), len);
+    e.crc = translagatr::crc32(e.bytes.data(), len);
     estimates_.push_back(std::move(e));
     while (estimates_.size() > kRetainedEstimates) {
         estimates_.pop_front();
@@ -342,23 +342,23 @@ void FieldDocuments::update(const FieldState& field, const RobotState& robot,
 }
 
 uint8_t FieldDocuments::read(uint8_t kind, uint32_t doc_id, uint16_t offset, uint8_t max_len,
-                             gatr2::BrainReply& reply) const {
+                             translagatr::BrainReply& reply) const {
     if (max_len == 0) {
-        return gatr2::kResultInvalidArgument;
+        return translagatr::kResultInvalidArgument;
     }
     const std::vector<uint8_t>* bytes = nullptr;
     uint32_t                    id    = 0;
     uint32_t                    crc   = 0;
-    if (kind == gatr2::kDocFieldMap) {
+    if (kind == translagatr::kDocFieldMap) {
         if (doc_id != 0 && doc_id != map_.map_id) {
-            return gatr2::kResultStale;
+            return translagatr::kResultStale;
         }
         bytes = &map_.bytes;
         id    = map_.map_id;
         crc   = map_.map_id;
-    } else if (kind == gatr2::kDocFieldEstimate) {
+    } else if (kind == translagatr::kDocFieldEstimate) {
         if (estimates_.empty()) {
-            return gatr2::kResultUnavailable;
+            return translagatr::kResultUnavailable;
         }
         const Estimate* e = doc_id == 0 ? &estimates_.back() : nullptr;
         for (const Estimate& candidate : estimates_) {
@@ -367,20 +367,20 @@ uint8_t FieldDocuments::read(uint8_t kind, uint32_t doc_id, uint16_t offset, uin
             }
         }
         if (e == nullptr) {
-            return gatr2::kResultStale;
+            return translagatr::kResultStale;
         }
         bytes = &e->bytes;
         id    = e->id;
         crc   = e->crc;
     } else {
-        return gatr2::kResultInvalidArgument;
+        return translagatr::kResultInvalidArgument;
     }
     const std::size_t total = bytes->size();
     if (offset >= total) {
-        return gatr2::kResultInvalidArgument;
+        return translagatr::kResultInvalidArgument;
     }
     const std::size_t n = std::min<std::size_t>(
-        {static_cast<std::size_t>(max_len), gatr2::kDocChunkMax, total - offset});
+        {static_cast<std::size_t>(max_len), translagatr::kDocChunkMax, total - offset});
     reply.doc_kind      = kind;
     reply.doc_id        = id;
     reply.doc_total_len = static_cast<uint16_t>(total);
@@ -388,7 +388,7 @@ uint8_t FieldDocuments::read(uint8_t kind, uint32_t doc_id, uint16_t offset, uin
     reply.doc_offset    = offset;
     reply.data_len      = static_cast<uint8_t>(n);
     std::memcpy(reply.data, bytes->data() + offset, n);
-    return gatr2::kResultOk;
+    return translagatr::kResultOk;
 }
 
 void FieldDocuments::reset() {

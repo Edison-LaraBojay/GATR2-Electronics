@@ -27,7 +27,7 @@ int hexDigit(char c) {
 
 std::size_t encodeUsbLine(const uint8_t* frame, std::size_t len, char* out, std::size_t cap) {
     const std::size_t line = kUsbMarkerLen + 2 * len + 1;
-    if (len == 0 || len > gatr2::kMaxFrameLen || cap < line) {
+    if (len == 0 || len > translagatr::kMaxFrameLen || cap < line) {
         return 0;
     }
     std::memcpy(out, kMarker, kUsbMarkerLen);
@@ -88,7 +88,7 @@ bool UsbLineDecoder::finish() {
         return false;
     }
     const std::size_t digits = end - start;
-    if (digits == 0 || digits % 2 != 0 || digits > 2 * gatr2::kMaxFrameLen) {
+    if (digits == 0 || digits % 2 != 0 || digits > 2 * translagatr::kMaxFrameLen) {
         ++stats_.dropped;
         return false;
     }

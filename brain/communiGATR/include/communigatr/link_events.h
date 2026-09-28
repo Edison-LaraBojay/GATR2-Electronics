@@ -24,8 +24,8 @@ struct LinkSnapshot {
     ProfileSync profile         = ProfileSync::kNone;
     bool        state_valid     = false; // a state reply of this session exists
     bool        localized       = false;
-    uint8_t     health          = 0; // gatr2::HealthBit
-    uint8_t     calibration     = gatr2::kCalibrationNone;
+    uint8_t     health          = 0; // translagatr::HealthBit
+    uint8_t     calibration     = translagatr::kCalibrationNone;
     uint32_t    odometry_epoch  = 0;
     uint32_t    anchor_revision = 0;
 };

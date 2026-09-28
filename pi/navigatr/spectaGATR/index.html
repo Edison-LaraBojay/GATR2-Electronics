@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>spectaGATR inspector</title>
+<link rel="stylesheet" href="./style.css">
+<!-- 'three' resolves to the pinned module served by the runtime; OrbitControls
+     imports 'three' through this same map. No CDN, no build step. -->
+<script type="importmap">{"imports":{"three":"./vendor/three.module.min.js"}}</script>
+</head>
+<body>
+
+<div id="status" data-state="connecting" data-snapshots="0" data-frames="0" data-session="" data-cycle="" data-errors="" data-attitude="" data-attitude-status="" data-webgl="" data-live-seen="0" data-readiness="" data-contract="" data-mode="live" data-smoothing="1" data-diags="0" data-trail="0">
+  <span id="conn" class="badge info">connecting</span>
+  <span id="badges" class="badges"></span>
+  <span id="readout" class="readout"></span>
+</div>
+
+<div id="replay-bar" hidden>
+  <span class="replay-tag">REPLAY</span>
+  <span id="replay-label" class="replay-label"></span>
+  <button id="replay-play" type="button">play</button>
+  <label class="muted">speed
+    <select id="replay-speed">
+      <option value="0.25">0.25x</option>
+      <option value="0.5">0.5x</option>
+      <option value="1" selected>1x</option>
+      <option value="2">2x</option>
+      <option value="4">4x</option>
+    </select>
+  </label>
+  <div id="replay-track">
+    <canvas id="replay-marks" title="events: click a marker to go there"></canvas>
+    <input id="replay-scrub" type="range" min="0" max="10000" step="1" value="0">
+  </div>
+  <span id="replay-time" class="replay-time"></span>
+  <button id="replay-exit" type="button">exit replay</button>
+  <div id="replay-note">Recorded data, not live. The live feed keeps running in the background and is not shown. Replay sends nothing to the robot.</div>
+</div>
+
+<div id="main">
+  <div id="view">
+    <div id="view-controls">
+      <button id="btn-reset" type="button">reset view</button>
+      <button id="btn-top" type="button">top-down</button>
+      <button id="btn-follow" type="button">follow robot</button>
+      <button id="btn-planning" type="button" class="active">planning</button>
+      <button id="btn-smooth" type="button" class="active" title="Presentation-only smoothing of the drawn robot: blends to each new pose over one state period (at most 100 ms). Snaps on jumps, resets and stale data. Readouts, graphs, trail and exports always use exact values.">smooth</button>
+    </div>
+    <div id="view-legend">ghost = nominal placement, solid = estimated (observed), line = nominal to estimate;
+      planning: green boundary, red fixed obstacles, orange landmark boxes, cyan direct / magenta avoiding Brain path;
+      green ring = telemetry destination, white diamond = follower target</div>
+    <div id="view-note" hidden></div>
+    <div id="tooltip"></div>
+  </div>
+
+  <aside id="side">
+    <section id="link" class="panel">
+      <div class="panel-head"><span class="panel-title">Brain link</span><span class="live-tag">LIVE, not replayed</span><span id="link-summary" class="muted"></span></div>
+      <div id="readiness" class="badges"></div>
+      <div id="link-profile" class="kv"></div>
+      <div id="link-calibration" class="kv"></div>
+      <table id="wheel-table"></table>
+      <div id="link-pico" class="kv"></div>
+      <div class="subhead">Recovery events, newest first</div>
+      <div id="event-log" class="event-log"></div>
+    </section>
+
+    <section id="camera" class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Camera</span><span class="live-tag">LIVE</span>
+        <select id="camera-select" title="camera"></select>
+        <span id="camera-frame-info" class="muted"></span>
+      </div>
+      <div id="camera-badges" class="badges"></div>
+      <div id="camera-stage">
+        <canvas id="camera-canvas" width="320" height="240"></canvas>
+        <div id="camera-empty">no image</div>
+      </div>
+      <div id="camera-overlay-note" class="muted"></div>
+      <div id="tag-list" class="tag-list"></div>
+      <div id="tag-details" class="tag-details"></div>
+    </section>
+
+    <section id="landmarks" class="panel">
+      <div class="panel-head"><span class="panel-title">Landmarks</span><span class="live-tag">LIVE</span><span class="muted">estimate vs nominal</span></div>
+      <table id="landmark-table"></table>
+    </section>
+  </aside>
+</div>
+
+<section id="diag" class="panel">
+  <div class="panel-head">
+    <div id="dock-tabs" class="tabs" role="tablist">
+      <button type="button" data-tab="diag" class="active">Diagnostics</button>
+      <button type="button" data-tab="graphs">Graphs</button>
+      <button type="button" data-tab="inst">Instrumentation</button>
+      <button type="button" data-tab="latency">Latency</button>
+      <button type="button" data-tab="capture">Capture &amp; replay</button>
+    </div>
+    <span class="live-tag">Diagnostics, Instrumentation and Latency show the LIVE runtime</span>
+    <span id="diag-summary" class="muted"></span>
+    <button id="dock-size" type="button">taller</button>
+    <button id="diag-toggle" type="button">hide</button>
+  </div>
+  <div id="diag-body">
+    <div id="tab-diag" class="tab tab-cols">
+      <div class="diag-col">
+        <h3>Sources</h3>
+        <table id="sources-table"></table>
+      </div>
+      <div class="diag-col">
+        <h3>Workers</h3>
+        <table id="workers-table"></table>
+        <h3>Localization functions</h3>
+        <table id="loc-table"></table>
+      </div>
+      <div class="diag-col">
+        <h3>Diagnostics functions</h3>
+        <table id="diagfn-table"></table>
+        <h3>Links</h3>
+        <table id="links-table"></table>
+      </div>
+      <div class="diag-col">
+        <h3>Preview budget</h3>
+        <form id="preview-form">
+          <label>hz <input id="preview-hz" type="number" min="0" max="30" step="0.5" value="5"></label>
+          <label>quality <input id="preview-quality" type="number" min="1" max="100" step="1" value="70"></label>
+          <label>max width <input id="preview-width" type="number" min="64" max="1920" step="1" value="640"></label>
+          <button type="submit">apply</button>
+        </form>
+        <div id="preview-note" class="muted"></div>
+        <h3>Session</h3>
+        <table id="session-table"></table>
+      </div>
+    </div>
+
+    <div id="tab-graphs" class="tab tab-graphs" hidden>
+      <div class="graph-side">
+        <div class="graph-options">
+          <label>window <select id="graph-span">
+            <option value="10">10 s</option>
+            <option value="30">30 s</option>
+            <option value="60" selected>60 s</option>
+            <option value="120">120 s</option>
+          </select></label>
+          <label title="Heading drawn continuous within a segment instead of wrapped to (-180, 180]"><input id="graph-unwrap" type="checkbox"> unwrap heading</label>
+          <button id="graph-freeze" type="button" title="Hold the live window (click a plot to toggle)">hold</button>
+        </div>
+        <div id="graph-status" class="muted"></div>
+        <div id="graph-picker" class="graph-picker"></div>
+        <select id="graph-column" disabled><option value="">no capture loaded</option></select>
+        <div class="muted graph-help">Gaps are drawn where no sample arrived for 3x the stream's usual interval or across a discontinuity; missing values are never drawn as zero. Red ticks under a plot mark samples the source reported as not valid. Dashed orange lines are events.</div>
+      </div>
+      <div id="graph-stack" class="graph-stack"></div>
+    </div>
+
+    <div id="tab-inst" class="tab tab-cols" hidden>
+      <div class="diag-col wide">
+        <div class="inst-options">
+          <label title="Ask the Pi to keep recent raw bytes per link (bounded); off costs nothing on the Pi"><input id="inst-raw" type="checkbox"> raw bytes (hex)</label>
+          <label title="Ask the Pi to keep recent decoded message summaries per link"><input id="inst-decoded" type="checkbox"> decoded messages</label>
+          <span id="inst-status" class="muted"></span>
+        </div>
+        <h3>Links</h3>
+        <table id="inst-links"></table>
+        <div id="inst-links-note" class="muted"></div>
+        <h3>Decode rejections (newest)</h3>
+        <table id="inst-errors"></table>
+        <h3 id="inst-decoded-head" hidden>Decoded messages (newest)</h3>
+        <table id="inst-decoded-table" hidden></table>
+        <pre id="inst-raw-view" class="hex" hidden></pre>
+      </div>
+      <div class="diag-col">
+        <h3>Pico</h3>
+        <div id="inst-pico" class="kv"></div>
+        <table id="inst-pins"></table>
+        <div id="inst-pin-note" class="muted note"></div>
+        <h3>Encoders</h3>
+        <table id="inst-encoders"></table>
+        <div id="inst-encoder-note" class="muted note"></div>
+        <div id="inst-server-notes" class="muted note"></div>
+        <h3>Brain</h3>
+        <div id="inst-brain" class="kv"></div>
+        <h3>Diagnostics hub</h3>
+        <div id="inst-hub" class="kv"></div>
+      </div>
+    </div>
+
+    <div id="tab-latency" class="tab tab-cols" hidden>
+      <div class="diag-col">
+        <h3>Latency terms</h3>
+        <table id="lat-terms"></table>
+        <div id="lat-note" class="muted"></div>
+      </div>
+      <div class="diag-col">
+        <h3>Messages by channel</h3>
+        <table id="lat-channels"></table>
+        <h3>Server queue, per client</h3>
+        <table id="lat-clients"></table>
+        <div id="lat-closed" class="muted note"></div>
+        <h3>Server document builds</h3>
+        <table id="lat-builds"></table>
+      </div>
+    </div>
+
+    <div id="tab-capture" class="tab tab-cols" hidden>
+      <div class="diag-col">
+        <h3>Record on the Pi</h3>
+        <div class="cap-form">
+          <label>before trigger <input id="cap-pre" type="number" min="0" max="30" step="1" value="10"> s</label>
+          <label>after trigger <input id="cap-post" type="number" min="1" max="60" step="1" value="15"> s</label>
+          <button id="cap-start" type="button" disabled>start capture</button>
+          <button id="cap-cancel" type="button" disabled>cancel</button>
+        </div>
+        <div id="cap-streams" class="cap-streams"></div>
+        <div id="cap-msg" class="muted"></div>
+        <div id="cap-status" class="muted"></div>
+        <div id="cap-active" class="kv" hidden></div>
+      </div>
+      <div class="diag-col wide">
+        <h3>Captures</h3>
+        <table id="cap-list"></table>
+        <h3>Replay a capture file</h3>
+        <label class="muted">open a capture ZIP from this computer <input id="cap-file" type="file" accept=".zip,application/zip"></label>
+        <div id="replay-info" class="muted"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script type="module">
+// The runtime can refuse a request with 503 when a slow link keeps too many
+// of the browser's parallel file requests open at once, and a module that
+// failed to load cannot be imported again in this document: reload, at
+// most five times. Awaiting here keeps the load event after app.js's own
+// start-up wait (headless checks read the DOM at load).
+try {
+    await import('./app.js');
+} catch (e) {
+    const tries = Number(new URLSearchParams(location.search).get('reload') || 0);
+    const note = document.getElementById('view-note');
+    note.hidden = false;
+    note.textContent = `viewer failed to load (${e && e.message ? e.message : e}); ` +
+        (tries < 5 ? 'reloading...' : 'reload the page when the link is less busy');
+    if (tries < 5) {
+        setTimeout(() => {
+            const u = new URL(location.href);
+            u.searchParams.set('reload', String(tries + 1));
+            location.replace(u);
+        }, 1000 * (tries + 1));
+    }
+}
+</script>
+</body>
+</html>

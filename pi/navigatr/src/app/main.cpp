@@ -8,7 +8,8 @@
 //
 // Default run mode starts the estimation and field workers and, when the
 // configuration enables it, the inspection service; SIGINT/SIGTERM stop the
-// service first, then the workers, then the system. --inline runs every
+// service first, then the capture recorder, then the workers, then the
+// system. --inline runs every
 // stage on this thread at the loop rate instead (deterministic replay and
 // bench use; warned with the brain link, which needs the workers). --cycles
 // stops after n estimation cycles in either mode. --inspect-port enables
@@ -106,6 +107,14 @@ int main(int argc, char** argv) {
     for (const std::string& warning : system->warnings()) {
         std::fprintf(stderr, "warning: %s\n", warning.c_str());
     }
+    const navigatr::CaptureConfig& capture = system->captureConfig();
+    if (capture.enabled) {
+        std::fprintf(stderr, "capture on: rolling %.0f s, keep %ld, %s%s\n", capture.rolling_s,
+                     capture.keep, capture.directory.empty() ? "memory only" : "files in ",
+                     capture.directory.c_str());
+    } else {
+        std::fprintf(stderr, "capture off\n");
+    }
     if (inline_mode && system->commandsType() == "brain_link") {
         std::fprintf(stderr, "warning: --inline runs world estimation between a brain_link "
                              "request and its reply; replies may miss the reply window\n");
@@ -168,9 +177,13 @@ int main(int argc, char** argv) {
         }
     }
 
-    // orderly: browsers first, then the workers, then the system itself
+    // orderly: browsers first, then the capture recorder (a capture still
+    // recording is closed as truncated), then the workers, then the system
     if (service != nullptr) {
         service->stop();
+    }
+    if (system->capture() != nullptr) {
+        system->capture()->stop();
     }
     system->stop();
 

@@ -65,13 +65,17 @@ ChildSection childSection(Section parent, const std::string& name) {
         if (name == "Resources") return {true, Section::kResources};
         if (name == "Sensors") return {true, Section::kSensors};
         if (name == "Pipeline") return {true, Section::kPipeline};
-        if (name == "Loop" || name == "Inspection") return {true, Section::kOpaque};
+        if (name == "Loop" || name == "Inspection" || name == "Capture") {
+            return {true, Section::kOpaque};
+        }
         break;
     case Section::kConfiguration:
         if (name == "Robot") return {true, Section::kRobot};
         if (name == "Field") return {true, Section::kField};
         if (name == "Pipeline") return {true, Section::kPipeline};
-        if (name == "Loop" || name == "Inspection") return {true, Section::kOpaque};
+        if (name == "Loop" || name == "Inspection" || name == "Capture") {
+            return {true, Section::kOpaque};
+        }
         break;
     case Section::kRobot:
         if (name == "Resources") return {true, Section::kResources};
@@ -380,7 +384,7 @@ bool composeProfile(const tinyxml2::XMLElement* root, const Resolver& resolver,
                 if (!copyItem(item, "Resource", resources, resource_ids)) return false;
             }
         } else if (name == "ConfigurationName" || name == "Loop" ||
-                   name == "Inspection" || name == "Pipeline") {
+                   name == "Inspection" || name == "Capture" || name == "Pipeline") {
             for (const auto& previous : singular) {
                 if (previous == name) {
                     err = resolver.where(child) + ": more than one " + name;

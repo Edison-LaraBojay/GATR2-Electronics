@@ -78,9 +78,9 @@ protected:
     }
 
     // Raw frame to the Brain, on the chosen transport.
-    void inject(const gatr2::BrainReply& reply) {
-        std::vector<uint8_t> frame(gatr2::kMaxFrameLen);
-        frame.resize(gatr2::encodeBrainReply(reply, frame.data(), gatr2::kMaxFrameLen));
+    void inject(const translagatr::BrainReply& reply) {
+        std::vector<uint8_t> frame(translagatr::kMaxFrameLen);
+        frame.resize(translagatr::encodeBrainReply(reply, frame.data(), translagatr::kMaxFrameLen));
         if (GetParam() == RigTransport::kUsb) {
             char              line[kUsbLineMax];
             const std::size_t n = encodeUsbLine(frame.data(), frame.size(), line, sizeof(line));
@@ -92,7 +92,7 @@ protected:
 
     std::size_t piSaw(uint8_t op) const {
         std::size_t n = 0;
-        for (const gatr2::BrainRequest& r : rig.pi.requests()) {
+        for (const translagatr::BrainRequest& r : rig.pi.requests()) {
             n += r.op == op ? 1 : 0;
         }
         return n;
@@ -128,7 +128,7 @@ TEST_P(Recovery, BrainRestartKeepsProfilePlacementAndMap) {
 TEST_P(Recovery, BrainRestartWhileThePiAppliesTheSameProfileAppliesItOnce) {
     rig.pi.setProfileApplyDelay(40);
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.client().profile().result == gatr2::kResultPending; }, kLimit));
+        [&] { return rig.client().profile().result == translagatr::kResultPending; }, kLimit));
     rig.rebootBrain();
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().profileApplied(); }, kLimit));
     EXPECT_EQ(rig.pi.profilesApplied(), 1);
@@ -142,7 +142,7 @@ TEST_P(Recovery, BrainRestartWhileThePiAppliesTheSameProfileAppliesItOnce) {
 
 TEST_P(Recovery, PiRestartInTheMiddleOfTheProfileUpload) {
     RobotProfile large = benchProfile();
-    for (uint8_t slot = 0; slot < gatr2::kProfileMaxCameras; ++slot) {
+    for (uint8_t slot = 0; slot < translagatr::kProfileMaxCameras; ++slot) {
         CameraMount c;
         c.slot = slot;
         c.z    = 0.3;
@@ -150,10 +150,10 @@ TEST_P(Recovery, PiRestartInTheMiddleOfTheProfileUpload) {
     }
     ClientConfig config = benchConfig();
     config.profile      = makeProfileDocument(large);
-    ASSERT_GT(config.profile.len, gatr2::kProfileChunkMax);
+    ASSERT_GT(config.profile.len, translagatr::kProfileChunkMax);
     rig.rebootBrain(config);
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.pi.stagingReceived() == gatr2::kProfileChunkMax; }, kLimit));
+        [&] { return rig.pi.stagingReceived() == translagatr::kProfileChunkMax; }, kLimit));
     rig.pi.restart(0x0D15EA5E); // staging gone with the process
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().profileApplied(); }, kLimit));
     EXPECT_EQ(rig.client().stats().pi_restarts, 1u);
@@ -171,7 +171,7 @@ TEST_P(Recovery, PlacementIsRefusedUntilTheProfileApplies) {
         EXPECT_EQ(rig.client().submitPlacement(500, 500, 0), 0u);
         rig.run(0.02);
     }
-    EXPECT_EQ(piSaw(gatr2::kOpSetPose), 0u);
+    EXPECT_EQ(piSaw(translagatr::kOpSetPose), 0u);
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().profileApplied(); }, kLimit));
     place(Pose{0.5, 0.5, 0.0});
     EXPECT_EQ(status(), RobotStatus::kValid);
@@ -182,7 +182,7 @@ TEST_P(Recovery, PlacementIsRefusedUntilTheProfileApplies) {
 // final result arrives.
 TEST_P(Recovery, ControlPendingThroughLostRepliesRunsOnce) {
     ready();
-    for (const uint8_t failure : {gatr2::kControlDetailNone, gatr2::kControlDetailImuAbsent}) {
+    for (const uint8_t failure : {translagatr::kControlDetailNone, translagatr::kControlDetailImuAbsent}) {
         SCOPED_TRACE(int(failure));
         const int executed = rig.pi.controlsExecuted();
         rig.pi.setControlFailure(failure);
@@ -190,14 +190,14 @@ TEST_P(Recovery, ControlPendingThroughLostRepliesRunsOnce) {
         const ControlTicket ticket = rig.client().reinitImu();
         ASSERT_NE(ticket, 0u);
         ASSERT_TRUE(rig.runUntil(
-            [&] { return rig.client().controlStatus(ticket).result == gatr2::kResultPending; },
+            [&] { return rig.client().controlStatus(ticket).result == translagatr::kResultPending; },
             kLimit));
         cut(true);
         rig.run(0.15);
         cut(false);
         ASSERT_TRUE(rig.runUntil([&] { return !rig.client().controlPending(); }, kLimit));
         const ControlStatus s = rig.client().controlStatus(ticket);
-        if (failure == gatr2::kControlDetailNone) {
+        if (failure == translagatr::kControlDetailNone) {
             EXPECT_EQ(s.state, ControlResult::kOk);
         } else {
             EXPECT_EQ(s.state, ControlResult::kFailed);
@@ -205,7 +205,7 @@ TEST_P(Recovery, ControlPendingThroughLostRepliesRunsOnce) {
         }
         EXPECT_EQ(rig.pi.controlsExecuted(), executed + 1);
     }
-    rig.pi.setControlFailure(gatr2::kControlDetailNone);
+    rig.pi.setControlFailure(translagatr::kControlDetailNone);
 }
 
 // A cut much longer than control_attempts round trips while the Pi works on
@@ -218,7 +218,7 @@ TEST_P(Recovery, PendingControlSurvivesALongCut) {
     const ControlTicket ticket = rig.client().reinitImu();
     ASSERT_NE(ticket, 0u);
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.client().controlStatus(ticket).result == gatr2::kResultPending; },
+        [&] { return rig.client().controlStatus(ticket).result == translagatr::kResultPending; },
         kLimit));
     const uint32_t session = rig.client().session();
     cut(true);
@@ -230,8 +230,8 @@ TEST_P(Recovery, PendingControlSurvivesALongCut) {
     EXPECT_EQ(rig.pi.controlsExecuted(), executed + 1);
     EXPECT_EQ(rig.client().session(), session);
     uint16_t id = 0;
-    for (const gatr2::BrainRequest& r : rig.pi.requests()) {
-        if (r.op == gatr2::kOpControl) {
+    for (const translagatr::BrainRequest& r : rig.pi.requests()) {
+        if (r.op == translagatr::kOpControl) {
             if (id == 0) {
                 id = r.request_id;
             }
@@ -251,7 +251,7 @@ TEST_P(Recovery, PendingControlEndsAtControlWaitWhileCut) {
     const Seconds       start  = rig.now();
     const ControlTicket ticket = rig.client().restartAcquisition();
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.client().controlStatus(ticket).result == gatr2::kResultPending; },
+        [&] { return rig.client().controlStatus(ticket).result == translagatr::kResultPending; },
         kLimit));
     cut(true);
     ASSERT_TRUE(rig.runUntil([&] { return !rig.client().controlPending(); }, kLimit));
@@ -263,8 +263,8 @@ TEST_P(Recovery, PendingControlEndsAtControlWaitWhileCut) {
 // the next read after the cable is back gets the readings.
 TEST_P(Recovery, WheelReadLostToACutSettlesAndReadsAgain) {
     ready();
-    gatr2::WheelReading reading;
-    reading.flags     = gatr2::kWheelFresh | gatr2::kWheelValid;
+    translagatr::WheelReading reading;
+    reading.flags     = translagatr::kWheelFresh | translagatr::kWheelValid;
     reading.travel_um = 1234;
     rig.pi.setWheels({reading});
     const uint32_t sequence = rig.client().wheelReadings().sequence;
@@ -323,7 +323,7 @@ TEST_P(Recovery, TransfersInterruptedByTheLinkComplete) {
     rig.pi.setField(makeFakeField(80));
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().profileApplied(); }, kLimit));
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.client().fieldSync().map_received >= 4 * gatr2::kDocChunkMax; },
+        [&] { return rig.client().fieldSync().map_received >= 4 * translagatr::kDocChunkMax; },
         kLimit));
     cut(true);
     rig.run(0.6);
@@ -337,8 +337,8 @@ TEST_P(Recovery, TransfersInterruptedByTheLinkComplete) {
 TEST_P(Recovery, RepliesFromBeforeTheCutAreIgnored) {
     ready();
     const StateSample before = rig.client().state();
-    gatr2::BrainReply old;
-    old.op          = gatr2::kOpGetState;
+    translagatr::BrainReply old;
+    old.op          = translagatr::kOpGetState;
     old.session     = rig.client().session();
     old.request_id  = 3; // long answered
     old.pi_instance = rig.pi.piInstance();
@@ -390,7 +390,7 @@ TEST_P(Recovery, ImuReinitIsFollowedUntilThePiReportsTheOutcome) {
     ASSERT_TRUE(rig.runUntil([&] { return !rig.client().controlPending(); }, kLimit));
     EXPECT_EQ(rig.client().controlStatus(ticket).state, ControlResult::kOk);
     EXPECT_EQ(rig.pi.controlsExecuted(), 1);
-    EXPECT_GT(piSaw(gatr2::kOpControl), 1u); // asked again, executed once
+    EXPECT_GT(piSaw(translagatr::kOpControl), 1u); // asked again, executed once
 }
 
 TEST_P(Recovery, InterruptedCommandsAreNeverResumed) {
@@ -399,24 +399,24 @@ TEST_P(Recovery, InterruptedCommandsAreNeverResumed) {
     rig.pi.setControlPendingRequests(1000000);
     const ControlTicket control = rig.client().reinitImu();
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.client().controlStatus(control).result == gatr2::kResultPending; },
+        [&] { return rig.client().controlStatus(control).result == translagatr::kResultPending; },
         kLimit));
     const PlacementTicket placement = rig.driver().place(Pose{1.0, 1.0, 0.0});
     ASSERT_NE(placement, 0u);
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.client().placementStatus(placement).result == gatr2::kResultPending; },
+        [&] { return rig.client().placementStatus(placement).result == translagatr::kResultPending; },
         kLimit));
     rig.pi.setControlPendingRequests(0);
     rig.pi.restart(0x600D0001);
     ASSERT_TRUE(rig.runUntil([&] { return !rig.client().controlPending(); }, kLimit));
     EXPECT_EQ(rig.client().controlStatus(control).state, ControlResult::kSessionLost);
     EXPECT_EQ(rig.client().placementResult(placement), PlacementResult::kSessionLost);
-    const std::size_t controls   = piSaw(gatr2::kOpControl);
-    const std::size_t placements = piSaw(gatr2::kOpSetPose);
+    const std::size_t controls   = piSaw(translagatr::kOpControl);
+    const std::size_t placements = piSaw(translagatr::kOpSetPose);
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().profileApplied(); }, kLimit));
     rig.run(1.0);
-    EXPECT_EQ(piSaw(gatr2::kOpControl), controls);
-    EXPECT_EQ(piSaw(gatr2::kOpSetPose), placements);
+    EXPECT_EQ(piSaw(translagatr::kOpControl), controls);
+    EXPECT_EQ(piSaw(translagatr::kOpSetPose), placements);
     EXPECT_EQ(status(), RobotStatus::kUnplaced);
 }
 
@@ -461,13 +461,13 @@ TEST(RecoveryUsb, DiagnosticPrefixBeforeTheMarkerIsTolerated) {
     LinkRig rig(ClientConfig{}, FakeBusConfig{}, RigTransport::kUsb);
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().ready(); }, kLimit));
     // A reply line with kernel text glued in front still decodes.
-    gatr2::BrainReply fake;
-    fake.op          = gatr2::kOpGetState;
+    translagatr::BrainReply fake;
+    fake.op          = translagatr::kOpGetState;
     fake.session     = rig.client().session();
     fake.request_id  = 1;
     fake.pi_instance = rig.pi.piInstance();
-    std::vector<uint8_t> frame(gatr2::kMaxFrameLen);
-    frame.resize(gatr2::encodeBrainReply(fake, frame.data(), gatr2::kMaxFrameLen));
+    std::vector<uint8_t> frame(translagatr::kMaxFrameLen);
+    frame.resize(translagatr::encodeBrainReply(fake, frame.data(), translagatr::kMaxFrameLen));
     char              line[kUsbLineMax];
     const std::size_t n = encodeUsbLine(frame.data(), frame.size(), line, sizeof(line));
     rig.usb.textToBrain("[kernel] note NG1:" + std::string(line + kUsbMarkerLen, n - kUsbMarkerLen));

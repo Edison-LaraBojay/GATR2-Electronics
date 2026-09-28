@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "common/frame_codec.h"
+#include "translaGATR/frame_codec.h"
 
 namespace communigatr
 {
@@ -37,7 +37,7 @@ public:
     uint8_t  maxLen() const;
 
     // A READ_DOC Ok reply to the chunk request made from offset().
-    Step accept(const gatr2::BrainReply& reply);
+    Step accept(const translagatr::BrainReply& reply);
 
     // The document, only after kComplete and until begin() or clear().
     bool           complete() const { return complete_; }

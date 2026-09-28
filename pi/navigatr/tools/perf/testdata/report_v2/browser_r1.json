@@ -1,0 +1,2 @@
+{"tool":"navigatr_cdp_bench","conditions":{"viewer_live":true,"load_attempts":1,"server_changed":false,"server_hello_start":{"contract":"navigatr.inspect/2"}},
+ "scenarios":[{"scenario":"idle_net100","network":"requested 100 kB/s, 20 ms","probe":{"messages":{"state":{"per_s":30,"bytes_s":33000},"diag":{"per_s":4,"bytes_s":1067000}}}}]}

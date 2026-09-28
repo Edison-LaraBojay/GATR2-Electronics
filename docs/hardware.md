@@ -8,7 +8,7 @@ This page connects the hardware to the checked-in acquisition and Pi runtime.
 ## IMU
 
 The robot's IMU is a GY-BNO08X breakout on SPI1 (mode 3, at most 3 MHz). The
-Pico's [BNO08X driver](../pico/src/imu_bno08x.cpp) runs CEVA's sh2 library over a
+Pico's [BNO08X driver](../pico/aggreGATR/src/imu_bno08x.cpp) runs CEVA's sh2 library over a
 non-blocking SPI layer. It enables acceleration report `0x01` at 100 Hz and
 uncalibrated gyro report `0x07` at 200 Hz. At startup or IMU reset, at least two
 seconds of stationary, level robot data establish sensor-space up. The driver
@@ -34,18 +34,18 @@ Pi HAT v2 wiring, by the module's printed labels:
 PS0 and PS1 must be high through reset to select SPI; the driver resets the hub
 with PS0 held high, then uses PS0 as WAKE. The interrupt line is required: the
 v3 HAT's six-pin IMU connector drops it. Pins live in
-[board.h](../pico/src/board.h).
+[board.h](../pico/aggreGATR/src/board.h).
 
 The earlier [IMU board](../pcb/IMU/README.md) with the ASM330LHHG1 stays
-selectable with the `hat2_asm330` build ([driver](../pico/src/imu_asm330.cpp)):
+selectable with the `hat2_asm330` build ([driver](../pico/aggreGATR/src/imu_asm330.cpp)):
 208 Hz, 2000 degrees/second full scale, 70 millidegrees/second per LSB, newest
 sample per frame, accelerometer disabled.
 
 Keep the robot level and still at a full startup: about two seconds for BNO08X
 alignment, then the Pi's gyro bias window (2 s by default with a Brain profile,
 200 samples, about 4 s, in the XML parallel-wheel profiles). The
-[bring-up guide](../pi/navigatr/docs/parallel_wheel_bringup.md) and
-[Brain robot profiles](../pi/navigatr/docs/brain_profile.md#calibration-and-stationary-handling)
+[bring-up guide](../pi/naviGATR/docs/parallel_wheel_bringup.md) and
+[Brain robot profiles](../pi/naviGATR/docs/brain_profile.md#calibration-and-stationary-handling)
 describe the stationarity checks. The fixed axis does not compensate later
 rocking, and the Brain's placement still supplies field heading. The IMU chip
 (BNO08X or ASM330) is chosen by the Pico firmware build; a Brain profile only
@@ -56,7 +56,7 @@ then localization observation models estimate bias and use heading increments.
 The protocol defines optional accel XY fields, but the current firmware does not
 populate them: BNO08X acceleration is used internally for startup alignment.
 No quaternion/roll/pitch report exists. See the
-[attitude follow-up](../pi/navigatr/docs/attitude_firmware_followup.md) for the
+[attitude follow-up](../pi/naviGATR/docs/attitude_firmware_followup.md) for the
 additional acquisition and protocol work needed for measured tilt.
 
 The present estimator does not periodically correct robot heading from field
@@ -70,13 +70,13 @@ do not establish assembled-robot drift or alignment accuracy.
 The [magnetic encoder board](../pcb/MagneticEncoder/README.md) supports compact
 custom tracking-wheel assemblies using contactless magnetic rotation sensing.
 The Pico counts A/B quadrature for three channels. Its
-[pin map](../pico/src/board.h) assigns channels to GP0/1, GP2/3, and GP4/5,
+[pin map](../pico/aggreGATR/src/board.h) assigns channels to GP0/1, GP2/3, and GP4/5,
 which are J2, J3 and J4 on the v2 HAT (logical encoder ports 0, 1 and 2); pin
 and connector wiring must match the chosen HAT revision. The current bench has
 a forward-measuring wheel on port 0 (J2) and a sideways wheel on port 1 (J3),
 described on the Brain ([gatr2_robot.h](../brain/robot/gatr2_robot.h)); the
 earlier two parallel wheels have their own
-[XML bring-up](../pi/navigatr/docs/parallel_wheel_bringup.md).
+[XML bring-up](../pi/naviGATR/docs/parallel_wheel_bringup.md).
 
 Counts per revolution, gearing and encoder polarity are sensor calibration.
 Effective wheel radius, position, rolling direction and the measured travel
@@ -85,7 +85,7 @@ the Brain profile, or `wheel_geometry` in an XML profile. Verify the actual enco
 configuration and counted edges rather than assuming every assembly has the same
 counts per revolution. The parallel-wheel AS5047P template uses its default
 4000 counts/revolution with x4 decoding and direct 1:1 wheel coupling; see the
-[bring-up guide](../pi/navigatr/docs/parallel_wheel_bringup.md#3-fill-in-the-robot-description).
+[bring-up guide](../pi/naviGATR/docs/parallel_wheel_bringup.md#3-fill-in-the-robot-description).
 Unpowered tracking wheels measure ground movement but
 still depend on contact, mounting rigidity, and calibration.
 
@@ -111,7 +111,7 @@ timestamps, and packet layouts.
 
 The link is two way: the Pico also sends status frames (boot identity, epochs,
 IMU state) and reads Pi commands (reinitialize the IMU, restart acquisition) on
-GP17. See [Pico link](../pi/navigatr/docs/pico_link.md). The Pi to Pico
+GP17. See [Pico link](../pi/naviGATR/docs/pico_link.md). The Pi to Pico
 direction on the HAT wiring has not been checked on hardware.
 
 ## USB to the V5 Brain
@@ -120,7 +120,7 @@ The current bench bypasses the HAT's RS-485 circuit: a data cable from a Pi
 USB-A port to the Brain's micro-USB port, with the Brain on its V5 battery. The
 Pi's `pros_usb_link` finds the Brain's USB user interface and wraps each frame
 in an `NG1:` hexadecimal line; see
-[USB bench](../pi/navigatr/docs/usb_localization_bench.md). Choosing USB or
+[USB bench](../pi/naviGATR/docs/usb_localization_bench.md). Choosing USB or
 RS-485 needs the matching Pi config (`brain_profile_usb.xml` or
 `brain_profile_rs485.xml`) and never changes localization geometry.
 
@@ -167,7 +167,7 @@ An uncalibrated inspection profile supports viewing images and decoded IDs first
 The browser renders the 3D field on the viewing computer, reached through an SSH
 port forward to the Pi's inspection service.
 
-See [camera setup](../pi/navigatr/docs/pi_camera_setup.md) for supported capture
+See [camera setup](../pi/naviGATR/docs/pi_camera_setup.md) for supported capture
 configuration and the remaining hardware checks. Pi throughput, capture timing,
 memory use, and physical alignment accuracy have not been established by host
 simulation tests. Measure them on the selected camera, mode, and robot.

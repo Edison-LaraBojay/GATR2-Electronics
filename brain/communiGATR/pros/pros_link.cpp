@@ -212,7 +212,7 @@ ProsLinkStatus ProsLink::status() const {
     s.readiness     = s.summary.state;
     s.profile       = client_.profile();
     s.state         = client_.state();
-    if (s.state.valid && (s.state.state.robot_flags & gatr2::kRobotPoseValid) != 0) {
+    if (s.state.valid && (s.state.state.robot_flags & translagatr::kRobotPoseValid) != 0) {
         s.heading_valid = true;
         s.heading = investigatr::wrapAngle(s.state.state.heading_cdeg * investigatr::kPi / 18000.0);
     }
@@ -226,6 +226,7 @@ ProsLinkStatus ProsLink::status() const {
     s.stats                       = client_.stats();
     s.link.serial_closes          = serial_ ? serial_->closes() : 0;
     s.link.call_lock_misses       = call_lock_misses_.load();
+    s.telemetry_unsupported       = client_.telemetryUnsupported();
     return s;
 }
 
@@ -339,7 +340,7 @@ WheelReadings ProsLink::wheelReadings() const {
         callMissed();
         WheelReadings none;
         none.busy   = true;
-        none.result = gatr2::kResultNotReady;
+        none.result = translagatr::kResultNotReady;
         return none;
     }
     return client_.wheelReadings();
@@ -372,6 +373,15 @@ bool ProsLink::resubmitProfile() {
     }
     client_.resubmitProfile();
     return true;
+}
+
+bool ProsLink::reportTelemetry(const translagatr::BrainTelemetry& telemetry) {
+    Lock lock(mutex_, config_.call_timeout_ms);
+    if (!lock) {
+        callMissed();
+        return false;
+    }
+    return client_.reportTelemetry(telemetry);
 }
 
 // Called by the client inside poll(), once per new HELLO. Mixes micros() at

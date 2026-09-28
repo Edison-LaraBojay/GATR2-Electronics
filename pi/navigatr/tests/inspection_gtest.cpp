@@ -2,29 +2,13 @@
 // The inspection service end to end on loopback: a real System built from
 // the synthetic rig, the real HTTP and WebSocket server on an ephemeral
 // port, and a minimal blocking client on the test side. Routes, the feed
-// (hello, snapshots, bound JPEG previews), per-client preview budgets, the
+// (hello, state, diag, bound JPEG previews), per-client preview budgets, the
 // slow-client bound, reconnection, shutdown order and the config checks.
+// The inspect/2 queue and message behavior is in inspection_feed_gtest.cpp.
 // Timing assertions are deliberately loose: Windows timers are coarse and
 // the suite shares the machine.
 
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
-#endif
+#include "inspection_test_client.h"
 
 #include <gtest/gtest.h>
 
@@ -63,12 +47,10 @@
 #include "runtime/system.h"
 
 using namespace navigatr;
+using namespace inspection_client;
 
 namespace
 {
-
-using Clock = std::chrono::steady_clock;
-using Ms    = std::chrono::milliseconds;
 
 // ---- configuration ----------------------------------------------------------
 
@@ -269,332 +251,6 @@ struct Fixture {
     }
 };
 
-// ---- sockets ----------------------------------------------------------------------
-
-#ifdef _WIN32
-using Sock = SOCKET;
-const Sock kBadSock = INVALID_SOCKET;
-void       closeSock(Sock s) { closesocket(s); }
-struct SocketsInit {
-    SocketsInit() {
-        WSADATA d;
-        WSAStartup(MAKEWORD(2, 2), &d);
-    }
-    ~SocketsInit() { WSACleanup(); }
-};
-#else
-using Sock = int;
-const Sock kBadSock = -1;
-void       closeSock(Sock s) { ::close(s); }
-struct SocketsInit {};
-#endif
-
-[[maybe_unused]] SocketsInit g_sockets;
-
-class TestConnection
-{
-public:
-    ~TestConnection() { close(); }
-
-    // A small receive buffer makes the kernel stop absorbing quickly, so a
-    // client that never reads stalls the server within the test budget.
-    bool connect(int port, int recv_buffer_bytes = 0) {
-        sock_ = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (sock_ == kBadSock) {
-            return false;
-        }
-        if (recv_buffer_bytes > 0) {
-            setsockopt(sock_, SOL_SOCKET, SO_RCVBUF,
-                       reinterpret_cast<const char*>(&recv_buffer_bytes),
-                       sizeof(recv_buffer_bytes));
-        }
-        sockaddr_in a;
-        std::memset(&a, 0, sizeof(a));
-        a.sin_family = AF_INET;
-        a.sin_port   = htons(static_cast<uint16_t>(port));
-        inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
-        if (::connect(sock_, reinterpret_cast<const sockaddr*>(&a), sizeof(a)) != 0) {
-            close();
-            return false;
-        }
-        const int one = 1;
-        setsockopt(sock_, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&one),
-                   sizeof(one));
-        return true;
-    }
-
-    bool sendAll(const std::string& bytes) {
-        std::size_t off = 0;
-        while (off < bytes.size()) {
-            const auto n = ::send(sock_, bytes.data() + off,
-                                  static_cast<int>(bytes.size() - off), 0);
-            if (n <= 0) {
-                return false;
-            }
-            off += static_cast<std::size_t>(n);
-        }
-        return true;
-    }
-
-    // Appends what arrives within timeout. False on timeout or close.
-    bool readSome(Ms timeout) {
-        if (sock_ == kBadSock || closed) {
-            return false;
-        }
-        fd_set rd;
-        FD_ZERO(&rd);
-        FD_SET(sock_, &rd);
-        timeval tv;
-        tv.tv_sec  = static_cast<long>(timeout.count() / 1000);
-        tv.tv_usec = static_cast<long>((timeout.count() % 1000) * 1000);
-#ifdef _WIN32
-        const int r = select(0, &rd, nullptr, nullptr, &tv);
-#else
-        const int r = select(sock_ + 1, &rd, nullptr, nullptr, &tv);
-#endif
-        if (r <= 0) {
-            return false;
-        }
-        char       buf[64 * 1024];
-        const auto n = ::recv(sock_, buf, sizeof(buf), 0);
-        if (n <= 0) {
-            closed = true;
-            return false;
-        }
-        buffer.append(buf, static_cast<std::size_t>(n));
-        return true;
-    }
-
-    void close() {
-        if (sock_ != kBadSock) {
-            closeSock(sock_);
-            sock_ = kBadSock;
-        }
-    }
-
-    std::string buffer;
-    bool        closed = false;
-
-private:
-    Sock sock_ = kBadSock;
-};
-
-struct HttpReply {
-    bool                               ok     = false;
-    int                                status = 0;
-    std::map<std::string, std::string> headers;   // lower-case names
-    std::string                        body;
-};
-
-HttpReply httpRequest(int port, const std::string& method, const std::string& path) {
-    HttpReply      reply;
-    TestConnection c;
-    if (!c.connect(port)) {
-        return reply;
-    }
-    c.sendAll(method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
-    const auto deadline = Clock::now() + Ms(10000);
-    while (!c.closed && Clock::now() < deadline) {
-        c.readSome(Ms(200));
-    }
-    const std::size_t head_end = c.buffer.find("\r\n\r\n");
-    if (head_end == std::string::npos) {
-        return reply;
-    }
-    const std::string head = c.buffer.substr(0, head_end);
-    reply.body             = c.buffer.substr(head_end + 4);
-    std::size_t pos        = head.find("\r\n");
-    std::string line       = head.substr(0, pos);
-    if (line.size() > 12) {
-        reply.status = std::atoi(line.substr(9, 3).c_str());
-    }
-    while (pos != std::string::npos) {
-        const std::size_t next  = head.find("\r\n", pos + 2);
-        const std::string hline = head.substr(pos + 2, next == std::string::npos
-                                                          ? std::string::npos
-                                                          : next - pos - 2);
-        const std::size_t colon = hline.find(':');
-        if (colon != std::string::npos) {
-            std::string name = hline.substr(0, colon);
-            for (char& ch : name) {
-                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-            }
-            std::size_t v = colon + 1;
-            while (v < hline.size() && hline[v] == ' ') {
-                ++v;
-            }
-            reply.headers[name] = hline.substr(v);
-        }
-        pos = next;
-    }
-    reply.ok = reply.status != 0;
-    return reply;
-}
-
-struct WsMessage {
-    int         opcode = -1;
-    std::string payload;
-};
-
-class WsClient
-{
-public:
-    bool connect(int port, int recv_buffer_bytes = 0) {
-        if (!conn_.connect(port, recv_buffer_bytes)) {
-            return false;
-        }
-        // the RFC 6455 sample key: the accept value is known
-        conn_.sendAll("GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
-                      "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-                      "Sec-WebSocket-Version: 13\r\n\r\n");
-        const auto deadline = Clock::now() + Ms(5000);
-        while (conn_.buffer.find("\r\n\r\n") == std::string::npos && !conn_.closed &&
-               Clock::now() < deadline) {
-            conn_.readSome(Ms(200));
-        }
-        const std::size_t end = conn_.buffer.find("\r\n\r\n");
-        if (end == std::string::npos) {
-            return false;
-        }
-        const std::string head = conn_.buffer.substr(0, end);
-        conn_.buffer.erase(0, end + 4);
-        if (head.find("HTTP/1.1 101") != 0) {
-            return false;
-        }
-        std::string lower = head;
-        for (char& ch : lower) {
-            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        }
-        const std::size_t accept = lower.find("sec-websocket-accept:");
-        if (accept == std::string::npos) {
-            return false;
-        }
-        return head.find("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", accept) != std::string::npos;
-    }
-
-    // The next complete message within timeout.
-    bool next(WsMessage& out, Ms timeout) {
-        const auto deadline = Clock::now() + timeout;
-        for (;;) {
-            if (parseFrame(out)) {
-                return true;
-            }
-            if (conn_.closed) {
-                return false;
-            }
-            const auto now = Clock::now();
-            if (now >= deadline) {
-                return false;
-            }
-            const auto remaining = std::chrono::duration_cast<Ms>(deadline - now);
-            conn_.readSome(std::min(remaining, Ms(100)));
-        }
-    }
-
-    void sendText(const std::string& text) { sendFrame(0x1, text, true); }
-    void sendClose() { sendFrame(0x8, std::string("\x03\xe8", 2), true); }
-    // A protocol violation: client frames must be masked.
-    void sendUnmaskedText(const std::string& text) { sendFrame(0x1, text, false); }
-    void close() { conn_.close(); }
-    bool closed() const { return conn_.closed; }
-
-private:
-    void sendFrame(uint8_t opcode, const std::string& payload, bool masked) {
-        std::string f;
-        f.push_back(static_cast<char>(0x80 | opcode));
-        const std::size_t len      = payload.size();
-        const uint8_t     mask_bit = masked ? 0x80 : 0x00;
-        if (len < 126) {
-            f.push_back(static_cast<char>(mask_bit | len));
-        } else {
-            f.push_back(static_cast<char>(mask_bit | 126));
-            f.push_back(static_cast<char>(len >> 8));
-            f.push_back(static_cast<char>(len & 0xff));
-        }
-        if (!masked) {
-            f += payload;
-            conn_.sendAll(f);
-            return;
-        }
-        const uint8_t mask[4] = {0x12, 0x34, 0x56, 0x78};
-        f.append(reinterpret_cast<const char*>(mask), 4);
-        for (std::size_t i = 0; i < len; ++i) {
-            f.push_back(static_cast<char>(static_cast<uint8_t>(payload[i]) ^ mask[i & 3]));
-        }
-        conn_.sendAll(f);
-    }
-
-    bool parseFrame(WsMessage& out) {
-        std::string& b = conn_.buffer;
-        if (b.size() < 2) {
-            return false;
-        }
-        const uint8_t b0  = static_cast<uint8_t>(b[0]);
-        const uint8_t b1  = static_cast<uint8_t>(b[1]);
-        uint64_t      len = b1 & 0x7f;
-        std::size_t   pos = 2;
-        if (len == 126) {
-            if (b.size() < 4) {
-                return false;
-            }
-            len = (static_cast<uint64_t>(static_cast<uint8_t>(b[2])) << 8) |
-                  static_cast<uint8_t>(b[3]);
-            pos = 4;
-        } else if (len == 127) {
-            if (b.size() < 10) {
-                return false;
-            }
-            len = 0;
-            for (int i = 0; i < 8; ++i) {
-                len = (len << 8) | static_cast<uint8_t>(b[2 + i]);
-            }
-            pos = 10;
-        }
-        EXPECT_EQ(b1 & 0x80, 0) << "server frames must not be masked";
-        EXPECT_NE(b0 & 0x80, 0) << "server frames must not be fragmented";
-        const std::size_t total = pos + static_cast<std::size_t>(len);
-        if (b.size() < total) {
-            return false;
-        }
-        out.opcode  = b0 & 0x0f;
-        out.payload = b.substr(pos, static_cast<std::size_t>(len));
-        b.erase(0, total);
-        return true;
-    }
-
-    TestConnection conn_;
-};
-
-// ---- json picking -------------------------------------------------------------
-
-// Value of the first "key":"..." at or after from; empty when absent.
-std::string jsonString(const std::string& json, const std::string& key, std::size_t from = 0) {
-    const std::string needle = "\"" + key + "\":\"";
-    const std::size_t pos    = json.find(needle, from);
-    if (pos == std::string::npos) {
-        return {};
-    }
-    const std::size_t start = pos + needle.size();
-    const std::size_t end   = json.find('"', start);
-    return end == std::string::npos ? std::string() : json.substr(start, end - start);
-}
-
-bool jsonNumber(const std::string& json, const std::string& key, long long& out,
-                std::size_t from = 0) {
-    const std::string needle = "\"" + key + "\":";
-    const std::size_t pos    = json.find(needle, from);
-    if (pos == std::string::npos) {
-        return false;
-    }
-    out = std::atoll(json.c_str() + pos + needle.size());
-    return true;
-}
-
-bool jsonBool(const std::string& json, const std::string& key, std::size_t from = 0) {
-    return json.find("\"" + key + "\":true", from) != std::string::npos;
-}
-
-std::string messageType(const std::string& json) { return jsonString(json, "type"); }
 
 struct FrameIdentity {
     std::string camera;
@@ -675,7 +331,8 @@ TEST(Inspection, HttpRoutesServeDocumentsAndTheEmbeddedViewer) {
     EXPECT_EQ(hello.headers["connection"], "close");
     EXPECT_EQ(std::atoi(hello.headers["content-length"].c_str()),
               static_cast<int>(hello.body.size()));
-    EXPECT_NE(hello.body.find("\"contract\":\"navigatr.inspect/1\""), std::string::npos);
+    EXPECT_NE(hello.body.find("\"contract\":\"navigatr.inspect/2\""), std::string::npos);
+    EXPECT_NE(hello.body.find("\"features\":{\"state_hz\":"), std::string::npos) << hello.body;
     EXPECT_EQ(messageType(hello.body), "hello");
     EXPECT_NE(hello.body.find("\"id\":\"" + f.system->sessionId() + "\""), std::string::npos);
     EXPECT_NE(hello.body.find("\"fields\":["), std::string::npos);
@@ -718,6 +375,9 @@ TEST(Inspection, HttpRoutesServeDocumentsAndTheEmbeddedViewer) {
     ASSERT_TRUE(snapshot.ok);
     EXPECT_EQ(snapshot.status, 200);
     EXPECT_EQ(messageType(snapshot.body), "snapshot");
+    // the full inspect/1 document, trail included, for tools
+    EXPECT_NE(snapshot.body.find("\"contract\":\"navigatr.inspect/1\""), std::string::npos);
+    EXPECT_NE(snapshot.body.find("\"trail\":["), std::string::npos);
     EXPECT_NE(snapshot.body.find("\"workers\":{"), std::string::npos);
 
     // no detection frame yet: nothing to encode
@@ -735,7 +395,7 @@ TEST(Inspection, HttpRoutesServeDocumentsAndTheEmbeddedViewer) {
 
 // ---- 2. the feed ------------------------------------------------------------------------
 
-TEST(Inspection, WebSocketFeedSendsHelloSnapshotsAndFramesBoundToIdentity) {
+TEST(Inspection, WebSocketFeedSendsHelloStatesDiagsAndFramesBoundToIdentity) {
     Fixture f;
     ASSERT_TRUE(f.start());
     WsClient ws;
@@ -746,19 +406,37 @@ TEST(Inspection, WebSocketFeedSendsHelloSnapshotsAndFramesBoundToIdentity) {
     EXPECT_EQ(m.opcode, 1);
     EXPECT_EQ(messageType(m.payload), "hello");
     EXPECT_NE(m.payload.find("\"session\":{\"id\":\"" + f.system->sessionId()), std::string::npos);
+    long long client_id = 0;
+    EXPECT_TRUE(jsonNumber(m.payload, "client_id", client_id));
+    EXPECT_GT(client_id, 0);
 
-    // snapshots at roughly snapshot_hz (20): count over one second
-    int        snapshots = 0;
-    const auto until     = Clock::now() + Ms(1000);
+    // states follow publications, at most state_hz (30): step the runtime
+    // inline for a second and count them
+    int        states = 0, diags = 0;
+    const auto until  = Clock::now() + Ms(1000);
     while (Clock::now() < until) {
-        if (ws.next(m, Ms(100)) && m.opcode == 1 && messageType(m.payload) == "snapshot") {
-            ++snapshots;
-            // inline mode: the top-level running flag (before robot) is false
-            EXPECT_NE(m.payload.find("\"running\":false,\"robot\":{"), std::string::npos);
+        f.step(1);
+        while (ws.next(m, Ms(5))) {
+            if (m.opcode != 1) {
+                continue;
+            }
+            const std::string type = messageType(m.payload);
+            if (type == "state") {
+                ++states;
+                EXPECT_NE(m.payload.find("\"robot\":{\"valid\":"), std::string::npos);
+                EXPECT_EQ(m.payload.find("\"trail\""), std::string::npos);
+            } else if (type == "diag") {
+                ++diags;
+                // inline mode: the top-level running flag (before robot) is false
+                EXPECT_NE(m.payload.find("\"running\":false,\"robot\":{"), std::string::npos);
+                EXPECT_EQ(m.payload.find("\"trail\""), std::string::npos);
+            }
         }
     }
-    EXPECT_GE(snapshots, 8);
-    EXPECT_LE(snapshots, 60);
+    EXPECT_GE(states, 5);
+    EXPECT_LE(states, 45);
+    EXPECT_GE(diags, 1);
+    EXPECT_LE(diags, 10);
 
     // drive the runtime inline until a detection frame exists and a
     // preview for it arrives
@@ -777,9 +455,19 @@ TEST(Inspection, WebSocketFeedSendsHelloSnapshotsAndFramesBoundToIdentity) {
     }
     ASSERT_TRUE(got_frame);
     EXPECT_FALSE(f.system->detectionFrames().empty());
+    // the header carries the detection entry of exactly this frame
+    {
+        const std::size_t det = frame.header.find("\"detection\":{\"camera\":\"front_camera\"");
+        ASSERT_NE(det, std::string::npos) << frame.header.substr(0, 400);
+        long long epoch = -1, sequence = -1;
+        EXPECT_TRUE(jsonNumber(frame.header, "epoch", epoch, det));
+        EXPECT_TRUE(jsonNumber(frame.header, "sequence", sequence, det));
+        EXPECT_EQ(epoch, frame.identity.epoch);
+        EXPECT_EQ(sequence, frame.identity.sequence);
+    }
 
     // no more stepping: the newest identity is fixed, so the last preview
-    // and a later snapshot must name the same frame
+    // and a later diag must name the same frame
     FrameIdentity snapshot_identity;
     const auto    settle = Clock::now() + Ms(5000);
     while (Clock::now() < settle) {
@@ -788,7 +476,7 @@ TEST(Inspection, WebSocketFeedSendsHelloSnapshotsAndFramesBoundToIdentity) {
         }
         if (m.opcode == 2) {
             ASSERT_TRUE(parseBinaryFrame(m.payload, frame));
-        } else if (messageType(m.payload) == "snapshot") {
+        } else if (messageType(m.payload) == "diag") {
             snapshot_identity = snapshotFrameIdentity(m.payload);
         }
         if (snapshot_identity == frame.identity) {
@@ -950,14 +638,15 @@ TEST(Inspection, SlowClientIsBoundedAndClosedWhileEstimationKeepsRunning) {
 }
 
 // The bound itself, at the server: queued bytes never pass the limit,
-// refused messages are counted, the stalled client is closed, and a
-// connection over max_clients gets 503.
-TEST(Inspection, HttpServerBoundsQueuedBytesRefusesAndClosesStalledClients) {
+// newer replaceable messages replace unsent ones, the stalled client is
+// closed, and a connection over max_clients gets 503.
+TEST(Inspection, HttpServerBoundsQueuedBytesReplacesAndClosesStalledClients) {
     HttpServerConfig hc;
     hc.port                   = 0;
     hc.max_clients            = 1;
     hc.client_buffer_bytes    = 16 * 1024;
     hc.close_after_stalled_ms = 300;
+    hc.send_buffer_bytes      = 4096;
     HttpServer  server(hc, [](const HttpRequest&) {
         HttpResponse r;
         r.status = 404;
@@ -976,26 +665,44 @@ TEST(Inspection, HttpServerBoundsQueuedBytesRefusesAndClosesStalledClients) {
     ASSERT_EQ(server.clients().size(), 1u);
     const HttpServer::ClientId id = server.clients()[0];
 
-    HttpReply over = httpRequest(server.port(), "GET", "/");
-    ASSERT_TRUE(over.ok);
-    EXPECT_EQ(over.status, 503);
+    // max_clients counts feed clients: a second upgrade gets 503, while a
+    // plain request (a page loading its modules) still reaches the handler
+    TestConnection over;
+    ASSERT_TRUE(over.connect(server.port()));
+    over.sendAll("GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
+                 "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                 "Sec-WebSocket-Version: 13\r\n\r\n");
+    const auto wait_over = Clock::now() + Ms(5000);
+    while (!over.closed && Clock::now() < wait_over) {
+        over.readSome(Ms(200));
+    }
+    EXPECT_EQ(over.buffer.rfind("HTTP/1.1 503", 0), 0u) << over.buffer;
     EXPECT_EQ(server.stats().refused_connections, 1u);
+    HttpReply plain = httpRequest(server.port(), "GET", "/");
+    ASSERT_TRUE(plain.ok);
+    EXPECT_EQ(plain.status, 404);
+    ASSERT_EQ(server.clients().size(), 1u);
 
-    const std::string message(4000, 'x');
-    std::size_t       refused  = 0;
-    std::size_t       max_seen = 0;
-    const auto        fill     = Clock::now() + Ms(5000);
-    while (Clock::now() < fill) {
-        const bool ok = server.sendText(id, message);
-        max_seen      = std::max(max_seen, server.queued(id));
-        if (!ok && ++refused >= 3) {
-            break;
+    // two replaceable channels of 4000-byte messages into a client that
+    // never reads: each holds one unsent message, the rest are replaced
+    const auto  message  = HttpServer::textFrame(std::string(4000, 'x'));
+    std::size_t replaced = 0;
+    std::size_t max_seen = 0;
+    const auto  fill     = Clock::now() + Ms(300);
+    while (Clock::now() < fill && !server.clients().empty()) {
+        for (const char* name : {"state", "diag"}) {
+            const auto r = server.sendLatest(id, WsChannel{name, 0}, message);
+            EXPECT_NE(r, HttpServer::Enqueue::kClosed);
+            if (r == HttpServer::Enqueue::kReplaced) {
+                ++replaced;
+            }
+            max_seen = std::max(max_seen, server.queued(id));
         }
     }
-    EXPECT_GE(refused, 3u);
+    EXPECT_GT(replaced, 10u);
     EXPECT_LE(max_seen, hc.client_buffer_bytes);
     EXPECT_GT(max_seen, 0u);
-    EXPECT_GE(server.stats().messages_refused, refused);
+    EXPECT_GE(server.stats().messages_replaced, replaced);
 
     const auto stall = Clock::now() + Ms(5000);
     while (server.stats().clients_closed_stalled == 0 && Clock::now() < stall) {
@@ -1005,6 +712,8 @@ TEST(Inspection, HttpServerBoundsQueuedBytesRefusesAndClosesStalledClients) {
     EXPECT_TRUE(server.clients().empty());
     EXPECT_EQ(server.queued(id), 0u);
     EXPECT_FALSE(server.sendText(id, "gone"));
+    ASSERT_FALSE(server.stats().recent_closes.empty());
+    EXPECT_EQ(server.stats().recent_closes.back().reason, "stalled");
 
     // an unmasked client frame ends the connection
     WsClient bad;
@@ -1165,6 +874,17 @@ TEST(Inspection, ConfigRejectsOutOfRangePortAndStallClose) {
                   functions, err),
               nullptr);
     EXPECT_NE(err.find("stall_close_ms"), std::string::npos) << err;
+    for (const char* bad : {"state_hz=\"0\"", "state_hz=\"61\"", "diag_hz=\"0\"",
+                            "diag_hz=\"21\"", "reliable_kb=\"127\"", "ack_window_kb=\"8\"",
+                            "send_buffer_kb=\"-1\""}) {
+        err.clear();
+        const std::string xml =
+            rigXml(std::string("<Inspection enabled=\"true\" port=\"0\" ") + bad + "/>");
+        EXPECT_EQ(System::buildFromString(xml.c_str(), functions, err), nullptr) << bad;
+        EXPECT_NE(err.find(std::string(bad).substr(0, std::string(bad).find('='))),
+                  std::string::npos)
+            << err;
+    }
 
     // the disabled default builds and reports defaults
     err.clear();
@@ -1172,6 +892,24 @@ TEST(Inspection, ConfigRejectsOutOfRangePortAndStallClose) {
     ASSERT_NE(plain, nullptr) << err;
     EXPECT_FALSE(plain->inspection().enabled);
     EXPECT_EQ(plain->inspection().port, 8765);
+    EXPECT_EQ(plain->inspection().state_hz, 30.0);
+    EXPECT_EQ(plain->inspection().diag_hz, 4.0);
+    EXPECT_EQ(plain->inspection().reliable_kb, 256);
+    EXPECT_EQ(plain->inspection().send_buffer_kb, 16);
+    EXPECT_EQ(plain->inspection().ack_window_kb, 64);
+    // the inspect/1 rate still parses, for older profiles
+    err.clear();
+    std::unique_ptr<System> legacy = System::buildFromString(
+        rigXml("<Inspection enabled=\"true\" port=\"0\" snapshot_hz=\"20\" state_hz=\"45\" "
+               "diag_hz=\"2\" reliable_kb=\"128\" ack_window_kb=\"0\"/>")
+            .c_str(),
+        functions, err);
+    ASSERT_NE(legacy, nullptr) << err;
+    EXPECT_EQ(legacy->inspection().snapshot_hz, 20.0);
+    EXPECT_EQ(legacy->inspection().state_hz, 45.0);
+    EXPECT_EQ(legacy->inspection().diag_hz, 2.0);
+    EXPECT_EQ(legacy->inspection().reliable_kb, 128);
+    EXPECT_EQ(legacy->inspection().ack_window_kb, 0);
 
     // a static_root that is not a directory is a create() error
     Fixture f;

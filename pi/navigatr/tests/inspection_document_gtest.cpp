@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <string>
@@ -18,6 +19,7 @@
 #include "inspection/json_writer.h"
 #include "runtime/register_all.h"
 #include "runtime/system.h"
+#include "translaGATR/frame_codec.h"
 
 using namespace navigatr;
 
@@ -373,7 +375,11 @@ TEST(InspectionDocuments, HelloCarriesConfigurationFieldAndCameras) {
 
     const std::string hello = helloDocument(*system, hostTime(10));
     ASSERT_TRUE(validJson(hello)) << hello;
-    EXPECT_NE(hello.find("\"contract\":\"navigatr.inspect/1\""), std::string::npos);
+    EXPECT_NE(hello.find("\"contract\":\"navigatr.inspect/2\""), std::string::npos);
+    EXPECT_NE(hello.find("\"features\":{"), std::string::npos);
+    EXPECT_NE(hello.find("\"history_max\":300"), std::string::npos);
+    // no Brain link in this rig: no TELEMETRY can arrive
+    EXPECT_NE(hello.find("\"telemetry\":false"), std::string::npos) << hello;
     EXPECT_NE(hello.find("\"id\":\"" + system->sessionId() + "\""), std::string::npos);
     EXPECT_NE(hello.find("\"name\":\"doc test field\""), std::string::npos);
     EXPECT_NE(hello.find("\"inside_x_m\":3.5664"), std::string::npos);
@@ -515,4 +521,260 @@ TEST(InspectionDocuments, CameraPreviewWorksWithoutWorldEstimation) {
     ASSERT_EQ(frames.size(), 1u);
     EXPECT_GT(frames.begin()->second->frame_sequence, first->frame_sequence);
     EXPECT_FALSE(frames.begin()->second->has_observations);
+}
+
+// ---- inspect/2 documents ------------------------------------------------------
+
+namespace
+{
+
+// The balanced {...} value of the first "key": at or after from.
+std::string objectValue(const std::string& json, const std::string& key, std::size_t from = 0) {
+    const std::size_t k = json.find("\"" + key + "\":{", from);
+    if (k == std::string::npos) {
+        return {};
+    }
+    const std::size_t start  = json.find('{', k);
+    int               depth  = 0;
+    bool              in_str = false;
+    for (std::size_t i = start; i < json.size(); ++i) {
+        const char c = json[i];
+        if (in_str) {
+            if (c == '\\') {
+                ++i;
+            } else if (c == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        if (c == '"') {
+            in_str = true;
+        } else if (c == '{') {
+            ++depth;
+        } else if (c == '}' && --depth == 0) {
+            return json.substr(start, i - start + 1);
+        }
+    }
+    return {};
+}
+
+std::unique_ptr<System> buildRig(FunctionRegistry& functions) {
+    registerAll(functions);
+    std::string err;
+    auto        system = System::buildFromString(kRig, functions, err);
+    EXPECT_NE(system, nullptr) << err;
+    return system;
+}
+
+} // namespace
+
+TEST(InspectionDocuments, StateHistoryAndDiagSplitTheSnapshot) {
+    FunctionRegistry functions;
+    auto             system = buildRig(functions);
+    ASSERT_NE(system, nullptr);
+    int64_t now = 1;
+    for (int i = 0; i < 60; ++i) {
+        now += 10;
+        system->step(hostTime(now));
+    }
+    const MonotonicTime at = hostTime(now);
+
+    uint64_t          publication = 0;
+    const std::string state       = stateDocument(*system, 7, at, now * 1000, &publication);
+    ASSERT_TRUE(validJson(state)) << state;
+    EXPECT_NE(state.find("\"type\":\"state\",\"seq\":7,"), std::string::npos) << state;
+    EXPECT_NE(state.find("\"host_us\":" + std::to_string(now * 1000)), std::string::npos);
+    EXPECT_EQ(publication, system->robotFeed()->publication());
+    EXPECT_GT(publication, 0u);
+    EXPECT_NE(state.find("\"publication\":" + std::to_string(publication)), std::string::npos);
+    EXPECT_NE(state.find("\"localization\":{\"all_ready\":"), std::string::npos) << state;
+    EXPECT_EQ(state.find("\"trail\""), std::string::npos);
+    EXPECT_EQ(state.find("\"detection_frames\""), std::string::npos);
+
+    // the state robot is exactly the snapshot robot at the same instant
+    const std::string snap = snapshotDocument(*system, InspectionServiceStats{}, at);
+    ASSERT_TRUE(validJson(snap));
+    EXPECT_NE(snap.find("\"contract\":\"navigatr.inspect/1\""), std::string::npos);
+    const std::string robot_state = objectValue(state, "robot");
+    ASSERT_FALSE(robot_state.empty());
+    EXPECT_EQ(robot_state, objectValue(snap, "robot"));
+    // the rig measures attitude and it was just folded
+    EXPECT_NE(robot_state.find("\"status\":\"measured\""), std::string::npos) << robot_state;
+
+    const std::string history = historyDocument(*system, 3, at, 50);
+    ASSERT_TRUE(validJson(history)) << history;
+    EXPECT_NE(history.find("\"type\":\"history\",\"seq\":3,"), std::string::npos);
+    EXPECT_NE(history.find("\"trail\":[{\"host_ms\":"), std::string::npos) << history;
+    EXPECT_NE(history.find("\"max_entries\":50"), std::string::npos);
+    std::size_t entries = 0;
+    for (std::size_t p = history.find("{\"host_ms\":"); p != std::string::npos;
+         p = history.find("{\"host_ms\":", p + 1)) {
+        ++entries;
+    }
+    EXPECT_GT(entries, 0u);
+    EXPECT_LE(entries, 50u);
+
+    InspectionFeedStats feed;
+    feed.state_hz = 30.0;
+    feed.diag_hz  = 4.0;
+    uint64_t          hash = 0;
+    const std::string diag = diagDocument(*system, InspectionServiceStats{}, feed, 9, at, &hash);
+    ASSERT_TRUE(validJson(diag)) << diag;
+    EXPECT_NE(diag.find("\"type\":\"diag\",\"contract\":\"navigatr.inspect/2\",\"seq\":9,"),
+              std::string::npos)
+        << diag.substr(0, 200);
+    EXPECT_EQ(diag.find("\"trail\""), std::string::npos);
+    EXPECT_NE(diag.find("\"detection_frames\":["), std::string::npos);
+    EXPECT_NE(diag.find("\"events\":["), std::string::npos);
+    EXPECT_NE(diag.find("\"inspection\":{\"contract\":\"navigatr.inspect/2\""),
+              std::string::npos);
+    EXPECT_NE(diag.find("\"hub\":{\"posted\":{\"robot_state\":"), std::string::npos) << diag;
+    EXPECT_NE(hash, 0u);
+}
+
+TEST(InspectionDocuments, DiagHashIgnoresVaryingValuesButNotContent) {
+    FunctionRegistry functions;
+    auto             system = buildRig(functions);
+    ASSERT_NE(system, nullptr);
+    // never stepped: only seq, time and the transport counters differ
+    InspectionFeedStats    feed;
+    InspectionServiceStats a, b;
+    b.states_queued = 99;
+    b.bytes_sent    = 123456;
+    FeedClientStats client;
+    client.queue.id = 4;
+    feed.clients.push_back(client);
+    uint64_t h1 = 0, h2 = 0;
+    diagDocument(*system, a, InspectionFeedStats{}, 1, hostTime(10), &h1);
+    diagDocument(*system, b, feed, 2, hostTime(500), &h2);
+    EXPECT_EQ(h1, h2);
+
+    // a reset is content (the session); the steady-motion case, where only
+    // varying values change, is in inspection_feed_gtest (a rig without
+    // camera, whose detections are content)
+    system->reset();
+    uint64_t          after_reset = 0;
+    const std::string reset_doc =
+        diagDocument(*system, a, feed, 6, hostTime(500), &after_reset);
+    EXPECT_NE(after_reset, h2);
+    EXPECT_NE(reset_doc.find("\"reset_count\":1"), std::string::npos);
+}
+
+TEST(InspectionDocuments, AttitudeStatusSeparatesMeasuredStaleAssumedAndUnavailable) {
+    Attitude a;
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "unavailable");
+    a = assumedLevelAttitude(0.3);
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "assumed_level");
+    a            = Attitude{};
+    a.valid      = true;
+    a.measuredAt = hostTime(1000);
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000 + kAttitudeFreshMs)), "measured");
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1001 + kAttitudeFreshMs)), "stale");
+    // valid but with no host time: freshness is unknown, never "measured"
+    a.measuredAt = MonotonicTime{};
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "stale");
+}
+
+TEST(InspectionDocuments, TelemetryRecordDecodesThroughTheCodecWithNames) {
+    translagatr::BrainRequest req;
+    req.op                         = translagatr::kOpTelemetry;
+    req.session                    = 0x01020304u;
+    req.request_id                 = 77;
+    translagatr::BrainTelemetry& t = req.telemetry;
+    t.flags = translagatr::kTelemetryAttitude | translagatr::kTelemetryMotion |
+              translagatr::kTelemetryWheels;
+    t.stamp_ms            = 123456;
+    t.roll_cdeg           = -250;
+    t.pitch_cdeg          = 125;
+    t.command_id          = 42;
+    t.motion_state        = 2;    // running
+    t.motion_reason       = 20;   // tracking_error
+    t.plan_mode           = 1;    // avoiding
+    t.segment             = 1;
+    t.segment_count       = 3;
+    t.target_x_mm         = 1500;
+    t.target_y_mm         = -250;
+    t.target_heading_cdeg = 9000;
+    t.cmd_vx_mm_s         = 400;
+    t.cmd_vy_mm_s         = -100;
+    t.cmd_omega_cdeg_s    = 4500;
+    t.cross_track_mm      = 12;
+    t.distance_error_mm   = 800;
+    t.heading_error_cdeg  = -300;
+    t.drive_fault         = 4;   // stale
+    t.wheel_count         = 2;
+    t.wheel_rpm_x10[0]    = 1234;
+    t.wheel_rpm_x10[1]    = -55;
+    uint8_t        frame[translagatr::kMaxFrameLen];
+    const uint16_t n = translagatr::encodeBrainRequest(req, frame, sizeof(frame));
+    ASSERT_EQ(n, translagatr::kBrainRequestHeaderLen + translagatr::kTelemetryBodyLen +
+                     translagatr::kLinkEnvelopeLen);
+
+    DiagBrainTelemetry rec;
+    rec.session = req.session;
+    rec.len     = translagatr::kTelemetryBodyLen;
+    std::memcpy(rec.body, frame + 4 + translagatr::kBrainRequestHeaderLen, rec.len);
+    translagatr::BrainTelemetry out;
+    ASSERT_TRUE(decodeTelemetryRecord(rec, out));
+    EXPECT_EQ(out.stamp_ms, t.stamp_ms);
+    EXPECT_EQ(out.roll_cdeg, t.roll_cdeg);
+    EXPECT_EQ(out.target_y_mm, t.target_y_mm);
+    EXPECT_EQ(out.wheel_rpm_x10[1], t.wheel_rpm_x10[1]);
+
+    DiagRecord record;
+    record.kind    = DiagKind::kBrainTelemetry;
+    record.host_us = 2000000;
+    record.payload = rec;
+    const std::string doc = telemetryDocument(5, hostTime(2100), record, rec, out);
+    ASSERT_TRUE(validJson(doc)) << doc;
+    EXPECT_NE(doc.find("\"type\":\"telemetry\",\"seq\":5,"), std::string::npos);
+    EXPECT_NE(doc.find("\"received_host_ms\":2000,\"age_ms\":100"), std::string::npos) << doc;
+    EXPECT_NE(doc.find("\"session\":16909060"), std::string::npos);
+    EXPECT_NE(doc.find("\"attitude\":{\"roll_deg\":-2.5,\"pitch_deg\":1.25}"), std::string::npos)
+        << doc;
+    EXPECT_NE(doc.find("\"state\":2,\"state_name\":\"running\""), std::string::npos);
+    EXPECT_NE(doc.find("\"reason\":20,\"reason_name\":\"tracking_error\""), std::string::npos);
+    EXPECT_NE(doc.find("\"mode\":1,\"mode_name\":\"avoiding\""), std::string::npos);
+    EXPECT_NE(doc.find("\"target\":{\"x_m\":1.5,\"y_m\":-0.25,\"heading_deg\":90}"),
+              std::string::npos)
+        << doc;
+    EXPECT_NE(doc.find("\"drive_fault\":4,\"drive_fault_name\":\"stale\""), std::string::npos);
+    EXPECT_NE(doc.find("\"wheels\":{\"rpm\":[123.4,-5.5]}"), std::string::npos) << doc;
+
+    // groups whose flag is clear are null; a wrong length is not decoded
+    rec.body[0] = 0;
+    ASSERT_TRUE(decodeTelemetryRecord(rec, out));
+    const std::string empty = telemetryDocument(6, hostTime(2100), record, rec, out);
+    EXPECT_NE(empty.find("\"attitude\":null,\"motion\":null,\"wheels\":null"), std::string::npos)
+        << empty;
+    rec.len = 53;
+    EXPECT_FALSE(decodeTelemetryRecord(rec, out));
+}
+
+TEST(InspectionDocuments, EventPongAndCaptureMessagesAreFlatAndEcho) {
+    RuntimeEvent e;
+    e.sequence = 12;
+    e.at       = hostTime(345);
+    e.text     = "Pico \"rebooted\"";
+    const std::string event = eventDocument(e);
+    ASSERT_TRUE(validJson(event)) << event;
+    EXPECT_EQ(event,
+              "{\"type\":\"event\",\"seq\":12,\"host_ms\":345,\"text\":\"Pico \\\"rebooted\\\"\"}");
+
+    const std::string pong = pongDocument("7", "1234.56789", hostTime(10), 10500);
+    ASSERT_TRUE(validJson(pong)) << pong;
+    // client_ms comes back exactly as sent, no rounding
+    EXPECT_EQ(pong, "{\"type\":\"pong\",\"id\":7,\"client_ms\":1234.56789,\"host_ms\":10,"
+                    "\"host_us\":10500}");
+    EXPECT_EQ(pongDocument("", "", hostTime(1), 1000),
+              "{\"type\":\"pong\",\"id\":null,\"client_ms\":null,\"host_ms\":1,\"host_us\":1000}");
+
+    FunctionRegistry functions;
+    auto             system = buildRig(functions);
+    ASSERT_NE(system, nullptr);
+    ASSERT_NE(system->capture(), nullptr);
+    const std::string capture = captureDocument(*system->capture(), 3, hostTime(20));
+    ASSERT_TRUE(validJson(capture)) << capture;
+    EXPECT_EQ(capture.rfind("{\"type\":\"capture\",\"seq\":3,\"host_ms\":20,", 0), 0u) << capture;
+    EXPECT_NE(capture.find("\"available\":"), std::string::npos);
 }

@@ -36,10 +36,15 @@ struct AssociationOutputDecl {
     PayloadDescriptor payload;
 };
 
+class DiagnosticsHub;
+
 struct SlotInitializationContext {
     const ResourceStore*    resources = nullptr;
     const SensorCatalog*    sensors   = nullptr;
     const FunctionRegistry* functions = nullptr;
+
+    // The System's DiagnosticsHub; null outside a System build.
+    DiagnosticsHub* diagnostics = nullptr;
 
     // Localization declarations: configured observation function ids and
     // the robot observation outputs they publish.

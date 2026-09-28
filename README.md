@@ -27,11 +27,11 @@ and KiCad project files.
 
 ## Pi runtime
 
-Start with [Set up and run Navigatr](pi/navigatr/docs/setup.md) for Pi/Pico setup,
+Start with [Set up and run Navigatr](pi/naviGATR/docs/setup.md) for Pi/Pico setup,
 building, camera calibration, mounting measurements, two- and three-wheel IMU +
 camera configurations, and the live field viewer.
 
-The [Navigatr overview](pi/navigatr/README.md) is the entry point for the Pi
+The [Navigatr overview](pi/naviGATR/README.md) is the entry point for the Pi
 runtime design, implementation coverage, and build commands. Its design uses
 one program with independently scheduled localization and landmark-estimation
 pipelines, standard stage inputs and outputs, and timestamped pose history.
@@ -49,13 +49,13 @@ heading differences from nominal orientation. See the landmark documentation
 for selection and retention behavior, and the
 [brain link](docs/interfaces.md) for the wire contract.
 
-- [Architecture and scheduling](pi/navigatr/docs/architecture.md)
-- [Coordinates and heading](pi/navigatr/docs/coordinates.md)
-- [Landmark reporting and retention](pi/navigatr/docs/landmarks.md)
-- [Inspection service and browser viewer](pi/navigatr/docs/inspection.md)
-- [Pi camera setup and libcamera build](pi/navigatr/docs/pi_camera_setup.md)
+- [Architecture and scheduling](pi/naviGATR/docs/architecture.md)
+- [Coordinates and heading](pi/naviGATR/docs/coordinates.md)
+- [Landmark reporting and retention](pi/naviGATR/docs/landmarks.md)
+- [Inspection service and browser viewer](pi/naviGATR/docs/inspection.md)
+- [Pi camera setup and libcamera build](pi/naviGATR/docs/pi_camera_setup.md)
 
-A hardware-free demo (`pi/navigatr/config/demo/`) drives the whole runtime
+A hardware-free demo (`pi/naviGATR/config/demo/`) drives the whole runtime
 from a synthetic rig and serves the field viewer on loopback; the README above
 has the run and SSH port-forward commands.
 
@@ -80,12 +80,12 @@ robot yet.
 ## Repository map
 
 - [`pcb/`](pcb/) - KiCad boards, symbols, footprints, and hardware revisions.
-- [`pico/`](pico/) - RP2040 acquisition firmware.
-- [`pi/navigatr/`](pi/navigatr/) - Pi sensing and estimation runtime.
-- [`brain/`](brain/) - V5 Brain libraries and PROS applications.
-- [`common/`](common/) - shared framing and wire codecs.
+- [`pico/aggreGATR/`](pico/aggreGATR/README.md) - RP2040 acquisition firmware.
+- [`pi/naviGATR/`](pi/naviGATR/README.md) - Pi sensing and estimation runtime, with the spectaGATR browser viewer.
+- [`brain/`](brain/README.md) - V5 Brain libraries (investiGATR, communiGATR, actuGATR) and PROS programs (locaGATR, operaGATR).
+- [`translaGATR/`](translaGATR/) - shared wire codec used by the Brain, Pi and Pico.
 - [`bench/`](bench/) - host and hardware bring-up utilities.
-- [`docs/`](docs/) - supporting hardware, interface, and setup material.
+- [`docs/`](docs/) - supporting hardware, interface, and setup material; [component names](docs/naming.md).
 
 ## Hardware and bring-up references
 

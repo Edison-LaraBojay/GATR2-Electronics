@@ -10,6 +10,7 @@
 #pragma once
 #include <cstdint>
 
+#include "communigatr/attitude.h"
 #include "communigatr/client.h"
 #include "pros/imu.hpp"
 
@@ -22,6 +23,11 @@ public:
 
     // Safe from any task; the link calls it in its poll task.
     BenchImuSample sample() const;
+
+    // Roll and pitch as PROS reports them, IMU frame, for TELEMETRY only;
+    // robotAttitudeFromVex turns them into the robot frame. Invalid under
+    // the same conditions as sample(). Safe from any task.
+    VexAttitude attitude() const;
 
     // Starts a VEX firmware calibration (pros::Imu::reset without waiting for
     // it to finish). Blocks until the IMU shows it calibrating, about 1 s at

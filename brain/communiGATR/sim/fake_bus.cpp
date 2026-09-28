@@ -51,11 +51,11 @@ void FakeBus::sendToBrain(const std::vector<uint8_t>& bytes, Seconds at) {
     }
 }
 
-std::vector<gatr2::BrainRequest> FakeBus::brainRequests() const {
-    std::vector<gatr2::BrainRequest> requests;
+std::vector<translagatr::BrainRequest> FakeBus::brainRequests() const {
+    std::vector<translagatr::BrainRequest> requests;
     for (const Transmission& t : log_) {
-        gatr2::BrainRequest request;
-        if (t.brain && gatr2::decodeBrainRequest(t.bytes.data(),
+        translagatr::BrainRequest request;
+        if (t.brain && translagatr::decodeBrainRequest(t.bytes.data(),
                                                  static_cast<uint16_t>(t.bytes.size()), request)) {
             requests.push_back(request);
         }

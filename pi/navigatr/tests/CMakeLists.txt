@@ -53,12 +53,14 @@ set(TEST_SOURCES
     capture_transform_gtest.cpp
     camera_capture_gtest.cpp
     inspection_document_gtest.cpp
+    inspection_feed_gtest.cpp
+    capture_gtest.cpp
 )
 
 add_executable(navigatr_tests ${TEST_SOURCES})
 target_compile_definitions(navigatr_tests PRIVATE
     NAVIGATR_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../config"
-    NAVIGATR_FIELD_REFERENCES_H="${REPO_ROOT}/brain/testing/include/field_references.h")
+    NAVIGATR_FIELD_REFERENCES_H="${REPO_ROOT}/brain/operaGATR/include/field_references.h")
 target_link_libraries(navigatr_tests PRIVATE navigatr_core GTest::gtest_main)
 if(NOT MSVC)
     target_compile_options(navigatr_tests PRIVATE -Wall -Wextra)

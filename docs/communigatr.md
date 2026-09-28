@@ -10,6 +10,8 @@
   `investigatr::StateSource`, and forwards planned paths to the Pi viewer;
 - places the robot, runs calibration and recovery actions on the Pi, and reads
   raw wheel travel for calibration;
+- sends best-effort telemetry (VEX IMU tilt, movement status, wheel targets)
+  for the Pi viewer and recordings;
 - sums up what the link, profile, sensors, calibration and placement still
   wait for.
 
@@ -37,16 +39,18 @@ dependency.
 ## Layers
 
 ```
-application (localization-test, testing)
+application (locaGATR, testing)
   actugatr::Motion, planner      use StateSource and PathSink only
   ProsLink                       PROS: poll task, bounded mutex, either transport
     LinkDriver                   StateSource + PathSink: SI units, status, frames, field
       Client                     protocol: session, scheduling, retries, profile,
-                                 documents, placement, control, wheels, path
+                                 documents, placement, control, wheels, path,
+                                 telemetry
         BytePort                 nonblocking bytes
           ProsUsbPort            V5 USB user console, NG1 lines, two I/O tasks
           ProsSerialPort         V5 smart port, generic serial, RS-485 adapter
-  ProsVexImu                     Brain VEX IMU sample carried by GET_STATE
+  ProsVexImu                     Brain VEX IMU sample carried by GET_STATE, and
+                                 roll and pitch for TELEMETRY
 ```
 
 | Class or function | Header | Portable | Role |
@@ -59,6 +63,7 @@ application (localization-test, testing)
 | `readinessOf`, `Readiness` | `readiness.h` | yes | readiness summary and decoded health |
 | `encodeUsbLine`, `UsbLineDecoder` | `usb_line.h` | yes | NG1 line codec |
 | `VexImuRecalibration` | `vex_imu_recalibration.h` | yes | Brain VEX IMU calibration gated by the Pi's stationary check |
+| `robotAttitudeFromVex`, `setAttitude` | `attitude.h` | yes | VEX IMU roll and pitch to the robot frame; TELEMETRY attitude group |
 | `WheelCalibration` | `wheel_calibration.h` | yes | per-wheel travel scale trials (application helper) |
 | `StartupPlacement` | `startup_placement.h` | yes | once-per-start placement policy (application helper) |
 | `LinkEvents` | `link_events.h` | yes | recovery history for displays (application helper) |
@@ -160,6 +165,7 @@ counts it in `status().link.call_lock_misses`.
 | `setProfile(profile)` | replace the configured profile at run time | false |
 | `profile()` | the configured `RobotProfile` | empty profile |
 | `resubmitProfile()` | upload and apply again, clearing a settled rejection | false |
+| `reportTelemetry(t)` | TELEMETRY for the Pi viewer, best effort, see [Telemetry](#telemetry) | dropped, false |
 
 ### ProsLinkStatus
 
@@ -172,6 +178,7 @@ counts it in `status().link.call_lock_misses`.
 | `readiness`, `summary` | [readiness](#readiness) state and its details (IMU use, decoded health, calibration, Brain IMU calibrating, localized, pose valid) |
 | `profile` | `ProfileStatus`: sync state, id, reason, detail, last result, bytes the Pi holds |
 | `state` | latest GET_STATE Ok of this session, raw wire units |
+| `telemetry_unsupported` | the Pi refused TELEMETRY in this session (an older Pi); nothing more is sent until a new session |
 | `heading_valid`, `heading` | raw Pi heading, placed or not, while the Pi has a pose; used by wheel calibration |
 | `field_sync` | transfer progress: complete map id, map bytes read, estimate id being read |
 | `field_generation`, `map_id`, `estimate_id`, `field_age` | published field and time since its estimate completed |
@@ -342,11 +349,11 @@ Pico IMU chip (BNO08X or ASM330) is fixed by the Pico firmware build;
 
 - `makeProfileDocument(profile)` converts to wire units (micrometers,
   millidegrees, ratios x 1e6), rounding to the nearest unit, and runs the
-  shared `gatr2::validateRobotProfile`, the same check the Pi runs first. The
+  shared `translagatr::validateRobotProfile`, the same check the Pi runs first. The
   result carries the bytes, or the first failure as a `ProfileReason` and the
   wheel or camera index. A value that does not fit the wire reports the
   reason of its group.
-- `toProfileDoc` does the same into a `gatr2::RobotProfileDoc`.
+- `toProfileDoc` does the same into a `translagatr::RobotProfileDoc`.
 - `profileId(doc)` is the document's CRC-32, the id the Pi reports.
 - `profileReasonName(reason)` gives a short name for the screen.
 - A profile that fails the Brain check is `ProfileSync::kInvalid` with its
@@ -400,7 +407,7 @@ first GET_STATE of a session
 
 `setProfile(profile)` (on `ProsLink` and `LinkDriver`; `Client::setProfile`
 takes the document) replaces the configured profile, for example when
-localization-test applies a wheel calibration:
+locaGATR applies a wheel calibration:
 
 - A profile the Brain check refuses returns false and the running profile
   stays. With no valid profile running, the refused one is kept as `kInvalid`
@@ -580,7 +587,7 @@ gives:
 |---|---|
 | `kPending` | queued, in flight, or the Pi answered Pending (Pico or calibration working) |
 | `kOk` | done; `calibration` is the Pi calibration state after it |
-| `kFailed` | ran and failed; `detail` is a `gatr2::ControlDetail` (PicoLink, ImuAbsent, ImuUnused, PicoRefused, TimedOut, Calibration) |
+| `kFailed` | ran and failed; `detail` is a `translagatr::ControlDetail` (PicoLink, ImuAbsent, ImuUnused, PicoRefused, TimedOut, Calibration) |
 | `kNotStationary` | the robot moved in the Pi's stationary window; nothing started |
 | `kNotReady` | the Pi has no applied robot profile |
 | `kRejected` | another error result, in `result` |
@@ -671,7 +678,7 @@ a new ticket.
 | `sequence` | Ok replies so far, 0 = none |
 | `received_at`, `round_trip` | poll time of the reply and its request's round trip |
 | `result` | in `wheelReadings()`: the last reply's result |
-| `count`, `wheels[]` | one `gatr2::WheelReading` per profile wheel, in profile order |
+| `count`, `wheels[]` | one `translagatr::WheelReading` per profile wheel, in profile order |
 | `busy` | `ProsLink::wheelReadings()` only: the link was busy and nothing above is current |
 
 `wheelReadings()` keeps the readings of the latest Ok reply of any read, for
@@ -693,6 +700,135 @@ kept. An empty path clears the report. It is best effort: one attempt, a newer
 report replaces an unsent one, and it is dropped without a session. It never
 changes localization.
 
+## Telemetry
+
+`reportTelemetry(t)` (`Client` and `ProsLink`) sends a
+`translagatr::BrainTelemetry` (TELEMETRY, op 12,
+[interfaces.md](interfaces.md#brain-link-v4)) for the Pi viewer and capture
+recordings. The Pi records and shows it; its localization, placement and
+profile never read it, and nothing on the Brain waits for it.
+
+| Group (flag) | Fields | Source |
+|---|---|---|
+| attitude (`kTelemetryAttitude`) | `roll_cdeg`, `pitch_cdeg`, robot frame | `ProsVexImu::attitude()` through `robotAttitudeFromVex` |
+| motion (`kTelemetryMotion`) | command id, state, reason, plan mode, segment, destination, applied chassis command, errors, drive fault | `actugatr::telemetryOf`, see [actuGATR telemetry](actugatr.md#telemetry) |
+| wheels (`kTelemetryWheels`) | `wheel_count`, `wheel_rpm_x10` | motor velocity targets, same place |
+
+`stamp_ms` is the Brain clock (`pros::millis()`) when the telemetry was
+assembled. A group whose flag is clear is zero on the wire and ignored. The
+attitude group is absent while the VEX IMU calibrates, is missing or reports
+an error, and always with a Pico IMU profile (no VEX IMU is read then).
+
+Rules:
+
+- Best effort: one attempt, never resent; a newer report replaces an unsent
+  one (`telemetry_replaced`).
+- On average at most one send per `telemetry_period` (0.1 s). Sends sit on a
+  grid of that period. A send up to half a period late keeps the grid, so two
+  sends can be as close as half a period, and a program that reports once per
+  period never has a report replaced by drift.
+- Lowest priority, after the path report, and only ever in the first request
+  slot after a state reply, the earliest point of the poll's idle window. A
+  report that falls due in the middle of the window waits for the next reply.
+- On time it is not a waiting transfer: it goes only when the state poll is
+  not due and nothing else waits, and never counts toward the four-poll rule.
+- Overdue: when a state exchange plus the 5 ms gap fills the whole 20 ms
+  poll period (a round trip of about 15 ms or more), the poll is due in
+  every slot and the on-time slot never comes. A report half a period past
+  its grid time then takes the first slot after a state reply from the due
+  poll or a waiting transfer (`telemetry_overdue`). That is at most one such
+  exchange per 1.5 periods and at most one exchange between two polls; a
+  transfer that already yielded its four polls still goes first. Without
+  this rule a slow link sent no telemetry at all while `telemetry_replaced`
+  grew.
+- Dropped at once (false, `telemetry_dropped`): no session, flag bits other
+  than the three groups, a wheels group of more than 6 wheels, or the Pi
+  refused TELEMETRY in this session.
+- An older Pi answers UnsupportedOp; a Pi that refuses the body answers
+  InvalidArgument. Either sets `telemetryUnsupported()` for the session and
+  counts `telemetry_refused`; the session, polling and every other request
+  go on. Unlike every other op, UnsupportedOp to TELEMETRY is not a terminal
+  incompatibility. From another `pi_instance` it is a Pi restart. A new
+  session tries once more.
+- A pending report is dropped with its session; a report of one session never
+  goes out in the next. A report still unsent two periods after it was made
+  (a link outage) is dropped too: it would reach the Pi looking fresh.
+
+**Cost.** With one request outstanding, a TELEMETRY exchange (68-byte request,
+19-byte reply) holds the link for its round trip plus the 5 ms gap, and the
+next state poll moves back by about that much: 10 to 15 ms at the default
+fake timing, more on a slower link, where one exchange takes as long as a
+poll's. Host runs only (V5 timing is not measured), a report every 100 ms as
+the programs send, polls counted over the same time without and with
+telemetry:
+
+| Setup (host) | Telemetry sent | State polls | Longest wait for a send |
+|---|---|---|---|
+| RS-485 bus, default timing, 5 s | 50 of 50 (on time) | 243 to 217 (11% fewer) | 116 ms |
+| fake USB, default timing, 5 s | 50 of 50 (on time) | 243 to 224 (8% fewer) | 114 ms |
+| fake USB, turnaround 8 ms, 5 s | 50 of 50 (on time) | 243 to 205 (16% fewer) | 118 ms |
+| fake USB, turnaround 11 ms, 5 s | 32 of 50 (overdue) | 237 to 205 (14% fewer) | 166 ms |
+| fake USB, turnaround 25 ms, 5 s | 29 of 50 (overdue) | 142 to 113 (20% fewer) | 180 ms |
+| RS-485 bus, reply after 8 ms, 5 s | 32 of 50 (overdue) | 232 to 200 (14% fewer) | 171 ms |
+| real Pi runtime (`brain_link_e2e` harness, `brain_profile_usb.xml`), 2 ms each way, 10 s | 100 of 100 | 497 and 500 (no change) | 124 ms |
+| same, 3, 4, 5 or 6 ms each way | 63 of 100 (overdue) | 489 to 437 (11% fewer) | 160 ms |
+| same, 1 to 4 ms each way, random per line | 79 of 100 | 490 to 431 (12% fewer) | 162 ms |
+
+At the default timing the longest gap between polls grew from 21 ms to 32 ms
+(RS-485) and 30 ms (USB). Before the overdue rule the slow rows sent 0 or 1
+reports in the whole run, and the random 1 to 4 ms row waited up to 370 ms
+(5 waits over 250 ms). With it every row stays under the Pi's 250 ms
+attitude staleness limit. The Brain VEX IMU samples ride on GET_STATE and
+slow by the same fraction as the polls.
+`gatr2_robot::kSendTelemetry = false` (or a longer `telemetry_period`)
+removes or lowers the cost.
+
+**Programs.** Both send every `gatr2_robot::kTelemetryPeriodMs` (100 ms) when
+`kSendTelemetry` is set:
+
+- operaGATR, from its background task: motion and wheels from the drive
+  task's last published snapshot (`ProsDrive::status`, a copy under the drive
+  mutex; nothing is held while the telemetry is built or sent), plus the VEX
+  IMU attitude. The snapshot is at most one drive period (10 ms) older than
+  `stamp_ms`.
+- locaGATR: the attitude only, and only with the VEX IMU profile.
+
+Both show the robot-frame tilt on the Brain screen and whether the Pi refused
+TELEMETRY.
+
+### Attitude
+
+```cpp
+#include "communigatr/attitude.h"
+
+const communigatr::VexAttitude   vex = g_vex->attitude(); // PROS roll and pitch, degrees
+const communigatr::RobotAttitude a =
+    communigatr::robotAttitudeFromVex(vex, gatr2_robot::kVexImuMountYawDeg);
+translagatr::BrainTelemetry t;
+communigatr::setAttitude(t, a); // flag and centidegrees; invalid clears the group
+t.stamp_ms = pros::millis();
+g_link->reportTelemetry(t);
+```
+
+- `ProsVexImu::attitude()` reads `pros::Imu::get_roll()` and `get_pitch()`.
+  It is invalid while the IMU calibrates, is missing, reports an error or
+  returns `PROS_ERR_F`.
+- `robotAttitudeFromVex(roll_deg, pitch_deg, mount_yaw_deg)` builds the up
+  direction from the IMU angles, rotates it by the mount yaw about +z and
+  reads roll and pitch back in the robot frame. It is exact, with no small
+  angle approximation: roll in (-180, 180], pitch in [-90, 90] degrees.
+  Non-finite input is invalid.
+- Convention (translaGATR): roll about robot +x (forward), positive left side
+  up; pitch about robot +y (left), positive nose down. The VEX angles are
+  assumed to follow the same convention in the IMU's own frame. This is
+  UNVERIFIED on hardware; the bench check is in
+  [Brain setup](brain_setup.md#10-telemetry-and-attitude).
+- The mount yaw is `gatr2_robot::kVexImuMountYawDeg`: the direction of the
+  IMU's +x axis in the robot frame, CCW from forward, usually 0, 90, 180 or
+  270. PLACEHOLDER. The IMU must lie flat. It changes only the telemetry,
+  never the heading or localization.
+- Only tilt: no height or vertical position is derived.
+
 ## Reconnect and recovery
 
 A timeout means the link was lost, not that a device restarted. Restarts are
@@ -709,7 +845,7 @@ epoch, the anchor revision, and on the Pi the Pico's boot and epochs.
 | Profile upload cut | resumes at the Pi's `received` in the same session, from 0 in a new one; a Pi restart mid-upload starts over |
 | Map or estimate transfer cut | the partial document is dropped; the read starts again; the published field stays |
 | Pico restart or acquisition restart | a used sensor restarted: the Pi invalidates the pose (new odometry epoch, unplaced); placement needed |
-| Unsupported version or op | terminal error: the session is dropped and HELLO repeats every `hello_backoff`, no retry storm |
+| Unsupported version or op | terminal error: the session is dropped and HELLO repeats every `hello_backoff`, no retry storm. Except TELEMETRY: an older Pi's UnsupportedOp stops telemetry for the session and keeps the session |
 
 What never happens automatically:
 - a movement command resuming after any of these (actuGATR fails it);
@@ -737,10 +873,13 @@ its receive buffer and resets its frame reader. Priority:
 7. Map chunk.
 8. Estimate chunk.
 9. Path report.
+10. Telemetry, only in the first slot after a state reply.
 
-Items 6 to 9 go while the state poll is not due. When exchanges outlast the
+Items 6 to 10 go while the state poll is not due. When exchanges outlast the
 poll period the poll is always due, so a waiting transfer goes after 4 due
-polls in a row instead of never. In host tests on the default RS-485 bus,
+polls in a row instead of never, and a telemetry report half a period late
+goes ahead of 5 to 9 in the first slot after a state reply (see
+[Telemetry](#telemetry)). In host tests on the default RS-485 bus,
 state polls stay at most 43 ms apart while a 128-object map moves.
 
 **Timeout per request.**
@@ -788,6 +927,7 @@ actuGATR's input age limits must allow that.
 | `hello_backoff` | 1.0 s | HELLO period after an unsupported version or op |
 | `field_period` | 0.5 s | between field estimate reads |
 | `transfer_backoff` | 1.0 s | after 3 failed transfers of one kind in a row |
+| `telemetry_period` | 0.1 s | TELEMETRY sends on a grid of this period, never closer than half of it |
 | `profile` | none | `ProfileDocument`; `LinkConfig::profile` fills it from a `RobotProfile` |
 | `bench_imu` | empty | Brain bench IMU sample for every GET_STATE; empty sends flags 0 |
 
@@ -800,7 +940,8 @@ bench approximation and does not synchronize the Brain and the Pico clocks.
 bad frames, drained bytes, read and write errors, sessions opened and lost,
 Pi restarts, stale HELLOs, unexpected replies, profile writes, document
 chunks, rejects and stale answers, maps and estimates completed, and path
-reports sent and dropped.
+reports sent and dropped, and TELEMETRY sent (and of those, sent overdue),
+replaced, dropped and refused.
 
 ## Client (portable)
 
@@ -827,13 +968,13 @@ build and the host build use the same files.
 |---|---|---|
 | `GATR2_ROOT` | `../..` | repository root as a path relative to the PROS project |
 | `GATR2_BRAIN_LIBS` | `investigatr communigatr actugatr` | libraries to compile; `communigatr` and `actugatr` need `investigatr` |
-| `GATR2_SRC_communigatr` | explicit list | `src/*.cpp` and `pros/*.cpp` of communiGATR, `common/frame_codec.cpp`, `common/link_documents.cpp` |
+| `GATR2_SRC_communigatr` | explicit list | `src/*.cpp` and `pros/*.cpp` of communiGATR, `translaGATR/frame_codec.cpp`, `translaGATR/link_documents.cpp` |
 | `GATR2_WARNFLAGS` | `-Wall -Wextra` | warnings for library sources |
 
 The fragment is included twice from the project Makefile. Before `common.mk`
 it adds the library objects (`bin/gatr2/<path>.o`) to the link and the include
 paths (the three libraries' `include/`, `brain/robot` and the repository
-root, so `#include "common/frame_codec.h"` works). After `common.mk` it adds
+root, so `#include "translaGATR/frame_codec.h"` works). After `common.mk` it adds
 one compile rule per source with the project's flags and a dependency file
 next to the object.
 
@@ -860,7 +1001,7 @@ Import into another PROS project:
    ```
 
 4. Include `"communigatr/pros_link.h"` and use it as in [PROS use](#pros-use).
-   `brain/localization-test` and `brain/testing` are complete examples.
+   `brain/locaGATR` and `brain/operaGATR` are complete examples.
 5. Build with `pros make`. Build and upload steps for this repository's
    programs: [Build and upload](brain_setup.md#2-build-and-upload).
 
@@ -869,7 +1010,7 @@ Notes:
 - `GATR2_ROOT` must be relative. A drive letter path (`C:/...`) breaks the
   `-iquote` flags in the toolchain's shell.
 - A new library source must be added to its list in `gatr2_brain.mk`, and to
-  `pi/navigatr/tests/CMakeLists.txt` when the Pi end-to-end test needs it.
+  `pi/naviGATR/tests/CMakeLists.txt` when the Pi end-to-end test needs it.
   Headers need no listing.
 - The fragment has its own compile rule: `common.mk`'s dependency steps
   assume sources under `src/` and would write over library sources.
@@ -896,11 +1037,11 @@ sources.
 
 The host project is `brain/CMakeLists.txt`, with the commands in
 [brain/README.md](../brain/README.md). The codec's own tests are in
-`common/tests` (`cmake -S common/tests`).
+`translaGATR/tests` (`cmake -S translaGATR/tests`).
 
 | Target | Contents |
 |---|---|
-| `communigatr` | `src/*.cpp`, `common/frame_codec.cpp`, `common/link_documents.cpp`; links `investigatr_types` |
+| `communigatr` | `src/*.cpp`, `translaGATR/frame_codec.cpp`, `translaGATR/link_documents.cpp`; links `investigatr_types` |
 | `communigatr_fakes` | `sim/`: `FakePi`, `FakeBus`, `FakeUsb`, `LinkRig` |
 | `communigatr_tests` | the test files below, listed explicitly |
 
@@ -911,6 +1052,8 @@ Fakes (host only):
   rejection and apply delay, field documents with any object count (including
   maps of many chunks), estimate replacement and Stale, control with
   NotStationary, Pending and Pico failures, READ_WHEELS, path reports,
+  TELEMETRY kept and answered header only (`setTelemetryResult` for a
+  refusing Pi, `setUnsupportedOp(kOpTelemetry)` for a Pi from before it),
   restart, other versions and unsupported ops.
 - `FakeBus`: a timed half-duplex RS-485 bus with byte airtime, Brain
   latencies, the Pi reply window, scripted faults (dropped, duplicated,
@@ -937,9 +1080,11 @@ Fakes (host only):
 | `profile_change_gtest.cpp` | on both transports: new travel scale applied as a new profile that needs placement, same profile, Brain-refused profile, invalid first profile, change during an upload or while the Pi applies; with Pi apply delays 0 to 5, neither a runtime change nor a Brain restart with an edited profile ever shows the old placement as valid, ready or localized |
 | `vex_imu_recalibration_gtest.cpp` | the VEX calibration starts only after the Pi's Ok; movement, refusals and lost answers start nothing; an IMU that does not start, does not finish or ends invalid; on both transports against the fake Pi |
 | `wheel_calibration_gtest.cpp`, `startup_placement_gtest.cpp`, `link_events_gtest.cpp` | the application helpers |
+| `attitude_gtest.cpp` | VEX roll and pitch to the robot frame at mounts 0, 90, 180 and 270 and others, combined tilts round trip, the exact gravity rotation against the small angle swap, non-finite input, the centidegree group |
+| `client_telemetry_gtest.cpp` | the fake Pi's TELEMETRY rules; on both transports: values arrive intact, latest wins, one send per period on a grid, state polls keep at least 85% of their rate, an older or refusing Pi stops telemetry for the session and keeps it, a new session tries again, a Pi restart drops the unsent report, a report held through an outage is dropped; on slow links (USB turnaround 11 ms, bus reply after 8 ms) at least 30 sends in 5 s, no wait over 250 ms, never closer than half a period, one exchange at most between two polls, at least 80% of the polls, a waiting transfer and telemetry both served; on the bus log: on the default bus never with the poll due, on a slow bus overdue, and on both only in the first slot after a state reply with the longest poll gap bounded by one TELEMETRY exchange and the gap; a lost report never resent; bodies the codec cannot carry refused |
 
-`pi/navigatr/tests/brain_link_e2e_gtest.cpp` (target `brain_link_e2e_tests` in
-`pi/navigatr/tests/CMakeLists.txt`, run by the Pi test build) exercises the
+`pi/naviGATR/tests/brain_link_e2e_gtest.cpp` (target `brain_link_e2e_tests` in
+`pi/naviGATR/tests/CMakeLists.txt`, run by the Pi test build) exercises the
 real Pi runtime from `brain_profile_usb.xml` against the real `Client`,
 `LinkDriver`, NG1 codec, actuGATR `Motion` and the planner, with a drivetrain
 sim as the truth: profile upload, placement, direct, avoiding and landmark
@@ -956,6 +1101,15 @@ Pi restarts, and used sensors dropping out.
 - The VEX IMU sample carries the Brain read time, not a measurement time, and
   a repeated IMU value counts as a new sample at the Pi. This is the bench
   arrival-time approximation.
+- VEX roll and pitch: the sign conventions and which IMU axis each angle is
+  about are UNVERIFIED on hardware, and `kVexImuMountYawDeg` is a
+  PLACEHOLDER; see the bench check in
+  [Brain setup](brain_setup.md#10-telemetry-and-attitude). An IMU mounted on
+  its side or upside down is not supported.
+- TELEMETRY delays some state polls: 6 to 11% fewer at the default fake
+  timing, up to 20% on slow fakes, where it also sends fewer reports (about
+  6 per second instead of 10); see [Telemetry](#telemetry). Not measured on
+  the V5.
 - One placement, one control and one wheel read at a time; only the latest
   ticket of each is tracked.
 - `VexImuRecalibration` checks stillness before the VEX calibration starts,

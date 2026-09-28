@@ -24,33 +24,56 @@ bool newerId(uint16_t a, uint16_t b) {
 
 // Read-only, or idempotent by content: the newest id is answered again.
 bool repeatable(uint8_t op) {
-    return op == gatr2::kOpGetState || op == gatr2::kOpProfileWrite ||
-           op == gatr2::kOpProfileApply || op == gatr2::kOpReadDoc ||
-           op == gatr2::kOpPathReport || op == gatr2::kOpReadWheels;
+    return op == translagatr::kOpGetState || op == translagatr::kOpProfileWrite ||
+           op == translagatr::kOpProfileApply || op == translagatr::kOpReadDoc ||
+           op == translagatr::kOpPathReport || op == translagatr::kOpReadWheels ||
+           op == translagatr::kOpTelemetry;
 }
 
-bool sameRequest(const gatr2::BrainRequest& a, const gatr2::BrainRequest& b) {
+bool sameTelemetry(const translagatr::BrainTelemetry& a, const translagatr::BrainTelemetry& b) {
+    if (a.flags != b.flags || a.stamp_ms != b.stamp_ms || a.roll_cdeg != b.roll_cdeg ||
+        a.pitch_cdeg != b.pitch_cdeg || a.command_id != b.command_id ||
+        a.motion_state != b.motion_state || a.motion_reason != b.motion_reason ||
+        a.plan_mode != b.plan_mode || a.segment != b.segment ||
+        a.segment_count != b.segment_count || a.target_x_mm != b.target_x_mm ||
+        a.target_y_mm != b.target_y_mm || a.target_heading_cdeg != b.target_heading_cdeg ||
+        a.cmd_vx_mm_s != b.cmd_vx_mm_s || a.cmd_vy_mm_s != b.cmd_vy_mm_s ||
+        a.cmd_omega_cdeg_s != b.cmd_omega_cdeg_s || a.cross_track_mm != b.cross_track_mm ||
+        a.distance_error_mm != b.distance_error_mm ||
+        a.heading_error_cdeg != b.heading_error_cdeg || a.drive_fault != b.drive_fault ||
+        a.wheel_count != b.wheel_count) {
+        return false;
+    }
+    for (uint8_t i = 0; i < translagatr::kTelemetryWheelsMax; ++i) {
+        if (a.wheel_rpm_x10[i] != b.wheel_rpm_x10[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool sameRequest(const translagatr::BrainRequest& a, const translagatr::BrainRequest& b) {
     if (a.op != b.op) {
         return false;
     }
     switch (a.op) {
-    case gatr2::kOpSetPose:
+    case translagatr::kOpSetPose:
         return a.x_mm == b.x_mm && a.y_mm == b.y_mm && a.heading_cdeg == b.heading_cdeg;
-    case gatr2::kOpGetState:
+    case translagatr::kOpGetState:
         return a.imu_flags == b.imu_flags && a.imu_stamp_ms == b.imu_stamp_ms &&
                a.imu_rotation_mdeg == b.imu_rotation_mdeg;
-    case gatr2::kOpProfileWrite:
+    case translagatr::kOpProfileWrite:
         return a.profile_id == b.profile_id && a.total_len == b.total_len &&
                a.offset == b.offset && a.data_len == b.data_len &&
                std::memcmp(a.data, b.data, a.data_len) == 0;
-    case gatr2::kOpProfileApply:
+    case translagatr::kOpProfileApply:
         return a.profile_id == b.profile_id && a.total_len == b.total_len;
-    case gatr2::kOpReadDoc:
+    case translagatr::kOpReadDoc:
         return a.doc_kind == b.doc_kind && a.doc_id == b.doc_id && a.doc_offset == b.doc_offset &&
                a.max_len == b.max_len;
-    case gatr2::kOpControl:
+    case translagatr::kOpControl:
         return a.action == b.action && a.action_arg == b.action_arg;
-    case gatr2::kOpPathReport:
+    case translagatr::kOpPathReport:
         if (a.command_id != b.command_id || a.path_mode != b.path_mode ||
             a.point_count != b.point_count) {
             return false;
@@ -61,30 +84,32 @@ bool sameRequest(const gatr2::BrainRequest& a, const gatr2::BrainRequest& b) {
             }
         }
         return true;
-    case gatr2::kOpReadWheels:
+    case translagatr::kOpReadWheels:
         return true;
+    case translagatr::kOpTelemetry:
+        return sameTelemetry(a.telemetry, b.telemetry);
     default:
         return false;
     }
 }
 
-bool wellFormed(const gatr2::BrainRequest& r) {
+bool wellFormed(const translagatr::BrainRequest& r) {
     switch (r.op) {
-    case gatr2::kOpGetState:
-        return (r.imu_flags & ~gatr2::kBenchImuValid) == 0;
-    case gatr2::kOpProfileWrite:
-        return r.total_len >= gatr2::kProfileHeaderLen && r.total_len <= gatr2::kProfileMaxLen &&
+    case translagatr::kOpGetState:
+        return (r.imu_flags & ~translagatr::kBenchImuValid) == 0;
+    case translagatr::kOpProfileWrite:
+        return r.total_len >= translagatr::kProfileHeaderLen && r.total_len <= translagatr::kProfileMaxLen &&
                static_cast<uint32_t>(r.offset) + r.data_len <= r.total_len;
-    case gatr2::kOpProfileApply:
-        return r.total_len >= gatr2::kProfileHeaderLen && r.total_len <= gatr2::kProfileMaxLen;
-    case gatr2::kOpReadDoc:
-        return (r.doc_kind == gatr2::kDocFieldMap || r.doc_kind == gatr2::kDocFieldEstimate) &&
+    case translagatr::kOpProfileApply:
+        return r.total_len >= translagatr::kProfileHeaderLen && r.total_len <= translagatr::kProfileMaxLen;
+    case translagatr::kOpReadDoc:
+        return (r.doc_kind == translagatr::kDocFieldMap || r.doc_kind == translagatr::kDocFieldEstimate) &&
                r.max_len > 0;
-    case gatr2::kOpControl:
-        return r.action >= gatr2::kControlRecalibrate &&
-               r.action <= gatr2::kControlRestartAcquisition;
-    case gatr2::kOpPathReport:
-        return r.path_mode <= gatr2::kPathAvoiding;
+    case translagatr::kOpControl:
+        return r.action >= translagatr::kControlRecalibrate &&
+               r.action <= translagatr::kControlRestartAcquisition;
+    case translagatr::kOpPathReport:
+        return r.path_mode <= translagatr::kPathAvoiding;
     default:
         return true;
     }
@@ -96,26 +121,26 @@ FakeField makeFakeField(uint16_t count, uint16_t revision) {
     FakeField field;
     field.revision = revision;
     for (uint16_t i = 0; i < count; ++i) {
-        gatr2::FieldObjectRecord r;
+        translagatr::FieldObjectRecord r;
         r.object_id    = static_cast<uint16_t>(10 * (i + 1));
         r.x_mm         = 300 + (i % 8) * 400;
         r.y_mm         = 300 + (i / 8) * 200;
         r.heading_cdeg = (i % 8) * 4500 - 13500;
         if (i % 6 == 5) {
-            r.kind  = gatr2::kObjectFixed; // reference only, no box
-            r.flags = gatr2::kObjectReference;
+            r.kind  = translagatr::kObjectFixed; // reference only, no box
+            r.flags = translagatr::kObjectReference;
         } else if (i % 2 == 0) {
-            r.kind             = gatr2::kObjectLandmark;
-            r.flags            = gatr2::kObjectObstacle | gatr2::kObjectEstimated |
-                      gatr2::kObjectReference;
+            r.kind             = translagatr::kObjectLandmark;
+            r.flags            = translagatr::kObjectObstacle | translagatr::kObjectEstimated |
+                      translagatr::kObjectReference;
             r.box_x_mm         = 20;
             r.box_y_mm         = -10;
             r.box_heading_cdeg = 4500;
             r.box_length_mm    = 150;
             r.box_width_mm     = 100;
         } else {
-            r.kind          = gatr2::kObjectFixed;
-            r.flags         = gatr2::kObjectObstacle;
+            r.kind          = translagatr::kObjectFixed;
+            r.flags         = translagatr::kObjectObstacle;
             r.box_length_mm = 200;
             r.box_width_mm  = 50;
         }
@@ -133,26 +158,26 @@ std::vector<std::vector<uint8_t>> FakePi::receive(const uint8_t* data, std::size
             continue;
         }
         do {
-            gatr2::BrainRequest request;
-            if (reader_.frameType() != gatr2::kFrameBrainRequest ||
-                !gatr2::decodeBrainRequest(reader_.frame(), reader_.frameLen(), request)) {
+            translagatr::BrainRequest request;
+            if (reader_.frameType() != translagatr::kFrameBrainRequest ||
+                !translagatr::decodeBrainRequest(reader_.frame(), reader_.frameLen(), request)) {
                 continue;
             }
-            const gatr2::BrainReply reply = answer(request);
-            std::vector<uint8_t>    frame(gatr2::kMaxFrameLen);
+            const translagatr::BrainReply reply = answer(request);
+            std::vector<uint8_t>    frame(translagatr::kMaxFrameLen);
             frame.resize(
-                gatr2::encodeBrainReply(reply, frame.data(), static_cast<uint16_t>(frame.size())));
+                translagatr::encodeBrainReply(reply, frame.data(), static_cast<uint16_t>(frame.size())));
             replies.push_back(frame);
         } while (reader_.next());
     }
     return replies;
 }
 
-gatr2::BrainReply FakePi::answer(const gatr2::BrainRequest& request) {
+translagatr::BrainReply FakePi::answer(const translagatr::BrainRequest& request) {
     requests_.push_back(request);
     tick();
 
-    gatr2::BrainReply reply;
+    translagatr::BrainReply reply;
     reply.version     = version_;
     reply.op          = request.op;
     reply.session     = request.session;
@@ -161,19 +186,19 @@ gatr2::BrainReply FakePi::answer(const gatr2::BrainRequest& request) {
     reply.nonce       = request.nonce;
 
     if (request.version != version_) {
-        reply.result = gatr2::kResultUnsupportedVersion;
+        reply.result = translagatr::kResultUnsupportedVersion;
         return reply;
     }
-    if (gatr2::brainRequestMinLen(request.op) == 0 || request.op == unsupported_op_) {
-        reply.result = gatr2::kResultUnsupportedOp;
+    if (translagatr::brainRequestMinLen(request.op) == 0 || request.op == unsupported_op_) {
+        reply.result = translagatr::kResultUnsupportedOp;
         return reply;
     }
     if (request.request_id == 0 || !wellFormed(request)) {
-        reply.result = gatr2::kResultInvalidArgument;
+        reply.result = translagatr::kResultInvalidArgument;
         return reply;
     }
 
-    if (request.op == gatr2::kOpHello) {
+    if (request.op == translagatr::kOpHello) {
         if (session_ != 0 && request.nonce == open_nonce_ &&
             request.request_id == open_request_id_ && !accepted_other_) {
             reply.session = session_; // retry of the opening HELLO
@@ -181,7 +206,7 @@ gatr2::BrainReply FakePi::answer(const gatr2::BrainRequest& request) {
         }
         for (int i = 0; i < nonce_count_; ++i) {
             if (nonce_ring_[i] == request.nonce) {
-                reply.result = gatr2::kResultStale;
+                reply.result = translagatr::kResultStale;
                 return reply;
             }
         }
@@ -191,7 +216,7 @@ gatr2::BrainReply FakePi::answer(const gatr2::BrainRequest& request) {
     }
 
     if (session_ == 0 || request.session != session_) {
-        reply.result = gatr2::kResultUnknownSession;
+        reply.result = translagatr::kResultUnknownSession;
         return reply;
     }
     if (have_newest_ && !newerId(request.request_id, newest_.request_id)) {
@@ -214,7 +239,7 @@ void FakePi::restart(uint32_t pi_instance) {
     accepted_other_  = false;
     nonce_count_     = 0;
     have_newest_     = false;
-    newest_          = gatr2::BrainRequest{};
+    newest_          = translagatr::BrainRequest{};
     last_set_pose_   = Record{};
     last_control_    = Record{};
 
@@ -229,17 +254,17 @@ void FakePi::restart(uint32_t pi_instance) {
     applied_profile_    = 0;
     applying_profile_   = 0;
     applying_countdown_ = 0;
-    profile_state_      = gatr2::kProfileNone;
+    profile_state_      = translagatr::kProfileNone;
     profile_id_         = 0;
-    profile_reason_     = gatr2::kProfileReasonNone;
+    profile_reason_     = translagatr::kProfileReasonNone;
     profile_detail_     = 0;
     rejected_.clear();
 
     robot_.robot_flags &= static_cast<uint8_t>(
-        ~(gatr2::kRobotLocalized | gatr2::kRobotAnchorCommand | gatr2::kRobotAnchorConfigured));
+        ~(translagatr::kRobotLocalized | translagatr::kRobotAnchorCommand | translagatr::kRobotAnchorConfigured));
     robot_.odometry_epoch  = 0;
     robot_.anchor_revision = 0;
-    robot_.calibration     = gatr2::kCalibrationNone;
+    robot_.calibration     = translagatr::kCalibrationNone;
     calibration_left_      = 0;
 
     estimates_.clear();
@@ -247,7 +272,8 @@ void FakePi::restart(uint32_t pi_instance) {
     if (map_id_ != 0) {
         publishNominalEstimate();
     }
-    path_ = FakePath{};
+    path_      = FakePath{};
+    telemetry_ = translagatr::BrainTelemetry{};
     reader_.reset();
 }
 
@@ -257,8 +283,8 @@ void FakePi::restart(uint32_t pi_instance) {
 
 void FakePi::setField(const FakeField& field) {
     const uint16_t count = static_cast<uint16_t>(field.objects.size());
-    map_doc_.assign(gatr2::fieldMapLen(count), 0);
-    gatr2::FieldMapHeader header;
+    map_doc_.assign(translagatr::fieldMapLen(count), 0);
+    translagatr::FieldMapHeader header;
     header.revision     = field.revision;
     header.object_count = count;
     header.min_x_mm     = field.min_x_mm;
@@ -266,18 +292,18 @@ void FakePi::setField(const FakeField& field) {
     header.max_x_mm     = field.max_x_mm;
     header.max_y_mm     = field.max_y_mm;
     const uint16_t cap  = static_cast<uint16_t>(map_doc_.size());
-    gatr2::encodeFieldMapHeader(header, map_doc_.data(), cap);
+    translagatr::encodeFieldMapHeader(header, map_doc_.data(), cap);
     for (uint16_t i = 0; i < count; ++i) {
-        gatr2::encodeFieldObjectRecord(field.objects[i], i, map_doc_.data(), cap);
+        translagatr::encodeFieldObjectRecord(field.objects[i], i, map_doc_.data(), cap);
     }
-    map_id_ = gatr2::crc32(map_doc_.data(), cap);
+    map_id_ = translagatr::crc32(map_doc_.data(), cap);
     estimates_.clear();
     publishNominalEstimate();
 }
 
 void FakePi::setMapDocument(const std::vector<uint8_t>& doc) {
     map_doc_ = doc;
-    map_id_  = gatr2::crc32(doc.data(), static_cast<uint32_t>(doc.size()));
+    map_id_  = translagatr::crc32(doc.data(), static_cast<uint32_t>(doc.size()));
     estimates_.clear();
 }
 
@@ -287,20 +313,20 @@ void FakePi::clearField() {
     estimates_.clear();
 }
 
-std::vector<gatr2::FieldEstimateRecord> FakePi::nominalRecords() const {
-    std::vector<gatr2::FieldEstimateRecord> records;
-    gatr2::FieldMapHeader                   header;
+std::vector<translagatr::FieldEstimateRecord> FakePi::nominalRecords() const {
+    std::vector<translagatr::FieldEstimateRecord> records;
+    translagatr::FieldMapHeader                   header;
     const uint16_t                          len = static_cast<uint16_t>(map_doc_.size());
-    if (!gatr2::decodeFieldMapHeader(map_doc_.data(), len, header)) {
+    if (!translagatr::decodeFieldMapHeader(map_doc_.data(), len, header)) {
         return records;
     }
     for (uint16_t i = 0; i < header.object_count; ++i) {
-        gatr2::FieldObjectRecord o;
-        gatr2::decodeFieldObjectRecord(map_doc_.data(), len, i, o);
-        gatr2::FieldEstimateRecord e;
+        translagatr::FieldObjectRecord o;
+        translagatr::decodeFieldObjectRecord(map_doc_.data(), len, i, o);
+        translagatr::FieldEstimateRecord e;
         e.object_id    = o.object_id;
-        e.source       = gatr2::kEstimateSourceNominal;
-        e.flags        = gatr2::kEstimateValid;
+        e.source       = translagatr::kEstimateSourceNominal;
+        e.flags        = translagatr::kEstimateValid;
         e.x_mm         = o.x_mm;
         e.y_mm         = o.y_mm;
         e.heading_cdeg = o.heading_cdeg;
@@ -309,21 +335,21 @@ std::vector<gatr2::FieldEstimateRecord> FakePi::nominalRecords() const {
     return records;
 }
 
-uint32_t FakePi::publishEstimate(const std::vector<gatr2::FieldEstimateRecord>& records) {
+uint32_t FakePi::publishEstimate(const std::vector<translagatr::FieldEstimateRecord>& records) {
     const uint16_t count = static_cast<uint16_t>(records.size());
     Estimate       e;
     e.id = next_estimate_id_++;
-    e.doc.assign(gatr2::fieldEstimateLen(count), 0);
-    gatr2::FieldEstimateHeader header;
+    e.doc.assign(translagatr::fieldEstimateLen(count), 0);
+    translagatr::FieldEstimateHeader header;
     header.object_count    = count;
     header.map_id          = estimate_map_id_ != 0 ? estimate_map_id_ : map_id_;
     header.estimate_id     = e.id;
     header.odometry_epoch  = robot_.odometry_epoch;
     header.anchor_revision = robot_.anchor_revision;
     const uint16_t cap     = static_cast<uint16_t>(e.doc.size());
-    gatr2::encodeFieldEstimateHeader(header, e.doc.data(), cap);
+    translagatr::encodeFieldEstimateHeader(header, e.doc.data(), cap);
     for (uint16_t i = 0; i < count; ++i) {
-        gatr2::encodeFieldEstimateRecord(records[i], i, e.doc.data(), cap);
+        translagatr::encodeFieldEstimateRecord(records[i], i, e.doc.data(), cap);
     }
     estimates_.push_back(e);
     if (estimates_.size() > 3) {
@@ -338,13 +364,13 @@ uint32_t FakePi::publishNominalEstimate() { return publishEstimate(nominalRecord
 // Requests
 // ---------------------------------------------------------------------------
 
-void FakePi::openSession(const gatr2::BrainRequest& request) {
+void FakePi::openSession(const translagatr::BrainRequest& request) {
     session_         = nextSession();
     open_nonce_      = request.nonce;
     open_request_id_ = request.request_id;
     accepted_other_  = false;
     have_newest_     = false;
-    newest_          = gatr2::BrainRequest{};
+    newest_          = translagatr::BrainRequest{};
 
     for (int i = 3; i > 0; --i) {
         nonce_ring_[i] = nonce_ring_[i - 1];
@@ -361,39 +387,46 @@ void FakePi::openSession(const gatr2::BrainRequest& request) {
     ++sessions_opened_;
 }
 
-void FakePi::execute(gatr2::BrainReply& reply, const gatr2::BrainRequest& request, bool repeat) {
+void FakePi::execute(translagatr::BrainReply& reply, const translagatr::BrainRequest& request, bool repeat) {
     switch (request.op) {
-    case gatr2::kOpGetState:
-        if (!repeat && (request.imu_flags & gatr2::kBenchImuValid) != 0) {
+    case translagatr::kOpGetState:
+        if (!repeat && (request.imu_flags & translagatr::kBenchImuValid) != 0) {
             ++imu_samples_;
         }
         answerState(reply);
         break;
-    case gatr2::kOpSetPose:
+    case translagatr::kOpSetPose:
         setPose(reply, request);
         break;
-    case gatr2::kOpProfileWrite:
+    case translagatr::kOpProfileWrite:
         profileWrite(reply, request);
         break;
-    case gatr2::kOpProfileApply:
+    case translagatr::kOpProfileApply:
         profileApply(reply, request);
         break;
-    case gatr2::kOpReadDoc:
+    case translagatr::kOpReadDoc:
         readDoc(reply, request);
         break;
-    case gatr2::kOpControl:
+    case translagatr::kOpControl:
         control(reply, request);
         break;
-    case gatr2::kOpReadWheels:
+    case translagatr::kOpReadWheels:
         readWheels(reply);
         break;
-    case gatr2::kOpPathReport:
+    case translagatr::kOpPathReport:
         path_ = FakePath{};
-        if (request.path_mode != gatr2::kPathNone) {
+        if (request.path_mode != translagatr::kPathNone) {
             path_.have       = true;
             path_.command_id = request.command_id;
             path_.mode       = request.path_mode;
             path_.points.assign(request.points, request.points + request.point_count);
+        }
+        break;
+    case translagatr::kOpTelemetry:
+        reply.result = telemetry_result_;
+        if (telemetry_result_ == translagatr::kResultOk && !repeat) {
+            telemetry_ = request.telemetry;
+            ++telemetry_kept_;
         }
         break;
     default:
@@ -401,13 +434,13 @@ void FakePi::execute(gatr2::BrainReply& reply, const gatr2::BrainRequest& reques
     }
 }
 
-void FakePi::repeat(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+void FakePi::repeat(translagatr::BrainReply& reply, const translagatr::BrainRequest& request) {
     const uint16_t id = request.request_id;
     if (last_set_pose_.have && id == last_set_pose_.request.request_id) {
         if (!sameRequest(request, last_set_pose_.request)) {
-            reply.result = gatr2::kResultInvalidArgument;
-        } else if (last_set_pose_.result == gatr2::kResultNotReady) {
-            reply.result = gatr2::kResultNotReady;
+            reply.result = translagatr::kResultInvalidArgument;
+        } else if (last_set_pose_.result == translagatr::kResultNotReady) {
+            reply.result = translagatr::kResultNotReady;
         } else {
             answerPlacement(reply, last_set_pose_.sequence);
         }
@@ -415,7 +448,7 @@ void FakePi::repeat(gatr2::BrainReply& reply, const gatr2::BrainRequest& request
     }
     if (last_control_.have && id == last_control_.request.request_id) {
         if (!sameRequest(request, last_control_.request)) {
-            reply.result = gatr2::kResultInvalidArgument;
+            reply.result = translagatr::kResultInvalidArgument;
         } else {
             reply.result         = last_control_.result;
             reply.action         = last_control_.request.action;
@@ -428,17 +461,17 @@ void FakePi::repeat(gatr2::BrainReply& reply, const gatr2::BrainRequest& request
         if (repeatable(request.op) && sameRequest(request, newest_)) {
             execute(reply, request, true);
         } else {
-            reply.result = gatr2::kResultInvalidArgument;
+            reply.result = translagatr::kResultInvalidArgument;
         }
         return;
     }
-    reply.result = gatr2::kResultStale;
+    reply.result = translagatr::kResultStale;
 }
 
-void FakePi::setPose(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+void FakePi::setPose(translagatr::BrainReply& reply, const translagatr::BrainRequest& request) {
     if (!localizing()) {
-        reply.result   = gatr2::kResultNotReady;
-        last_set_pose_ = Record{true, request, gatr2::kResultNotReady, 0, 0};
+        reply.result   = translagatr::kResultNotReady;
+        last_set_pose_ = Record{true, request, translagatr::kResultNotReady, 0, 0};
         return;
     }
     init_sequence_ += 1;
@@ -449,22 +482,22 @@ void FakePi::setPose(gatr2::BrainReply& reply, const gatr2::BrainRequest& reques
     placement_.y_mm      = request.y_mm;
     placement_.heading   = request.heading_cdeg;
     placement_.countdown = apply_delay_;
-    last_set_pose_       = Record{true, request, gatr2::kResultPending, 0, init_sequence_};
+    last_set_pose_       = Record{true, request, translagatr::kResultPending, 0, init_sequence_};
     if (apply_delay_ == 0) {
         applyPlacement();
     }
     answerPlacement(reply, init_sequence_);
 }
 
-void FakePi::answerPlacement(gatr2::BrainReply& reply, uint32_t sequence) const {
+void FakePi::answerPlacement(translagatr::BrainReply& reply, uint32_t sequence) const {
     const bool applied    = applied_session_ == session_ && applied_sequence_ == sequence;
-    reply.result          = applied ? gatr2::kResultOk : gatr2::kResultPending;
+    reply.result          = applied ? translagatr::kResultOk : translagatr::kResultPending;
     reply.odometry_epoch  = robot_.odometry_epoch;
     reply.anchor_revision = robot_.anchor_revision;
 }
 
-void FakePi::answerState(gatr2::BrainReply& reply) const {
-    reply.result = gatr2::kResultOk;
+void FakePi::answerState(translagatr::BrainReply& reply) const {
+    reply.result = translagatr::kResultOk;
     reply.state  = robot_;
     if (!localizing()) {
         reply.state.robot_flags  = 0;
@@ -481,18 +514,18 @@ void FakePi::answerState(gatr2::BrainReply& reply) const {
     reply.state.estimate_id    = newestEstimate();
 }
 
-void FakePi::profileWrite(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+void FakePi::profileWrite(translagatr::BrainReply& reply, const translagatr::BrainRequest& request) {
     const bool same = staging_total_ != 0 && request.profile_id == staging_id_ &&
                       request.total_len == staging_total_;
     const uint16_t held = same ? staging_received_ : 0;
     if (request.offset > held) {
-        reply.result = gatr2::kResultInvalidArgument; // a gap
+        reply.result = translagatr::kResultInvalidArgument; // a gap
         return;
     }
     const uint16_t end     = static_cast<uint16_t>(request.offset + request.data_len);
     const uint16_t overlap = static_cast<uint16_t>(std::min(end, held) - request.offset);
     if (std::memcmp(staging_ + request.offset, request.data, overlap) != 0) {
-        reply.result = gatr2::kResultInvalidArgument; // a resend with other bytes
+        reply.result = translagatr::kResultInvalidArgument; // a resend with other bytes
         return;
     }
     if (!same) {
@@ -510,25 +543,25 @@ void FakePi::profileWrite(gatr2::BrainReply& reply, const gatr2::BrainRequest& r
     reply.received   = staging_received_;
 }
 
-void FakePi::profileApply(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+void FakePi::profileApply(translagatr::BrainReply& reply, const translagatr::BrainRequest& request) {
     const uint32_t id = request.profile_id;
     if (staging_total_ == 0 || staging_id_ != id || staging_total_ != request.total_len ||
-        staging_received_ != staging_total_ || gatr2::crc32(staging_, staging_total_) != id) {
-        reply.result = gatr2::kResultInvalidArgument; // staging incomplete or corrupt
+        staging_received_ != staging_total_ || translagatr::crc32(staging_, staging_total_) != id) {
+        reply.result = translagatr::kResultInvalidArgument; // staging incomplete or corrupt
         return;
     }
     reply.profile_id = id;
     if (id == applied_profile_) {
-        profile_state_       = gatr2::kProfileApplied;
+        profile_state_       = translagatr::kProfileApplied;
         profile_id_          = id;
-        profile_reason_      = gatr2::kProfileReasonNone;
+        profile_reason_      = translagatr::kProfileReasonNone;
         profile_detail_      = 0;
-        reply.profile_state  = gatr2::kProfileApplied;
+        reply.profile_state  = translagatr::kProfileApplied;
         return; // idempotent, nothing resets
     }
-    if (profile_state_ == gatr2::kProfileApplying && profile_id_ == id) {
-        reply.result        = gatr2::kResultPending;
-        reply.profile_state = gatr2::kProfileApplying;
+    if (profile_state_ == translagatr::kProfileApplying && profile_id_ == id) {
+        reply.result        = translagatr::kResultPending;
+        reply.profile_state = translagatr::kProfileApplying;
         return;
     }
     for (const Rejection& seen : rejected_) {
@@ -538,36 +571,36 @@ void FakePi::profileApply(gatr2::BrainReply& reply, const gatr2::BrainRequest& r
         }
     }
     if (!profile_mode_) {
-        rejectProfile(reply, id, gatr2::kProfileReasonNotAccepted, 0);
+        rejectProfile(reply, id, translagatr::kProfileReasonNotAccepted, 0);
         return;
     }
-    gatr2::RobotProfileDoc profile;
-    if (!gatr2::decodeRobotProfile(staging_, staging_total_, profile)) {
-        rejectProfile(reply, id, gatr2::kProfileReasonFormat, 0);
+    translagatr::RobotProfileDoc profile;
+    if (!translagatr::decodeRobotProfile(staging_, staging_total_, profile)) {
+        rejectProfile(reply, id, translagatr::kProfileReasonFormat, 0);
         return;
     }
-    uint8_t reason = gatr2::kProfileReasonNone;
+    uint8_t reason = translagatr::kProfileReasonNone;
     uint8_t detail = 0;
-    if (!gatr2::validateRobotProfile(profile, reason, detail)) {
+    if (!translagatr::validateRobotProfile(profile, reason, detail)) {
         rejectProfile(reply, id, reason, detail);
         return;
     }
-    if (capability_reason_ != gatr2::kProfileReasonNone) {
+    if (capability_reason_ != translagatr::kProfileReasonNone) {
         rejectProfile(reply, id, capability_reason_, capability_detail_);
         return;
     }
-    profile_state_      = gatr2::kProfileApplying;
+    profile_state_      = translagatr::kProfileApplying;
     profile_id_         = id;
-    profile_reason_     = gatr2::kProfileReasonNone;
+    profile_reason_     = translagatr::kProfileReasonNone;
     profile_detail_     = 0;
     applying_profile_   = id;
     applying_countdown_ = profile_delay_;
-    reply.result        = gatr2::kResultPending;
-    reply.profile_state = gatr2::kProfileApplying;
+    reply.result        = translagatr::kResultPending;
+    reply.profile_state = translagatr::kProfileApplying;
 }
 
 // A running profile keeps running; only the report names the refused id.
-void FakePi::rejectProfile(gatr2::BrainReply& reply, uint32_t id, uint8_t reason,
+void FakePi::rejectProfile(translagatr::BrainReply& reply, uint32_t id, uint8_t reason,
                            uint8_t detail) {
     rejected_.erase(std::remove_if(rejected_.begin(), rejected_.end(),
                                    [id](const Rejection& r) { return r.id == id; }),
@@ -576,34 +609,34 @@ void FakePi::rejectProfile(gatr2::BrainReply& reply, uint32_t id, uint8_t reason
     if (rejected_.size() > 4) {
         rejected_.erase(rejected_.begin());
     }
-    profile_state_        = gatr2::kProfileRejected;
+    profile_state_        = translagatr::kProfileRejected;
     profile_id_           = id;
     profile_reason_       = reason;
     profile_detail_       = detail;
-    reply.result          = gatr2::kResultProfileRejected;
+    reply.result          = translagatr::kResultProfileRejected;
     reply.profile_id      = id;
-    reply.profile_state   = gatr2::kProfileRejected;
+    reply.profile_state   = translagatr::kProfileRejected;
     reply.profile_reason  = reason;
     reply.profile_detail  = detail;
 }
 
-void FakePi::readDoc(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+void FakePi::readDoc(translagatr::BrainReply& reply, const translagatr::BrainRequest& request) {
     const std::vector<uint8_t>* doc = nullptr;
     uint32_t                    id  = 0;
-    if (request.doc_kind == gatr2::kDocFieldMap) {
+    if (request.doc_kind == translagatr::kDocFieldMap) {
         if (map_doc_.empty()) {
-            reply.result = gatr2::kResultUnavailable;
+            reply.result = translagatr::kResultUnavailable;
             return;
         }
         if (request.doc_id != 0 && request.doc_id != map_id_) {
-            reply.result = gatr2::kResultStale;
+            reply.result = translagatr::kResultStale;
             return;
         }
         doc = &map_doc_;
         id  = map_id_;
     } else {
         if (estimates_.empty()) {
-            reply.result = gatr2::kResultUnavailable;
+            reply.result = translagatr::kResultUnavailable;
             return;
         }
         for (const Estimate& e : estimates_) {
@@ -613,21 +646,21 @@ void FakePi::readDoc(gatr2::BrainReply& reply, const gatr2::BrainRequest& reques
             }
         }
         if (doc == nullptr) {
-            reply.result = gatr2::kResultStale;
+            reply.result = translagatr::kResultStale;
             return;
         }
     }
     if (request.doc_offset >= doc->size()) {
-        reply.result = gatr2::kResultInvalidArgument;
+        reply.result = translagatr::kResultInvalidArgument;
         return;
     }
     const std::size_t left = doc->size() - request.doc_offset;
     const std::size_t n =
-        std::min<std::size_t>({left, request.max_len, std::size_t{gatr2::kDocChunkMax}});
+        std::min<std::size_t>({left, request.max_len, std::size_t{translagatr::kDocChunkMax}});
     reply.doc_kind      = request.doc_kind;
     reply.doc_id        = id;
     reply.doc_total_len = static_cast<uint16_t>(doc->size());
-    reply.doc_crc32     = gatr2::crc32(doc->data(), static_cast<uint32_t>(doc->size()));
+    reply.doc_crc32     = translagatr::crc32(doc->data(), static_cast<uint32_t>(doc->size()));
     reply.doc_offset    = request.doc_offset;
     reply.data_len      = static_cast<uint8_t>(n);
     std::memcpy(reply.data, doc->data() + request.doc_offset, n);
@@ -636,17 +669,17 @@ void FakePi::readDoc(gatr2::BrainReply& reply, const gatr2::BrainRequest& reques
     }
 }
 
-void FakePi::control(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+void FakePi::control(translagatr::BrainReply& reply, const translagatr::BrainRequest& request) {
     reply.action  = request.action;
-    last_control_ = Record{true, request, gatr2::kResultOk, 0, 0, gatr2::kControlDetailNone};
+    last_control_ = Record{true, request, translagatr::kResultOk, 0, 0, translagatr::kControlDetailNone};
     if (profile_mode_ && applied_profile_ == 0) {
-        last_control_.result = gatr2::kResultNotReady;
+        last_control_.result = translagatr::kResultNotReady;
     } else if (moving_) {
-        last_control_.result = gatr2::kResultNotStationary;
+        last_control_.result = translagatr::kResultNotStationary;
     } else {
         ++controls_executed_;
         if (control_delay_ > 0) {
-            last_control_.result = gatr2::kResultPending;
+            last_control_.result = translagatr::kResultPending;
             control_left_        = control_delay_;
         } else {
             finishControl();
@@ -661,30 +694,30 @@ void FakePi::control(gatr2::BrainReply& reply, const gatr2::BrainRequest& reques
 // Completes the recorded control; its duplicates see the outcome.
 void FakePi::finishControl() {
     control_left_ = 0;
-    if (control_failure_ != gatr2::kControlDetailNone) {
-        last_control_.result = gatr2::kResultFailed;
+    if (control_failure_ != translagatr::kControlDetailNone) {
+        last_control_.result = translagatr::kResultFailed;
         last_control_.detail = control_failure_;
         return;
     }
     const uint8_t action = last_control_.request.action;
-    if (action == gatr2::kControlReinitialize) {
+    if (action == translagatr::kControlReinitialize) {
         loseContinuity();
     }
-    if (action != gatr2::kControlRestartAcquisition) {
-        robot_.calibration = gatr2::kCalibrationRunning;
+    if (action != translagatr::kControlRestartAcquisition) {
+        robot_.calibration = translagatr::kCalibrationRunning;
         calibration_left_  = calibration_requests_;
     }
-    last_control_.result      = gatr2::kResultOk;
+    last_control_.result      = translagatr::kResultOk;
     last_control_.calibration = robot_.calibration;
 }
 
-void FakePi::readWheels(gatr2::BrainReply& reply) const {
+void FakePi::readWheels(translagatr::BrainReply& reply) const {
     if (profile_mode_ && applied_profile_ == 0) {
-        reply.result = gatr2::kResultNotReady;
+        reply.result = translagatr::kResultNotReady;
         return;
     }
     reply.wheel_count = static_cast<uint8_t>(
-        std::min<std::size_t>(wheels_.size(), gatr2::kWheelReadingsMax));
+        std::min<std::size_t>(wheels_.size(), translagatr::kWheelReadingsMax));
     for (uint8_t i = 0; i < reply.wheel_count; ++i) {
         reply.wheels[i] = wheels_[i];
     }
@@ -707,10 +740,10 @@ void FakePi::tick() {
     if (control_left_ > 0 && --control_left_ == 0) {
         finishControl();
     }
-    if (robot_.calibration == gatr2::kCalibrationRunning && calibration_left_ > 0) {
+    if (robot_.calibration == translagatr::kCalibrationRunning && calibration_left_ > 0) {
         calibration_left_ -= 1;
         if (calibration_left_ == 0) {
-            robot_.calibration = gatr2::kCalibrationDone;
+            robot_.calibration = translagatr::kCalibrationDone;
         }
     }
 }
@@ -719,9 +752,9 @@ void FakePi::applyPlacement() {
     robot_.x_mm         = placement_.x_mm;
     robot_.y_mm         = placement_.y_mm;
     robot_.heading_cdeg = placement_.heading;
-    robot_.robot_flags |= gatr2::kRobotPoseValid | gatr2::kRobotLocalized | gatr2::kRobotAgeKnown |
-                          gatr2::kRobotAnchorCommand;
-    robot_.robot_flags &= static_cast<uint8_t>(~gatr2::kRobotAnchorConfigured);
+    robot_.robot_flags |= translagatr::kRobotPoseValid | translagatr::kRobotLocalized | translagatr::kRobotAgeKnown |
+                          translagatr::kRobotAnchorCommand;
+    robot_.robot_flags &= static_cast<uint8_t>(~translagatr::kRobotAnchorConfigured);
     robot_.anchor_revision += 1;
     applied_session_   = placement_.session;
     applied_sequence_  = placement_.sequence;
@@ -735,9 +768,9 @@ void FakePi::applyProfile() {
     const bool changed = applying_profile_ != applied_profile_;
     applied_profile_   = applying_profile_;
     applying_profile_  = 0;
-    profile_state_     = gatr2::kProfileApplied;
+    profile_state_     = translagatr::kProfileApplied;
     profile_id_        = applied_profile_;
-    profile_reason_    = gatr2::kProfileReasonNone;
+    profile_reason_    = translagatr::kProfileReasonNone;
     profile_detail_    = 0;
     ++profiles_applied_;
     if (changed) {
@@ -748,7 +781,7 @@ void FakePi::applyProfile() {
 // New odometry epoch, unplaced, placement requests withdrawn.
 void FakePi::loseContinuity() {
     robot_.odometry_epoch += 1;
-    robot_.robot_flags = gatr2::kRobotPoseValid | gatr2::kRobotAgeKnown;
+    robot_.robot_flags = translagatr::kRobotPoseValid | translagatr::kRobotAgeKnown;
     placement_         = Placement{};
 }
 

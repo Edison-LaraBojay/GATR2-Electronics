@@ -29,16 +29,16 @@ std::vector<std::vector<uint8_t>> sent(const FakeBus& bus, uint8_t op) {
     return frames;
 }
 
-gatr2::BrainRequest decoded(const std::vector<uint8_t>& frame) {
-    gatr2::BrainRequest request;
+translagatr::BrainRequest decoded(const std::vector<uint8_t>& frame) {
+    translagatr::BrainRequest request;
     EXPECT_TRUE(
-        gatr2::decodeBrainRequest(frame.data(), static_cast<uint16_t>(frame.size()), request));
+        translagatr::decodeBrainRequest(frame.data(), static_cast<uint16_t>(frame.size()), request));
     return request;
 }
 
-std::vector<uint8_t> encode(const gatr2::BrainReply& reply) {
-    std::vector<uint8_t> frame(gatr2::kMaxFrameLen);
-    frame.resize(gatr2::encodeBrainReply(reply, frame.data(), static_cast<uint16_t>(frame.size())));
+std::vector<uint8_t> encode(const translagatr::BrainReply& reply) {
+    std::vector<uint8_t> frame(translagatr::kMaxFrameLen);
+    frame.resize(translagatr::encodeBrainReply(reply, frame.data(), static_cast<uint16_t>(frame.size())));
     return frame;
 }
 
@@ -112,7 +112,7 @@ void openScripted(Client& client, ScriptedPort& port, FakePi& pi, Seconds& now) 
     client.poll(now);
     now += 0.006;
     client.poll(now);
-    ASSERT_EQ(decoded(port.writes.back()).op, gatr2::kOpGetState);
+    ASSERT_EQ(decoded(port.writes.back()).op, translagatr::kOpGetState);
     port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
     now += 0.001;
     client.poll(now);
@@ -140,10 +140,10 @@ TEST(Client, ReadyOnlyAfterCorrelatedState) {
     EXPECT_FALSE(client.connected(rig.now()));
 
     // A forged state reply for another session is dropped.
-    runUntilSent(rig, gatr2::kOpGetState);
-    const gatr2::BrainRequest request = rig.bus.brainRequests().back();
-    gatr2::BrainReply         forged;
-    forged.op          = gatr2::kOpGetState;
+    runUntilSent(rig, translagatr::kOpGetState);
+    const translagatr::BrainRequest request = rig.bus.brainRequests().back();
+    translagatr::BrainReply         forged;
+    forged.op          = translagatr::kOpGetState;
     forged.session     = request.session + 1;
     forged.request_id  = request.request_id;
     forged.pi_instance = rig.pi.piInstance();
@@ -168,7 +168,7 @@ TEST(Client, PollsStateWithFreshIdsAndNoImuBlockByDefault) {
     LinkRig rig;
     openSession(rig);
     rig.run(0.5);
-    const auto polls = sent(rig.bus, gatr2::kOpGetState);
+    const auto polls = sent(rig.bus, translagatr::kOpGetState);
     ASSERT_GE(polls.size(), 15u);
     for (std::size_t i = 1; i < polls.size(); ++i) {
         EXPECT_NE(decoded(polls[i]).request_id, decoded(polls[i - 1]).request_id);
@@ -193,17 +193,17 @@ TEST(ClientBenchImu, EveryStatePollCarriesTheSampleAsGiven) {
     LinkRig rig(config);
     openSession(rig);
     rig.run(0.08);
-    const auto polls = sent(rig.bus, gatr2::kOpGetState);
+    const auto polls = sent(rig.bus, translagatr::kOpGetState);
     ASSERT_GE(polls.size(), 2u);
     for (const auto& bytes : polls) {
         const auto request = decoded(bytes);
-        EXPECT_EQ(request.imu_flags, gatr2::kBenchImuValid);
+        EXPECT_EQ(request.imu_flags, translagatr::kBenchImuValid);
         EXPECT_EQ(request.imu_stamp_ms, 1234u);
         EXPECT_EQ(request.imu_rotation_mdeg, -450123);
     }
     EXPECT_EQ(rig.pi.imuSamples(), static_cast<int>(polls.size()));
     sample = {false, 1234, -450123};
-    runUntilSent(rig, gatr2::kOpGetState);
+    runUntilSent(rig, translagatr::kOpGetState);
     EXPECT_EQ(rig.bus.brainRequests().back().imu_flags, 0);
     EXPECT_EQ(rig.bus.brainRequests().back().imu_stamp_ms, 1234u);
 }
@@ -221,9 +221,9 @@ TEST(ClientBenchImu, PendingPlacementInterleavesStatePollBeforeRetry) {
     bool placement_seen      = false;
     bool imu_since_placement = false;
     for (const auto& request : rig.bus.brainRequests()) {
-        if (request.op == gatr2::kOpGetState) {
+        if (request.op == translagatr::kOpGetState) {
             imu_since_placement = true;
-        } else if (request.op == gatr2::kOpSetPose) {
+        } else if (request.op == translagatr::kOpSetPose) {
             if (placement_seen) {
                 EXPECT_TRUE(imu_since_placement);
             }
@@ -231,7 +231,7 @@ TEST(ClientBenchImu, PendingPlacementInterleavesStatePollBeforeRetry) {
             imu_since_placement = false;
         }
     }
-    const auto placements = sent(rig.bus, gatr2::kOpSetPose);
+    const auto placements = sent(rig.bus, translagatr::kOpSetPose);
     ASSERT_GE(placements.size(), 2u);
     for (const auto& bytes : placements) {
         EXPECT_EQ(bytes, placements.front());
@@ -247,20 +247,20 @@ TEST(ClientBenchImu, TimedOutPlacementIsResentBeforeAnyStatePoll) {
     LinkRig rig(config);
     openSession(rig);
     const auto ticket = rig.client().submitPlacement(610, -457, -9000);
-    runUntilSent(rig, gatr2::kOpSetPose);
+    runUntilSent(rig, translagatr::kOpSetPose);
     rig.bus.fault(BusFault::kDropRequest);
     ASSERT_TRUE(rig.runUntil(
         [&] { return rig.client().placementResult(ticket) == PlacementResult::kApplied; }, kLimit));
     const auto requests = rig.bus.brainRequests();
     std::size_t first   = 0;
-    while (requests[first].op != gatr2::kOpSetPose) {
+    while (requests[first].op != translagatr::kOpSetPose) {
         ++first;
     }
     ASSERT_LT(first + 1, requests.size());
-    EXPECT_EQ(requests[first + 1].op, gatr2::kOpSetPose);
+    EXPECT_EQ(requests[first + 1].op, translagatr::kOpSetPose);
     EXPECT_EQ(requests[first + 1].request_id, requests[first].request_id);
     EXPECT_EQ(rig.pi.placementsApplied(), 1);
-    EXPECT_EQ(rig.client().placementStatus(ticket).result, gatr2::kResultOk);
+    EXPECT_EQ(rig.client().placementStatus(ticket).result, translagatr::kResultOk);
 }
 
 TEST(ClientBenchImu, DroppedPlacementReplyResendsIdenticalPlacementNext) {
@@ -269,11 +269,11 @@ TEST(ClientBenchImu, DroppedPlacementReplyResendsIdenticalPlacementNext) {
     LinkRig rig(config);
     openSession(rig);
     const auto ticket = rig.client().submitPlacement(610, -457, -9000);
-    runUntilSent(rig, gatr2::kOpSetPose);
+    runUntilSent(rig, translagatr::kOpSetPose);
     rig.bus.fault(BusFault::kDropReply);
     ASSERT_TRUE(rig.runUntil(
         [&] { return rig.client().placementResult(ticket) == PlacementResult::kApplied; }, kLimit));
-    const auto frames = sent(rig.bus, gatr2::kOpSetPose);
+    const auto frames = sent(rig.bus, translagatr::kOpSetPose);
     ASSERT_EQ(frames.size(), 2u);
     EXPECT_EQ(frames[0], frames[1]);
     EXPECT_EQ(rig.pi.placementsApplied(), 1);
@@ -286,7 +286,7 @@ TEST(ClientBenchImu, DroppedPlacementReplyResendsIdenticalPlacementNext) {
 TEST(Client, FragmentedReplyAccepted) {
     LinkRig rig;
     openSession(rig);
-    runUntilSent(rig, gatr2::kOpGetState);
+    runUntilSent(rig, translagatr::kOpGetState);
     const uint32_t replies = rig.client().stats().replies;
     rig.bus.fault(BusFault::kFragment, 0.004);
     rig.run(0.05);
@@ -297,7 +297,7 @@ TEST(Client, FragmentedReplyAccepted) {
 TEST(Client, TruncatedThenValidReplyAccepted) {
     LinkRig rig;
     openSession(rig);
-    runUntilSent(rig, gatr2::kOpGetState);
+    runUntilSent(rig, translagatr::kOpGetState);
     const uint32_t replies = rig.client().stats().replies;
     rig.bus.fault(BusFault::kTruncate, 0.002);
     rig.run(0.05);
@@ -308,11 +308,11 @@ TEST(Client, TruncatedThenValidReplyAccepted) {
 TEST(Client, CorruptReplyTimesOutAndNextPollHasNewId) {
     LinkRig rig;
     openSession(rig);
-    runUntilSent(rig, gatr2::kOpGetState);
+    runUntilSent(rig, translagatr::kOpGetState);
     const uint16_t lost = rig.bus.brainRequests().back().request_id;
     rig.bus.fault(BusFault::kCorrupt);
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().stats().timeouts == 1; }, kLimit));
-    runUntilSent(rig, gatr2::kOpGetState);
+    runUntilSent(rig, translagatr::kOpGetState);
     EXPECT_NE(rig.bus.brainRequests().back().request_id, lost);
     EXPECT_EQ(rig.client().stats().resends, 0u);
 }
@@ -320,11 +320,11 @@ TEST(Client, CorruptReplyTimesOutAndNextPollHasNewId) {
 TEST(Client, DroppedStateReplyNextPollHasNewId) {
     LinkRig rig;
     openSession(rig);
-    runUntilSent(rig, gatr2::kOpGetState);
+    runUntilSent(rig, translagatr::kOpGetState);
     const uint16_t lost = rig.bus.brainRequests().back().request_id;
     rig.bus.fault(BusFault::kDropReply);
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().stats().timeouts == 1; }, kLimit));
-    runUntilSent(rig, gatr2::kOpGetState);
+    runUntilSent(rig, translagatr::kOpGetState);
     EXPECT_NE(rig.bus.brainRequests().back().request_id, lost);
     EXPECT_EQ(rig.client().stats().resends, 0u);
     EXPECT_TRUE(rig.client().ready());
@@ -334,25 +334,25 @@ TEST(Client, DuplicateReplyDoesNotApplyTwice) {
     LinkRig rig;
     openSession(rig);
     const PlacementTicket ticket = rig.client().submitPlacement(610, -457, -9000);
-    runUntilSent(rig, gatr2::kOpSetPose);
+    runUntilSent(rig, translagatr::kOpSetPose);
     rig.bus.fault(BusFault::kDuplicate);
     ASSERT_TRUE(rig.runUntil(
         [&] { return rig.client().placementResult(ticket) == PlacementResult::kApplied; }, kLimit));
     rig.run(0.1);
     EXPECT_GE(rig.client().stats().uncorrelated, 1u);
     EXPECT_EQ(rig.pi.placementsApplied(), 1);
-    EXPECT_EQ(sent(rig.bus, gatr2::kOpSetPose).size(), 1u);
+    EXPECT_EQ(sent(rig.bus, translagatr::kOpSetPose).size(), 1u);
 }
 
 TEST(Client, DroppedPlacementReplyResendsSameBytes) {
     LinkRig rig;
     openSession(rig);
     const PlacementTicket ticket = rig.client().submitPlacement(610, -457, -9000);
-    runUntilSent(rig, gatr2::kOpSetPose);
+    runUntilSent(rig, translagatr::kOpSetPose);
     rig.bus.fault(BusFault::kDropReply);
     ASSERT_TRUE(rig.runUntil(
         [&] { return rig.client().placementResult(ticket) == PlacementResult::kApplied; }, kLimit));
-    const auto frames = sent(rig.bus, gatr2::kOpSetPose);
+    const auto frames = sent(rig.bus, translagatr::kOpSetPose);
     ASSERT_EQ(frames.size(), 2u);
     EXPECT_EQ(frames[0], frames[1]);
     EXPECT_EQ(rig.pi.placementsApplied(), 1);
@@ -363,11 +363,11 @@ TEST(Client, DroppedPlacementRequestResendsSameBytes) {
     LinkRig rig;
     openSession(rig);
     const PlacementTicket ticket = rig.client().submitPlacement(1, 2, 3);
-    runUntilSent(rig, gatr2::kOpSetPose);
+    runUntilSent(rig, translagatr::kOpSetPose);
     rig.bus.fault(BusFault::kDropRequest);
     ASSERT_TRUE(rig.runUntil(
         [&] { return rig.client().placementResult(ticket) == PlacementResult::kApplied; }, kLimit));
-    const auto frames = sent(rig.bus, gatr2::kOpSetPose);
+    const auto frames = sent(rig.bus, translagatr::kOpSetPose);
     ASSERT_EQ(frames.size(), 2u);
     EXPECT_EQ(frames[0], frames[1]);
     EXPECT_EQ(rig.pi.placementsApplied(), 1);
@@ -380,11 +380,11 @@ TEST(Client, UncorrelatedRepliesChangeNothing) {
     openSession(rig);
     Client&        client  = rig.client();
     const uint32_t session = client.session();
-    runUntilSent(rig, gatr2::kOpGetState);
-    const gatr2::BrainRequest request = rig.bus.brainRequests().back();
+    runUntilSent(rig, translagatr::kOpGetState);
+    const translagatr::BrainRequest request = rig.bus.brainRequests().back();
 
-    gatr2::BrainReply stale;
-    stale.op                   = gatr2::kOpGetState;
+    translagatr::BrainReply stale;
+    stale.op                   = translagatr::kOpGetState;
     stale.session              = session;
     stale.request_id           = static_cast<uint16_t>(request.request_id - 1); // old id
     stale.pi_instance          = rig.pi.piInstance() + 1; // would mean a restart
@@ -396,7 +396,7 @@ TEST(Client, UncorrelatedRepliesChangeNothing) {
     const std::vector<uint8_t> other = encode(stale);
     bytes.insert(bytes.end(), other.begin(), other.end());
 
-    stale.op                            = gatr2::kOpSetPose; // wrong op
+    stale.op                            = translagatr::kOpSetPose; // wrong op
     stale.session                       = session;
     const std::vector<uint8_t> wrong_op = encode(stale);
     bytes.insert(bytes.end(), wrong_op.begin(), wrong_op.end());
@@ -417,8 +417,8 @@ TEST(Client, BytesBeforeSendAreDrained) {
 
     // The receive read finds nothing; a perfect HELLO reply arrives before
     // the send and is drained with the rest.
-    gatr2::BrainReply early;
-    early.op                         = gatr2::kOpHello;
+    translagatr::BrainReply early;
+    early.op                         = translagatr::kOpHello;
     early.session                    = 0x5E55;
     early.request_id                 = 1;
     early.pi_instance                = pi.piInstance();
@@ -472,11 +472,11 @@ TEST(Client, UnknownSessionOpensNewSession) {
     const uint32_t old    = client.session();
 
     // Another HELLO reaches the Pi; our session is no longer its session.
-    gatr2::BrainRequest hello;
-    hello.op         = gatr2::kOpHello;
+    translagatr::BrainRequest hello;
+    hello.op         = translagatr::kOpHello;
     hello.request_id = 7;
     hello.nonce      = 0xABCDEF;
-    ASSERT_EQ(rig.pi.answer(hello).result, gatr2::kResultOk);
+    ASSERT_EQ(rig.pi.answer(hello).result, translagatr::kResultOk);
 
     ASSERT_TRUE(rig.runUntil([&] { return client.stats().session_losses == 1; }, kLimit));
     EXPECT_EQ(client.stats().pi_restarts, 0u);
@@ -493,19 +493,19 @@ TEST(Client, InFlightPlacementLostWithSessionIsNeverResent) {
     Client&               client = rig.client();
     const PlacementTicket ticket = client.submitPlacement(500, 500, 0);
     ASSERT_TRUE(rig.runUntil(
-        [&] { return client.placementStatus(ticket).result == gatr2::kResultPending; }, kLimit));
+        [&] { return client.placementStatus(ticket).result == translagatr::kResultPending; }, kLimit));
 
     rig.pi.restart(0x77);
     ASSERT_TRUE(rig.runUntil(
         [&] { return client.placementResult(ticket) == PlacementResult::kSessionLost; }, kLimit));
     EXPECT_FALSE(client.placementPending());
-    const std::size_t before = sent(rig.bus, gatr2::kOpSetPose).size();
+    const std::size_t before = sent(rig.bus, translagatr::kOpSetPose).size();
 
     openSession(rig);
     rig.run(0.5);
-    EXPECT_EQ(sent(rig.bus, gatr2::kOpSetPose).size(), before);
-    for (const gatr2::BrainRequest& r : rig.pi.requests()) {
-        EXPECT_FALSE(r.op == gatr2::kOpSetPose && r.session == rig.pi.session());
+    EXPECT_EQ(sent(rig.bus, translagatr::kOpSetPose).size(), before);
+    for (const translagatr::BrainRequest& r : rig.pi.requests()) {
+        EXPECT_FALSE(r.op == translagatr::kOpSetPose && r.session == rig.pi.session());
     }
     EXPECT_EQ(rig.pi.placementsApplied(), 0);
     EXPECT_EQ(client.placementResult(ticket), PlacementResult::kSessionLost);
@@ -516,7 +516,7 @@ TEST(Client, StaleHelloGetsNewNonce) {
     rig.nonces = {0xAAAA0001};
     openSession(rig);
     const uint32_t    old    = rig.client().session();
-    const std::size_t before = sent(rig.bus, gatr2::kOpHello).size();
+    const std::size_t before = sent(rig.bus, translagatr::kOpHello).size();
 
     // The rebooted Brain draws the same nonce first.
     rig.rebootBrain();
@@ -525,7 +525,7 @@ TEST(Client, StaleHelloGetsNewNonce) {
     EXPECT_EQ(rig.client().stats().stale_hellos, 1u);
     EXPECT_NE(rig.client().session(), old);
 
-    const auto hellos = sent(rig.bus, gatr2::kOpHello);
+    const auto hellos = sent(rig.bus, translagatr::kOpHello);
     ASSERT_EQ(hellos.size(), before + 2);
     EXPECT_EQ(decoded(hellos[before]).nonce, 0xAAAA0001u);
     EXPECT_EQ(decoded(hellos[before + 1]).nonce, 0xAAAA0002u);
@@ -539,7 +539,7 @@ TEST(Client, RepeatedNonceIsReplaced) {
     rig.rebootBrain();
     rig.nonces = {0x42, 0x42, 0x42};
     openSession(rig);
-    const auto hellos = sent(rig.bus, gatr2::kOpHello);
+    const auto hellos = sent(rig.bus, translagatr::kOpHello);
     ASSERT_EQ(hellos.size(), 3u);
     EXPECT_EQ(decoded(hellos[1]).nonce, 0x42u);
     EXPECT_NE(decoded(hellos[2]).nonce, 0x42u);
@@ -554,15 +554,15 @@ TEST(Client, BrainRebootIgnoresOldSessionReplies) {
     openSession(rig);
     const uint32_t session_a = rig.client().session();
 
-    gatr2::BrainReply old_hello;
-    old_hello.op          = gatr2::kOpHello;
+    translagatr::BrainReply old_hello;
+    old_hello.op          = translagatr::kOpHello;
     old_hello.session     = session_a;
     old_hello.request_id  = 1;
     old_hello.pi_instance = rig.pi.piInstance();
     old_hello.nonce       = 0xA0A0A0A0;
 
-    gatr2::BrainReply old_state;
-    old_state.op          = gatr2::kOpGetState;
+    translagatr::BrainReply old_state;
+    old_state.op          = translagatr::kOpGetState;
     old_state.session     = session_a;
     old_state.request_id  = 2;
     old_state.pi_instance = rig.pi.piInstance();
@@ -571,7 +571,7 @@ TEST(Client, BrainRebootIgnoresOldSessionReplies) {
     // Session B: request ids restart at 1; A's replies arrive late.
     rig.rebootBrain();
     Client& client = rig.client();
-    runUntilSent(rig, gatr2::kOpHello);
+    runUntilSent(rig, translagatr::kOpHello);
     EXPECT_EQ(rig.bus.brainRequests().back().request_id, 1);
     rig.bus.sendToBrain(encode(old_hello), rig.now());
     rig.step();
@@ -580,7 +580,7 @@ TEST(Client, BrainRebootIgnoresOldSessionReplies) {
 
     ASSERT_TRUE(rig.runUntil([&] { return client.session() != 0; }, kLimit));
     EXPECT_NE(client.session(), session_a);
-    runUntilSent(rig, gatr2::kOpGetState);
+    runUntilSent(rig, translagatr::kOpGetState);
     EXPECT_EQ(rig.bus.brainRequests().back().request_id, 2);
     rig.bus.sendToBrain(encode(old_state), rig.now());
     openSession(rig);
@@ -588,12 +588,12 @@ TEST(Client, BrainRebootIgnoresOldSessionReplies) {
     EXPECT_EQ(client.stats().uncorrelated, 2u);
 
     // A delayed session A request changes nothing on the Pi.
-    gatr2::BrainRequest old_pose;
-    old_pose.op         = gatr2::kOpSetPose;
+    translagatr::BrainRequest old_pose;
+    old_pose.op         = translagatr::kOpSetPose;
     old_pose.session    = session_a;
     old_pose.request_id = 9;
     old_pose.x_mm       = 77;
-    EXPECT_EQ(rig.pi.answer(old_pose).result, gatr2::kResultUnknownSession);
+    EXPECT_EQ(rig.pi.answer(old_pose).result, translagatr::kResultUnknownSession);
     EXPECT_EQ(rig.pi.placementsApplied(), 0);
 }
 
@@ -614,7 +614,7 @@ TEST(Client, PlacementAppliedOnlyAfterStateShowsAnchor) {
         [&] { return client.placementStatus(ticket).anchor_revision == anchor + 1; }, kLimit));
 
     // Ok recorded; the cached state still predates the placement.
-    EXPECT_EQ(client.placementStatus(ticket).result, gatr2::kResultOk);
+    EXPECT_EQ(client.placementStatus(ticket).result, translagatr::kResultOk);
     EXPECT_EQ(client.placementResult(ticket), PlacementResult::kPending);
     EXPECT_TRUE(client.placementPending());
     EXPECT_EQ(client.state().state.anchor_revision, anchor);
@@ -625,7 +625,7 @@ TEST(Client, PlacementAppliedOnlyAfterStateShowsAnchor) {
     EXPECT_EQ(client.state().state.anchor_revision, anchor + 1);
     EXPECT_EQ(client.state().state.x_mm, 100);
     EXPECT_EQ(client.state().state.heading_cdeg, 9000);
-    EXPECT_NE(client.state().state.robot_flags & gatr2::kRobotAnchorCommand, 0);
+    EXPECT_NE(client.state().state.robot_flags & translagatr::kRobotAnchorCommand, 0);
 }
 
 TEST(Client, PendingPlacementResendsSameBytesUntilApplied) {
@@ -635,7 +635,7 @@ TEST(Client, PendingPlacementResendsSameBytesUntilApplied) {
     const PlacementTicket ticket = rig.client().submitPlacement(-300, 50, -17999);
     ASSERT_TRUE(rig.runUntil(
         [&] { return rig.client().placementResult(ticket) == PlacementResult::kApplied; }, kLimit));
-    const auto frames = sent(rig.bus, gatr2::kOpSetPose);
+    const auto frames = sent(rig.bus, translagatr::kOpSetPose);
     ASSERT_GE(frames.size(), 2u);
     for (const auto& frame : frames) {
         EXPECT_EQ(frame, frames[0]);
@@ -653,13 +653,13 @@ TEST(Client, PlacementNeverAppliedTimesOut) {
     const PlacementTicket ticket = client.submitPlacement(1, 1, 1);
     ASSERT_TRUE(rig.runUntil([&] { return !client.placementPending(); }, kLimit));
     EXPECT_EQ(client.placementResult(ticket), PlacementResult::kTimedOut);
-    EXPECT_EQ(client.placementStatus(ticket).result, gatr2::kResultPending);
+    EXPECT_EQ(client.placementStatus(ticket).result, translagatr::kResultPending);
     EXPECT_LE(rig.now() - start, client.config().placement_deadline + 0.1);
 
-    const std::size_t count = sent(rig.bus, gatr2::kOpSetPose).size();
+    const std::size_t count = sent(rig.bus, translagatr::kOpSetPose).size();
     EXPECT_LE(count, static_cast<std::size_t>(client.config().placement_attempts));
     rig.run(0.5);
-    EXPECT_EQ(sent(rig.bus, gatr2::kOpSetPose).size(), count);
+    EXPECT_EQ(sent(rig.bus, translagatr::kOpSetPose).size(), count);
     EXPECT_TRUE(client.connected(rig.now()));
 }
 
@@ -670,7 +670,7 @@ TEST(Client, SilentPiPlacementTimesOutWithBackToBackResends) {
     const PlacementTicket ticket = rig.client().submitPlacement(1, 1, 1);
     ASSERT_TRUE(rig.runUntil([&] { return !rig.client().placementPending(); }, kLimit));
     EXPECT_EQ(rig.client().placementResult(ticket), PlacementResult::kTimedOut);
-    const auto frames = sent(rig.bus, gatr2::kOpSetPose);
+    const auto frames = sent(rig.bus, translagatr::kOpSetPose);
     ASSERT_GE(frames.size(), 2u);
     for (const auto& frame : frames) {
         EXPECT_EQ(frame, frames[0]);
@@ -680,7 +680,7 @@ TEST(Client, SilentPiPlacementTimesOutWithBackToBackResends) {
     bool       inside   = false;
     std::size_t seen    = 0;
     for (const auto& r : requests) {
-        if (r.op == gatr2::kOpSetPose) {
+        if (r.op == translagatr::kOpSetPose) {
             inside = ++seen < frames.size();
         } else {
             EXPECT_FALSE(inside) << "op " << int(r.op);
@@ -726,7 +726,7 @@ TEST(Client, PlacementAckWithoutStateExpiresAndAllowsNewPlacement) {
     rig.bus.setPiPresent(false);
     ASSERT_TRUE(rig.runUntil([&] { return !client.placementPending(); }, 0.1));
     EXPECT_EQ(client.placementResult(first), PlacementResult::kTimedOut);
-    EXPECT_EQ(client.placementStatus(first).result, gatr2::kResultOk);
+    EXPECT_EQ(client.placementStatus(first).result, translagatr::kResultOk);
 
     // A fresh ticket gets its own deadline. One successful send is allowed
     // to wait for its confirming state even when the send limit is one.
@@ -749,7 +749,7 @@ TEST(Client, LateConfirmingStateDoesNotReviveExpiredPlacement) {
     const PlacementTicket ticket = client.submitPlacement(100, 200, 300);
     ASSERT_TRUE(rig.runUntil(
         [&] { return client.placementStatus(ticket).anchor_revision != 0; }, kLimit));
-    runUntilSent(rig, gatr2::kOpGetState);
+    runUntilSent(rig, translagatr::kOpGetState);
 
     // Receive the otherwise valid confirmation only after its deadline.
     rig.step(0.1);
@@ -772,7 +772,7 @@ TEST(Client, LatePlacementAckCannotAcknowledgeQueuedReplacement) {
     const PlacementTicket first = client.submitPlacement(100, 200, 300);
     now += 0.006;
     client.poll(now);
-    ASSERT_EQ(decoded(port.writes.back()).op, gatr2::kOpSetPose);
+    ASSERT_EQ(decoded(port.writes.back()).op, translagatr::kOpSetPose);
     const auto old_reply = encode(pi.answer(decoded(port.writes.back())));
     now += 0.021;
     client.poll(now);
@@ -799,7 +799,7 @@ TEST(Client, LatePlacementAckCannotAcknowledgeQueuedReplacement) {
     client.poll(now);
     now += 0.006;
     client.poll(now);
-    ASSERT_EQ(decoded(port.writes.back()).op, gatr2::kOpGetState);
+    ASSERT_EQ(decoded(port.writes.back()).op, translagatr::kOpGetState);
     port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
     now += 0.001;
     client.poll(now);
@@ -840,7 +840,7 @@ TEST(Client, ExpiredRequestTimeoutDoesNotExpireQueuedReplacement) {
     port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
     client.poll(sent_at + 0.068);
     client.poll(sent_at + 0.074);
-    ASSERT_EQ(decoded(port.writes.back()).op, gatr2::kOpGetState);
+    ASSERT_EQ(decoded(port.writes.back()).op, translagatr::kOpGetState);
     port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
     client.poll(sent_at + 0.075);
     EXPECT_EQ(client.placementResult(second), PlacementResult::kApplied);
@@ -859,16 +859,16 @@ TEST(ClientControl, RecalibrateAndReinitializeTickets) {
     ASSERT_NE(recal, 0u);
     EXPECT_EQ(client.reinitialize(), 0u); // one at a time
     EXPECT_EQ(client.controlStatus(recal).state, ControlResult::kPending);
-    EXPECT_EQ(client.controlStatus(recal).action, gatr2::kControlRecalibrate);
+    EXPECT_EQ(client.controlStatus(recal).action, translagatr::kControlRecalibrate);
     ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
     EXPECT_EQ(client.controlStatus(recal).state, ControlResult::kOk);
-    EXPECT_EQ(client.controlStatus(recal).calibration, gatr2::kCalibrationRunning);
+    EXPECT_EQ(client.controlStatus(recal).calibration, translagatr::kCalibrationRunning);
 
     rig.pi.setMoving(true);
     const ControlTicket moving = client.reinitialize();
     ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
     EXPECT_EQ(client.controlStatus(moving).state, ControlResult::kNotStationary);
-    EXPECT_EQ(client.controlStatus(moving).result, gatr2::kResultNotStationary);
+    EXPECT_EQ(client.controlStatus(moving).result, translagatr::kResultNotStationary);
     EXPECT_EQ(client.controlStatus(recal).state, ControlResult::kNone); // not the latest
     EXPECT_EQ(rig.pi.controlsExecuted(), 1);
 }
@@ -878,17 +878,17 @@ TEST(ClientControl, DroppedRequestIsResentFirstWithSameBytesAndExecutesOnce) {
     openSession(rig);
     Client&             client = rig.client();
     const ControlTicket ticket = client.reinitialize();
-    runUntilSent(rig, gatr2::kOpControl);
+    runUntilSent(rig, translagatr::kOpControl);
     rig.bus.fault(BusFault::kDropRequest);
     ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
     EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kOk);
-    const auto frames = sent(rig.bus, gatr2::kOpControl);
+    const auto frames = sent(rig.bus, translagatr::kOpControl);
     ASSERT_EQ(frames.size(), 2u);
     EXPECT_EQ(frames[0], frames[1]);
     const auto requests = rig.bus.brainRequests();
     for (std::size_t i = 0; i + 1 < requests.size(); ++i) {
-        if (requests[i].op == gatr2::kOpControl) {
-            EXPECT_EQ(requests[i + 1].op, gatr2::kOpControl);
+        if (requests[i].op == translagatr::kOpControl) {
+            EXPECT_EQ(requests[i + 1].op, translagatr::kOpControl);
             break;
         }
     }
@@ -896,7 +896,7 @@ TEST(ClientControl, DroppedRequestIsResentFirstWithSameBytesAndExecutesOnce) {
 
     // Dropped reply: the resend is a duplicate, answered from the record.
     const ControlTicket again = client.recalibrate();
-    runUntilSent(rig, gatr2::kOpControl);
+    runUntilSent(rig, translagatr::kOpControl);
     rig.bus.fault(BusFault::kDropReply);
     ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
     EXPECT_EQ(client.controlStatus(again).state, ControlResult::kOk);
@@ -910,7 +910,7 @@ TEST(ClientControl, TimedOutControlIsResentBeforeAWaitingPlacement) {
     openSession(rig);
     Client&             client = rig.client();
     const ControlTicket ticket = client.reinitialize();
-    runUntilSent(rig, gatr2::kOpControl);
+    runUntilSent(rig, translagatr::kOpControl);
     rig.bus.fault(BusFault::kDropRequest);
     const PlacementTicket placement = client.submitPlacement(10, 20, 30);
     ASSERT_NE(placement, 0u);
@@ -929,7 +929,7 @@ TEST(ClientControl, SilentPiTimesOutAndSessionLossSettles) {
     const ControlTicket ticket = client.recalibrate();
     ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
     EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kTimedOut);
-    EXPECT_LE(sent(rig.bus, gatr2::kOpControl).size(),
+    EXPECT_LE(sent(rig.bus, translagatr::kOpControl).size(),
               static_cast<std::size_t>(client.config().control_attempts));
 
     rig.bus.setPiPresent(true);
@@ -952,34 +952,34 @@ TEST(ClientControl, PendingIsAskedAgainWithTheSameBytesUntilItCompletes) {
     const ControlTicket ticket = client.reinitImu();
     ASSERT_NE(ticket, 0u);
     ASSERT_TRUE(rig.runUntil(
-        [&] { return client.controlStatus(ticket).result == gatr2::kResultPending; }, kLimit));
+        [&] { return client.controlStatus(ticket).result == translagatr::kResultPending; }, kLimit));
     EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kPending);
     EXPECT_EQ(client.reinitialize(), 0u);
     ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
     EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kOk);
-    EXPECT_EQ(client.controlStatus(ticket).action, gatr2::kControlReinitImu);
-    EXPECT_EQ(client.controlStatus(ticket).calibration, gatr2::kCalibrationRunning);
-    const auto frames = sent(rig.bus, gatr2::kOpControl);
+    EXPECT_EQ(client.controlStatus(ticket).action, translagatr::kControlReinitImu);
+    EXPECT_EQ(client.controlStatus(ticket).calibration, translagatr::kCalibrationRunning);
+    const auto frames = sent(rig.bus, translagatr::kOpControl);
     ASSERT_GE(frames.size(), 2u);
     for (const auto& frame : frames) {
         EXPECT_EQ(frame, frames.front());
     }
     EXPECT_EQ(rig.pi.controlsExecuted(), 1);
     // State polls keep flowing while the Pi works.
-    EXPECT_GT(sent(rig.bus, gatr2::kOpGetState).size(), frames.size());
+    EXPECT_GT(sent(rig.bus, translagatr::kOpGetState).size(), frames.size());
 }
 
 TEST(ClientControl, FailedCarriesItsDetail) {
     LinkRig rig;
     rig.pi.setControlPendingRequests(3);
-    rig.pi.setControlFailure(gatr2::kControlDetailImuAbsent);
+    rig.pi.setControlFailure(translagatr::kControlDetailImuAbsent);
     openSession(rig);
     Client&             client = rig.client();
     const ControlTicket ticket = client.reinitImu();
     ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
     EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kFailed);
-    EXPECT_EQ(client.controlStatus(ticket).result, gatr2::kResultFailed);
-    EXPECT_EQ(client.controlStatus(ticket).detail, gatr2::kControlDetailImuAbsent);
+    EXPECT_EQ(client.controlStatus(ticket).result, translagatr::kResultFailed);
+    EXPECT_EQ(client.controlStatus(ticket).detail, translagatr::kControlDetailImuAbsent);
 }
 
 TEST(ClientControl, PendingControlGivesUpAfterControlWait) {
@@ -993,7 +993,7 @@ TEST(ClientControl, PendingControlGivesUpAfterControlWait) {
     const ControlTicket ticket = client.restartAcquisition();
     ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
     EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kTimedOut);
-    EXPECT_EQ(client.controlStatus(ticket).result, gatr2::kResultPending);
+    EXPECT_EQ(client.controlStatus(ticket).result, translagatr::kResultPending);
     EXPECT_NEAR(rig.now() - start, 0.5, 0.05);
 }
 
@@ -1006,22 +1006,22 @@ TEST(ClientControl, AnsweredControlOutlastsLostReplies) {
     Client&             client = rig.client();
     const ControlTicket ticket = client.reinitImu();
     ASSERT_TRUE(rig.runUntil(
-        [&] { return client.controlStatus(ticket).result == gatr2::kResultPending; }, kLimit));
-    const std::size_t controls = sent(rig.bus, gatr2::kOpControl).size();
-    const std::size_t polls    = sent(rig.bus, gatr2::kOpGetState).size();
+        [&] { return client.controlStatus(ticket).result == translagatr::kResultPending; }, kLimit));
+    const std::size_t controls = sent(rig.bus, translagatr::kOpControl).size();
+    const std::size_t polls    = sent(rig.bus, translagatr::kOpGetState).size();
 
     rig.bus.setPiPresent(false);
     rig.run(2.0);
     EXPECT_TRUE(client.controlPending());
-    const std::size_t resends = sent(rig.bus, gatr2::kOpControl).size() - controls;
+    const std::size_t resends = sent(rig.bus, translagatr::kOpControl).size() - controls;
     EXPECT_GT(resends, static_cast<std::size_t>(client.config().control_attempts));
-    EXPECT_GT(sent(rig.bus, gatr2::kOpGetState).size() - polls, resends);
+    EXPECT_GT(sent(rig.bus, translagatr::kOpGetState).size() - polls, resends);
 
     rig.bus.setPiPresent(true);
     ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
     EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kOk);
     EXPECT_EQ(rig.pi.controlsExecuted(), 1);
-    const auto frames = sent(rig.bus, gatr2::kOpControl);
+    const auto frames = sent(rig.bus, translagatr::kOpControl);
     for (const auto& frame : frames) {
         EXPECT_EQ(frame, frames.front());
     }
@@ -1036,7 +1036,7 @@ TEST(ClientControl, AnsweredControlOutlastsFailedWrites) {
     Client&             client = rig.client();
     const ControlTicket ticket = client.reinitImu();
     ASSERT_TRUE(rig.runUntil(
-        [&] { return client.controlStatus(ticket).result == gatr2::kResultPending; }, kLimit));
+        [&] { return client.controlStatus(ticket).result == translagatr::kResultPending; }, kLimit));
     const uint32_t errors = client.stats().write_errors;
     rig.bus.failWrites(4 * client.config().control_attempts);
     ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
@@ -1053,13 +1053,13 @@ TEST(ClientWheels, RequestedReadingsArriveOnceWithTheirAges) {
     LinkRig rig;
     Client& client = rig.client();
     EXPECT_EQ(client.requestWheels(), 0u); // no session
-    gatr2::WheelReading forward;
+    translagatr::WheelReading forward;
     forward.port      = 0;
-    forward.flags     = gatr2::kWheelFresh | gatr2::kWheelValid;
+    forward.flags     = translagatr::kWheelFresh | translagatr::kWheelValid;
     forward.counts    = 12345;
     forward.travel_um = 456789;
     forward.age_ms    = 7;
-    gatr2::WheelReading sideways = forward;
+    translagatr::WheelReading sideways = forward;
     sideways.port                = 1;
     sideways.counts              = -2000;
     sideways.travel_um           = -73631;
@@ -1074,7 +1074,7 @@ TEST(ClientWheels, RequestedReadingsArriveOnceWithTheirAges) {
     ASSERT_TRUE(rig.runUntil([&] { return !client.wheelsPending(); }, kLimit));
     const WheelStatus s = client.wheelStatus(ticket);
     EXPECT_EQ(s.state, WheelResult::kOk);
-    EXPECT_EQ(s.result, gatr2::kResultOk);
+    EXPECT_EQ(s.result, translagatr::kResultOk);
     EXPECT_EQ(s.readings.sequence, 1u);
     ASSERT_EQ(s.readings.count, 2);
     EXPECT_EQ(s.readings.wheels[1].counts, -2000);
@@ -1082,7 +1082,7 @@ TEST(ClientWheels, RequestedReadingsArriveOnceWithTheirAges) {
     EXPECT_EQ(client.wheelStatus(0).state, WheelResult::kNone);
     const WheelReadings& r = client.wheelReadings();
     EXPECT_EQ(r.sequence, 1u);
-    EXPECT_EQ(r.result, gatr2::kResultOk);
+    EXPECT_EQ(r.result, translagatr::kResultOk);
     EXPECT_FALSE(r.busy);
     ASSERT_EQ(r.count, 2);
     EXPECT_EQ(r.wheels[0].counts, 12345);
@@ -1095,7 +1095,7 @@ TEST(ClientWheels, RequestedReadingsArriveOnceWithTheirAges) {
     EXPECT_LE(r.received_at, rig.now());
     rig.run(0.3);
     EXPECT_EQ(client.wheelReadings().sequence, 1u);
-    EXPECT_EQ(sent(rig.bus, gatr2::kOpReadWheels).size(), 1u);
+    EXPECT_EQ(sent(rig.bus, translagatr::kOpReadWheels).size(), 1u);
 }
 
 // Every read settles: a refusal, a lost send and a lost session are each
@@ -1109,19 +1109,19 @@ TEST(ClientWheels, RefusalTimeoutAndSessionLossSettleTheTicket) {
     WheelTicket ticket = client.requestWheels();
     ASSERT_TRUE(rig.runUntil([&] { return !client.wheelsPending(); }, kLimit));
     EXPECT_EQ(client.wheelStatus(ticket).state, WheelResult::kRejected);
-    EXPECT_EQ(client.wheelStatus(ticket).result, gatr2::kResultNotReady);
+    EXPECT_EQ(client.wheelStatus(ticket).result, translagatr::kResultNotReady);
     EXPECT_EQ(client.wheelReadings().sequence, 0u);
-    EXPECT_EQ(client.wheelReadings().result, gatr2::kResultNotReady);
+    EXPECT_EQ(client.wheelReadings().result, translagatr::kResultNotReady);
 
     // Lost request: one send, then kTimedOut; never resent.
     ticket = client.requestWheels();
     ASSERT_NE(ticket, 0u);
-    runUntilSent(rig, gatr2::kOpReadWheels);
+    runUntilSent(rig, translagatr::kOpReadWheels);
     rig.bus.fault(BusFault::kDropRequest);
     ASSERT_TRUE(rig.runUntil([&] { return !client.wheelsPending(); }, kLimit));
     EXPECT_EQ(client.wheelStatus(ticket).state, WheelResult::kTimedOut);
     rig.run(0.3);
-    EXPECT_EQ(sent(rig.bus, gatr2::kOpReadWheels).size(), 2u);
+    EXPECT_EQ(sent(rig.bus, translagatr::kOpReadWheels).size(), 2u);
 
     // A failed write is a lost send too. Ten failures in a row span more
     // than a poll period, so the read is among them.
@@ -1151,35 +1151,35 @@ TEST(ClientWheels, RefusalTimeoutAndSessionLossSettleTheTicket) {
 TEST(ClientPath, LatestWinsOneAttemptAndThinsToThirteen) {
     LinkRig rig;
     Client& client = rig.client();
-    const gatr2::PathPoint one[1] = {{1, 2}};
-    EXPECT_FALSE(client.reportPath(1, gatr2::kPathDirect, one, 1)); // no session
+    const translagatr::PathPoint one[1] = {{1, 2}};
+    EXPECT_FALSE(client.reportPath(1, translagatr::kPathDirect, one, 1)); // no session
     openSession(rig);
 
-    std::vector<gatr2::PathPoint> many;
+    std::vector<translagatr::PathPoint> many;
     for (int i = 0; i < 40; ++i) {
         many.push_back({i * 100, -i});
     }
-    EXPECT_TRUE(client.reportPath(7, gatr2::kPathDirect, one, 1));
-    EXPECT_TRUE(client.reportPath(8, gatr2::kPathAvoiding, many.data(), many.size()));
+    EXPECT_TRUE(client.reportPath(7, translagatr::kPathDirect, one, 1));
+    EXPECT_TRUE(client.reportPath(8, translagatr::kPathAvoiding, many.data(), many.size()));
     EXPECT_EQ(client.stats().paths_dropped, 2u); // no session, then replaced
     ASSERT_TRUE(rig.runUntil([&] { return rig.pi.path().have; }, kLimit));
     const FakePath& path = rig.pi.path();
     EXPECT_EQ(path.command_id, 8u);
-    EXPECT_EQ(path.mode, gatr2::kPathAvoiding);
+    EXPECT_EQ(path.mode, translagatr::kPathAvoiding);
     ASSERT_EQ(path.points.size(), 13u);
     EXPECT_EQ(path.points.front().x_mm, 0);
     EXPECT_EQ(path.points.back().x_mm, 3900);
     for (std::size_t i = 1; i < path.points.size(); ++i) {
         EXPECT_GT(path.points[i].x_mm, path.points[i - 1].x_mm);
     }
-    EXPECT_EQ(sent(rig.bus, gatr2::kOpPathReport).size(), 1u);
+    EXPECT_EQ(sent(rig.bus, translagatr::kOpPathReport).size(), 1u);
 
     // Clearing, and a lost report is not resent.
-    EXPECT_TRUE(client.reportPath(8, gatr2::kPathNone, nullptr, 0));
-    runUntilSent(rig, gatr2::kOpPathReport);
+    EXPECT_TRUE(client.reportPath(8, translagatr::kPathNone, nullptr, 0));
+    runUntilSent(rig, translagatr::kOpPathReport);
     rig.bus.fault(BusFault::kDropRequest);
     rig.run(0.3);
-    EXPECT_EQ(sent(rig.bus, gatr2::kOpPathReport).size(), 2u);
+    EXPECT_EQ(sent(rig.bus, translagatr::kOpPathReport).size(), 2u);
     EXPECT_TRUE(rig.pi.path().have);
     EXPECT_FALSE(client.reportPath(8, 3, nullptr, 0));
 }
@@ -1225,7 +1225,7 @@ TEST(Client, UnsupportedVersionIsTerminalWithSlowHello) {
     EXPECT_EQ(client.peerVersion(), 3);
     EXPECT_FALSE(client.ready());
     EXPECT_EQ(client.session(), 0u);
-    const std::size_t hellos = sent(rig.bus, gatr2::kOpHello).size();
+    const std::size_t hellos = sent(rig.bus, translagatr::kOpHello).size();
     EXPECT_GE(hellos, 4u);
     EXPECT_LE(hellos, 6u);
     EXPECT_EQ(client.stats().timeouts, 0u);
@@ -1233,13 +1233,13 @@ TEST(Client, UnsupportedVersionIsTerminalWithSlowHello) {
 
 TEST(Client, UnsupportedOpIsTerminal) {
     LinkRig rig;
-    rig.pi.setUnsupportedOp(gatr2::kOpGetState);
+    rig.pi.setUnsupportedOp(translagatr::kOpGetState);
     rig.run(3.0);
     Client& client = rig.client();
     EXPECT_EQ(client.error(), LinkError::kUnsupportedOp);
     EXPECT_FALSE(client.ready());
-    EXPECT_LE(sent(rig.bus, gatr2::kOpHello).size(), 4u);
-    EXPECT_LE(sent(rig.bus, gatr2::kOpGetState).size(), 4u);
+    EXPECT_LE(sent(rig.bus, translagatr::kOpHello).size(), 4u);
+    EXPECT_LE(sent(rig.bus, translagatr::kOpGetState).size(), 4u);
 
     // A compatible Pi clears the error.
     rig.pi.setUnsupportedOp(0);

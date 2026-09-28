@@ -71,7 +71,7 @@ public:
     const std::vector<Transmission>& log() const { return log_; }
 
     // Decoded Brain requests on the wire, in order.
-    std::vector<gatr2::BrainRequest> brainRequests() const;
+    std::vector<translagatr::BrainRequest> brainRequests() const;
 
     // A Brain and a Pi transmission overlapped.
     bool collision() const;

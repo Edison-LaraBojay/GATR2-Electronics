@@ -174,26 +174,26 @@ std::string imuSensorId(uint8_t port) {
     return std::string(kProfileSensorPrefix) + "imu_" + std::to_string(port);
 }
 
-std::string summarize(const gatr2::RobotProfileDoc& p) {
+std::string summarize(const translagatr::RobotProfileDoc& p) {
     char        buf[160];
     std::string s = profileTopologyName(p.topology);
     for (uint8_t i = 0; i < p.wheel_count; ++i) {
-        const gatr2::ProfileWheel& w = p.wheels[i];
+        const translagatr::ProfileWheel& w = p.wheels[i];
         std::snprintf(buf, sizeof(buf),
                       "; port %u r %.4f m at (%.4f, %.4f) m %.3f deg cpr %u gear %.6g scale "
                       "%.6g%s",
                       static_cast<unsigned>(w.encoder_port), w.radius_um * 1e-6, w.x_um * 1e-6,
                       w.y_um * 1e-6, w.angle_mdeg / 1000.0, static_cast<unsigned>(w.counts_per_rev),
                       w.gear_micro * 1e-6, w.travel_scale_ppm * 1e-6,
-                      (w.flags & gatr2::kWheelReversed) != 0 ? " reversed" : "");
+                      (w.flags & translagatr::kWheelReversed) != 0 ? " reversed" : "");
         s += buf;
     }
     switch (p.imu_source) {
-    case gatr2::kImuSourcePico:
+    case translagatr::kImuSourcePico:
         std::snprintf(buf, sizeof(buf), "; IMU Pico port %u%s", static_cast<unsigned>(p.imu_port),
-                      (p.imu_flags & gatr2::kImuInvert) != 0 ? " inverted" : "");
+                      (p.imu_flags & translagatr::kImuInvert) != 0 ? " inverted" : "");
         break;
-    case gatr2::kImuSourceBrainVex:
+    case translagatr::kImuSourceBrainVex:
         std::snprintf(buf, sizeof(buf), "; IMU Brain VEX smart port %u",
                       static_cast<unsigned>(p.vex_smart_port));
         break;
@@ -211,30 +211,30 @@ std::string summarize(const gatr2::RobotProfileDoc& p) {
 
 const char* profileTopologyName(uint8_t topology) {
     switch (topology) {
-    case gatr2::kTopologyTwoWheelImu: return "two wheels + IMU";
-    case gatr2::kTopologyTwoForwardWheelImu: return "two forward wheels + IMU";
-    case gatr2::kTopologyThreeWheel: return "three wheels";
+    case translagatr::kTopologyTwoWheelImu: return "two wheels + IMU";
+    case translagatr::kTopologyTwoForwardWheelImu: return "two forward wheels + IMU";
+    case translagatr::kTopologyThreeWheel: return "three wheels";
     default: return "unknown";
     }
 }
 
 const char* profileReasonName(uint8_t reason) {
     switch (reason) {
-    case gatr2::kProfileReasonNone: return "none";
-    case gatr2::kProfileReasonFormat: return "format";
-    case gatr2::kProfileReasonTopology: return "topology";
-    case gatr2::kProfileReasonWheelCount: return "wheel count";
-    case gatr2::kProfileReasonEncoderPort: return "encoder port";
-    case gatr2::kProfileReasonWheelGeometry: return "wheel geometry";
-    case gatr2::kProfileReasonObservability: return "observability";
-    case gatr2::kProfileReasonImuSource: return "IMU source";
-    case gatr2::kProfileReasonImuPort: return "IMU port";
-    case gatr2::kProfileReasonImuCombination: return "IMU combination";
-    case gatr2::kProfileReasonCamera: return "camera";
-    case gatr2::kProfileReasonFootprint: return "footprint";
-    case gatr2::kProfileReasonBuild: return "build";
-    case gatr2::kProfileReasonNotAccepted: return "not accepted";
-    case gatr2::kProfileReasonCalibration: return "calibration";
+    case translagatr::kProfileReasonNone: return "none";
+    case translagatr::kProfileReasonFormat: return "format";
+    case translagatr::kProfileReasonTopology: return "topology";
+    case translagatr::kProfileReasonWheelCount: return "wheel count";
+    case translagatr::kProfileReasonEncoderPort: return "encoder port";
+    case translagatr::kProfileReasonWheelGeometry: return "wheel geometry";
+    case translagatr::kProfileReasonObservability: return "observability";
+    case translagatr::kProfileReasonImuSource: return "IMU source";
+    case translagatr::kProfileReasonImuPort: return "IMU port";
+    case translagatr::kProfileReasonImuCombination: return "IMU combination";
+    case translagatr::kProfileReasonCamera: return "camera";
+    case translagatr::kProfileReasonFootprint: return "footprint";
+    case translagatr::kProfileReasonBuild: return "build";
+    case translagatr::kProfileReasonNotAccepted: return "not accepted";
+    case translagatr::kProfileReasonCalibration: return "calibration";
     default: return "unknown";
     }
 }
@@ -372,53 +372,53 @@ bool parseBrainProfileConfig(const ConfigNode& node, const ResourceStore& resour
 }
 
 bool checkProfileCapabilities(const BrainProfileConfig& config,
-                              const gatr2::RobotProfileDoc& profile, uint8_t& reason,
+                              const translagatr::RobotProfileDoc& profile, uint8_t& reason,
                               uint8_t& detail) {
-    reason = gatr2::kProfileReasonNone;
+    reason = translagatr::kProfileReasonNone;
     detail = 0;
     for (uint8_t i = 0; i < profile.wheel_count; ++i) {
         const uint8_t port = profile.wheels[i].encoder_port;
         if (port >= kProfileEncoderPorts || config.ports[port].empty()) {
-            reason = gatr2::kProfileReasonEncoderPort;
+            reason = translagatr::kProfileReasonEncoderPort;
             detail = i;
             return false;
         }
     }
     switch (profile.imu_source) {
-    case gatr2::kImuSourcePico:
+    case translagatr::kImuSourcePico:
         if (!config.imu) {
-            reason = gatr2::kProfileReasonImuSource;
+            reason = translagatr::kProfileReasonImuSource;
             return false;
         }
         if (profile.imu_port != config.imu_port) {
-            reason = gatr2::kProfileReasonImuPort;
+            reason = translagatr::kProfileReasonImuPort;
             return false;
         }
         break;
-    case gatr2::kImuSourceBrainVex:
+    case translagatr::kImuSourceBrainVex:
         if (config.brain_imu.empty()) {
-            reason = gatr2::kProfileReasonImuSource;
+            reason = translagatr::kProfileReasonImuSource;
             return false;
         }
         break;
-    case gatr2::kImuSourceNone: break;
-    default: reason = gatr2::kProfileReasonImuSource; return false;
+    case translagatr::kImuSourceNone: break;
+    default: reason = translagatr::kProfileReasonImuSource; return false;
     }
     // camera mounts from the profile are not applied on the Pi yet
     if (profile.camera_count > 0) {
-        reason = gatr2::kProfileReasonCamera;
+        reason = translagatr::kProfileReasonCamera;
         return false;
     }
-    const bool three = profile.topology == gatr2::kTopologyThreeWheel;
-    const bool two   = profile.topology == gatr2::kTopologyTwoWheelImu ||
-                     profile.topology == gatr2::kTopologyTwoForwardWheelImu;
+    const bool three = profile.topology == translagatr::kTopologyThreeWheel;
+    const bool two   = profile.topology == translagatr::kTopologyTwoWheelImu ||
+                     profile.topology == translagatr::kTopologyTwoForwardWheelImu;
     const bool supported =
-        (two && (profile.imu_source == gatr2::kImuSourcePico ||
-                 profile.imu_source == gatr2::kImuSourceBrainVex)) ||
-        (three && profile.imu_source == gatr2::kImuSourceNone) ||
-        (three && profile.imu_source == gatr2::kImuSourcePico && config.fusion);
+        (two && (profile.imu_source == translagatr::kImuSourcePico ||
+                 profile.imu_source == translagatr::kImuSourceBrainVex)) ||
+        (three && profile.imu_source == translagatr::kImuSourceNone) ||
+        (three && profile.imu_source == translagatr::kImuSourcePico && config.fusion);
     if (!supported) {
-        reason = gatr2::kProfileReasonImuCombination;
+        reason = translagatr::kProfileReasonImuCombination;
         return false;
     }
     return true;
@@ -431,7 +431,7 @@ void writeWaitingLocalization(const BrainProfileConfig& config, tinyxml2::XMLDoc
     addHistory(config, doc, localization);
 }
 
-void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfileDoc& p,
+void writeProfileSubtrees(const BrainProfileConfig& c, const translagatr::RobotProfileDoc& p,
                           tinyxml2::XMLDocument& doc, ProfileBinding& binding) {
     doc.Clear();
     tinyxml2::XMLElement* root         = add(doc, &doc, "Profile");
@@ -445,7 +445,7 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
 
     // encoder sensors: counts per revolution, gearing and polarity, once
     for (uint8_t i = 0; i < p.wheel_count; ++i) {
-        const gatr2::ProfileWheel& w  = p.wheels[i];
+        const translagatr::ProfileWheel& w  = p.wheels[i];
         const std::string          id = encoderSensorId(w.encoder_port);
         tinyxml2::XMLElement*      s  = add(doc, sensors, "Sensor");
         s->SetAttribute("id", id.c_str());
@@ -455,13 +455,13 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
         source->SetAttribute("output_id", c.ports[w.encoder_port].value.c_str());
         tinyxml2::XMLElement* cal = add(doc, s, "Calibration");
         cal->SetAttribute("counts_per_revolution", static_cast<int64_t>(w.counts_per_rev));
-        cal->SetAttribute("gear", w.gear_micro / static_cast<double>(gatr2::kUnitMicro));
-        cal->SetAttribute("invert", (w.flags & gatr2::kWheelReversed) != 0);
+        cal->SetAttribute("gear", w.gear_micro / static_cast<double>(translagatr::kUnitMicro));
+        cal->SetAttribute("invert", (w.flags & translagatr::kWheelReversed) != 0);
         add(doc, s, "Freshness")
             ->SetAttribute("stale_after_ms", static_cast<int64_t>(c.encoder_stale_after_ms));
         binding.encoders.push_back(SensorId{id});
     }
-    const bool pico_imu = p.imu_source == gatr2::kImuSourcePico;
+    const bool pico_imu = p.imu_source == translagatr::kImuSourcePico;
     if (pico_imu) {
         const std::string     id = imuSensorId(p.imu_port);
         tinyxml2::XMLElement* s  = add(doc, sensors, "Sensor");
@@ -470,7 +470,7 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
         tinyxml2::XMLElement* source = add(doc, s, "Source");
         source->SetAttribute("resource_id", c.imu_resource.value.c_str());
         source->SetAttribute("output_id", c.imu_output.value.c_str());
-        add(doc, s, "Calibration")->SetAttribute("invert", (p.imu_flags & gatr2::kImuInvert) != 0);
+        add(doc, s, "Calibration")->SetAttribute("invert", (p.imu_flags & translagatr::kImuInvert) != 0);
         add(doc, s, "Freshness")
             ->SetAttribute("stale_after_ms", static_cast<int64_t>(c.imu_stale_after_ms));
         binding.imu = SensorId{id};
@@ -494,7 +494,7 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
     // wheel geometry and the travel scale, once; direction is always positive
     const auto addWheels = [&](tinyxml2::XMLElement* model) {
         for (uint8_t i = 0; i < p.wheel_count; ++i) {
-            const gatr2::ProfileWheel& w     = p.wheels[i];
+            const translagatr::ProfileWheel& w     = p.wheels[i];
             tinyxml2::XMLElement*      wheel = add(doc, model, "TrackingWheel");
             wheel->SetAttribute("sensor_id", encoderSensorId(w.encoder_port).c_str());
             wheel->SetAttribute("label", ("port " + std::to_string(w.encoder_port)).c_str());
@@ -504,7 +504,7 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
             wheel->SetAttribute("measurement_angle_deg", w.angle_mdeg / 1000.0);
             wheel->SetAttribute("direction", "positive");
             wheel->SetAttribute("travel_scale",
-                                w.travel_scale_ppm / static_cast<double>(gatr2::kUnitMicro));
+                                w.travel_scale_ppm / static_cast<double>(translagatr::kUnitMicro));
         }
     };
     const char* motion_id = "profile_motion";
@@ -519,9 +519,9 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
 
     tinyxml2::XMLElement* motion = add(doc, localization, "Observation");
     motion->SetAttribute("id", motion_id);
-    const bool bench = p.imu_source == gatr2::kImuSourceBrainVex;
+    const bool bench = p.imu_source == translagatr::kImuSourceBrainVex;
     if (bench) {
-        motion->SetAttribute("type", p.topology == gatr2::kTopologyTwoForwardWheelImu
+        motion->SetAttribute("type", p.topology == translagatr::kTopologyTwoForwardWheelImu
                                          ? "brain_imu_parallel_bench"
                                          : "brain_imu_planar_bench");
         addWheels(motion);
@@ -534,11 +534,13 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
         // a step never spans more than a used source may be quiet (8.10)
         add(doc, motion, "Freshness")
             ->SetAttribute("max_age_ms", static_cast<int64_t>(c.sensor_loss_ms));
+        // the VEX tilt from TELEMETRY, display attitude only
+        add(doc, motion, "Attitude")->SetAttribute("observation_id", kProfileAttitudeId);
         output(motion, motion_id);
     } else {
         motion->SetAttribute("type", "tracking_wheel_motion");
         addWheels(motion);
-        if (pico_imu && p.topology != gatr2::kTopologyThreeWheel) {
+        if (pico_imu && p.topology != translagatr::kTopologyThreeWheel) {
             // two wheels: the gyro is the heading constraint, counted once
             tinyxml2::XMLElement* hc = add(doc, motion, "HeadingConstraint");
             hc->SetAttribute("sensor_id", binding.imu.value.c_str());
@@ -549,7 +551,7 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
             stillness(hc);
             hc->SetAttribute("attempt_s", c.attempt_s);
             binding.bias_function = motion_id;
-            if (p.topology == gatr2::kTopologyTwoForwardWheelImu) {
+            if (p.topology == translagatr::kTopologyTwoForwardWheelImu) {
                 add(doc, motion, "LateralMotion")->SetAttribute("assume", "zero");
             }
         }
@@ -557,7 +559,7 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
         output(motion, motion_id);
     }
 
-    const bool fused = pico_imu && p.topology == gatr2::kTopologyThreeWheel;
+    const bool fused = pico_imu && p.topology == translagatr::kTopologyThreeWheel;
     if (fused) {
         // three wheels see rotation themselves; the gyro is an independent
         // heading observation fused once by the estimator
@@ -601,6 +603,12 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
         tinyxml2::XMLElement* estimator = add(doc, localization, "Estimator");
         estimator->SetAttribute("type", "planar_motion_integrator");
         add(doc, estimator, "Motion")->SetAttribute("observation_id", motion_id);
+        if (bench) {
+            // measured while fresh, then explicitly assumed level (stale)
+            tinyxml2::XMLElement* attitude = add(doc, estimator, "Attitude");
+            attitude->SetAttribute("observation_id", kProfileAttitudeId);
+            attitude->SetAttribute("max_age_ms", static_cast<int64_t>(kProfileAttitudeMaxAgeMs));
+        }
     }
     addHistory(c, doc, localization);
 }

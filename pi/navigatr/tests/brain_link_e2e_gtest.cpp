@@ -26,7 +26,7 @@
 #include "actugatr/follower.h"
 #include "actugatr/kinematics.h"
 #include "actugatr/motion.h"
-#include "common/frame_codec.h"
+#include "translaGATR/frame_codec.h"
 #include "communigatr/client.h"
 #include "communigatr/link_driver.h"
 #include "communigatr/readiness.h"
@@ -65,7 +65,7 @@ constexpr uint32_t kNonceA = 0xA11CE001;
 constexpr uint32_t kNonceB = 0xB0B0B002;
 
 // The testing program's placeholder start pose and tests
-// (brain/robot/gatr2_robot.h, brain/testing/include/robot_config.h): open
+// (brain/robot/gatr2_robot.h, brain/operaGATR/include/robot_config.h): open
 // floor west of the center goal, clear of the corner pockets the nearest
 // goals close for this footprint.
 const ig::Pose      kStart{1.2, 1.8, 0.0};
@@ -127,9 +127,9 @@ ag::MotionConfig motionConfig() {
     return c;
 }
 
-gatr2::BrainRequest requestOf(const std::vector<uint8_t>& frame) {
-    gatr2::BrainRequest r;
-    EXPECT_TRUE(gatr2::decodeBrainRequest(frame.data(), static_cast<uint16_t>(frame.size()), r));
+translagatr::BrainRequest requestOf(const std::vector<uint8_t>& frame) {
+    translagatr::BrainRequest r;
+    EXPECT_TRUE(translagatr::decodeBrainRequest(frame.data(), static_cast<uint16_t>(frame.size()), r));
     return r;
 }
 
@@ -425,15 +425,15 @@ struct Rig {
     }
 
     std::vector<uint8_t> sensorFrame() {
-        gatr2::SensorSample s{};
+        translagatr::SensorSample s{};
         s.seq      = pico_seq++;
         s.stamp_ms = static_cast<uint32_t>(5000 + now_us / 1000);
-        s.mask     = gatr2::kSensorEnc0 | gatr2::kSensorEnc1 | gatr2::kSensorEnc2;
+        s.mask     = translagatr::kSensorEnc0 | translagatr::kSensorEnc1 | translagatr::kSensorEnc2;
         for (int i = 0; i < 2; ++i) {
             s.enc[i] = static_cast<int32_t>(std::llround(travel[i] / (2.0 * kPi * kRadius) * kCpr));
         }
-        std::vector<uint8_t> buf(gatr2::kMaxFrameLen);
-        buf.resize(gatr2::encodeSensorFrame(s, buf.data(), gatr2::kMaxFrameLen));
+        std::vector<uint8_t> buf(translagatr::kMaxFrameLen);
+        buf.resize(translagatr::encodeSensorFrame(s, buf.data(), translagatr::kMaxFrameLen));
         return buf;
     }
 
@@ -511,7 +511,7 @@ TEST(BrainLinkEndToEnd, ProfilePlacementAndDirectMovesOverUsb) {
     Rig rig;
     ASSERT_TRUE(rig.ok()) << rig.error;
     Brain& b = rig.ready();
-    EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose), 1);
+    EXPECT_EQ(rig.wire.count(translagatr::kOpSetPose), 1);
     expectPiNearTruth(rig, 1e-3, 1e-3);
 
     b.motion.goToDirect(kDirectGoal);
@@ -590,7 +590,7 @@ TEST(BrainLinkEndToEnd, WheelReadingsReportRawTravel) {
         ASSERT_TRUE(b.client.requestWheels());
         rig.runUntil([&] { return b.client.wheelReadings().sequence != before; }, 1.0);
         const cg::WheelReadings& r = b.client.wheelReadings();
-        ASSERT_EQ(r.result, gatr2::kResultOk);
+        ASSERT_EQ(r.result, translagatr::kResultOk);
         ASSERT_NE(r.sequence, before);
         ASSERT_EQ(r.count, 2);
         for (int i = 0; i < 2; ++i) {
@@ -629,7 +629,7 @@ TEST(BrainLinkEndToEnd, TravelScaleChangeIsANewProfileAndNeedsPlacement) {
     EXPECT_NE(b.client.state().state.odometry_epoch, old_epoch);
     rig.run(1.0);
     EXPECT_EQ(b.readiness(rig.now()), cg::Readiness::kNeedsPlacement);
-    EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose, mark), 0); // never placed by itself
+    EXPECT_EQ(rig.wire.count(translagatr::kOpSetPose, mark), 0); // never placed by itself
 
     // Placed again, the Pi counts 2 percent more forward travel than the truth.
     const cg::PlacementTicket ticket = b.driver.place(rig.body.pose());
@@ -666,8 +666,8 @@ TEST(BrainLinkEndToEnd, BrainRestartKeepsTheProfileButNeedsAPlacement) {
 
     EXPECT_EQ(b.client.piInstance(), pi_instance);
     EXPECT_NE(b.client.session(), session);
-    EXPECT_EQ(rig.wire.count(gatr2::kOpProfileWrite, mark), 0); // the Pi already runs it
-    EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose, mark), 0);      // never placed by itself
+    EXPECT_EQ(rig.wire.count(translagatr::kOpProfileWrite, mark), 0); // the Pi already runs it
+    EXPECT_EQ(rig.wire.count(translagatr::kOpSetPose, mark), 0);      // never placed by itself
     EXPECT_EQ(b.client.state().state.profile_id, state.profile_id);
     EXPECT_NE(b.client.state().state.odometry_epoch, state.odometry_epoch);
 
@@ -695,7 +695,7 @@ TEST(BrainLinkEndToEnd, PiRestartNeedsTheProfileAndAPlacementAgain) {
         // Uploaded again: the restarted Pi runs no profile.
         ASSERT_TRUE(rig.runUntil(
             [&] {
-                return rig.wire.count(gatr2::kOpProfileWrite, mark) > 0 &&
+                return rig.wire.count(translagatr::kOpProfileWrite, mark) > 0 &&
                        b.client.profileApplied();
             },
             3.0));
@@ -707,7 +707,7 @@ TEST(BrainLinkEndToEnd, PiRestartNeedsTheProfileAndAPlacementAgain) {
         b.motion.goToDirect(kDirectGoal);
         EXPECT_EQ(rig.finish(b, 5.0), ag::MotionState::kFailed);
         EXPECT_EQ(b.motion.status().reason, ag::MotionReason::kPlacementRequired);
-        EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose, mark), 0);
+        EXPECT_EQ(rig.wire.count(translagatr::kOpSetPose, mark), 0);
         EXPECT_NEAR(rig.body.pose().x, kStart.x, 1e-6);
         EXPECT_NEAR(rig.body.pose().y, kStart.y, 1e-6);
     }
@@ -739,7 +739,7 @@ TEST(BrainLinkEndToEnd, PulledCableStopsTheMoveAndTheLinkResumes) {
     EXPECT_NE(b.client.state().state.odometry_epoch, epoch);
     rig.run(1.0);
     EXPECT_EQ(b.readiness(rig.now()), cg::Readiness::kNeedsPlacement);
-    EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose), 1); // never placed by itself
+    EXPECT_EQ(rig.wire.count(translagatr::kOpSetPose), 1); // never placed by itself
     EXPECT_EQ(b.motion.status().state, ag::MotionState::kFailed); // never resumes
 
     // Placed again, the pose follows the truth.
@@ -776,7 +776,7 @@ TEST(BrainLinkEndToEnd, UsedSensorDropInvalidatesThePoseEvenWhenStill) {
             [&] { return b.readiness(rig.now()) == cg::Readiness::kNeedsPlacement; }, 3.0))
             << cg::toString(b.readiness(rig.now()));
         EXPECT_NE(b.client.state().state.odometry_epoch, epoch);
-        EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose), 1); // never placed by itself
+        EXPECT_EQ(rig.wire.count(translagatr::kOpSetPose), 1); // never placed by itself
 
         const cg::PlacementTicket ticket = b.driver.place(rig.body.pose());
         ASSERT_TRUE(rig.runUntil(

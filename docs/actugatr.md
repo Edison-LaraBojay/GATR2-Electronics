@@ -166,6 +166,71 @@ Configs and kinematics:
 
 `PortMap` checks every active Smart Port device: drive motors, the VEX IMU when it is the IMU source, and the RS-485 link when selected. A conflict names both devices. `distinctPorts()` checks constant lists in a `static_assert`.
 
+## Telemetry
+
+`telemetryOf(snapshot)` (`actugatr/telemetry.h`) turns a `DriveSnapshot` into the motion and wheels groups of a TELEMETRY for the Pi viewer and recordings. It is display and recording only: nothing reads it back and it takes no lock. The caller sets `stamp_ms` and the attitude group and sends it through communiGATR ([Telemetry](communigatr.md#telemetry)). operaGATR sends one every 100 ms from the drive task's last published snapshot.
+
+| Field | From | Wire unit |
+|---|---|---|
+| `command_id` | `motion.command_id` | 0 = none |
+| `motion_state`, `motion_reason` | `motion.state`, `motion.reason` | tables below |
+| `plan_mode` | `motion.mode` | 0 direct, 1 avoiding |
+| `segment`, `segment_count` | `motion` | count, at most 255 |
+| `target_x_mm`, `target_y_mm`, `target_heading_cdeg` | `motion.destination`, field frame, latest resolution | mm; centidegrees in (-18000, 18000]. All 0 when the command has no resolved destination (idle, or waiting for a reference) |
+| `cmd_vx_mm_s`, `cmd_vy_mm_s`, `cmd_omega_cdeg_s` | `drive.command`: the body command the drive applied, after desaturation (the manual demand in manual mode) | mm/s, centidegrees/s CCW |
+| `cross_track_mm`, `distance_error_mm` | `motion` | mm |
+| `heading_error_cdeg` | `motion.heading_error`, destination minus robot | centidegrees in (-18000, 18000] |
+| `drive_fault` | `drive.fault` | table below |
+| `wheel_count`, `wheel_rpm_x10[]` | `drive.motor_rpm`, one per wheel group | motor rpm x 10; positive drives the robot forward, before per-motor reversal |
+
+- Values are rounded to the nearest unit and saturated to the field: 16-bit fields to -32768..32767 (about 32.8 m, 32.8 m/s, 327 deg/s, 3276 rpm). Non-finite values are sent as 0.
+- Wheel groups are in kinematics order: tank left, right; mecanum front left, front right, rear left, rear right. While the drive is stopped every group reads 0: a commanded stop, not missing data. The group is absent only before the drive task has published a snapshot.
+- `DriveStatus::motor_rpm` holds the targets `Drive` last sent to the motors.
+
+`MotionState` (`motion_state`):
+
+| Value | Name | Meaning |
+|---|---|---|
+| 0 | idle | no command yet |
+| 1 | waiting | for usable state, the field or the reference |
+| 2 | running | following the path |
+| 3 | settling | at the end, settling within the tolerances |
+| 4 | completed | ended at the destination |
+| 5 | cancelled | ended by a cancel or a mode change |
+| 6 | failed | ended, see the reason |
+
+`MotionReason` (`motion_reason`):
+
+| Value | Name | Value | Name |
+|---|---|---|---|
+| 0 | none | 13 | reference unavailable |
+| 1 | invalid command | 14 | unsupported model |
+| 2 | invalid config | 15 | start out of bounds |
+| 3 | input unavailable | 16 | start blocked |
+| 4 | no robot profile | 17 | goal out of bounds |
+| 5 | calibrating | 18 | goal blocked |
+| 6 | placement required | 19 | no path |
+| 7 | input lost | 20 | tracking error |
+| 8 | frame changed | 21 | plan limit |
+| 9 | field unavailable | 22 | timed out |
+| 10 | map mismatch | 23 | source changed |
+| 11 | unknown reference | 24 | cancelled by caller |
+| 12 | not a reference | | |
+
+`PlanMode` (`plan_mode`): 0 direct, 1 avoiding. This is the investiGATR value; a PATH_REPORT's `path_mode` numbers them differently (1 direct, 2 avoiding).
+
+`DriveFault` (`drive_fault`):
+
+| Value | Name | Meaning |
+|---|---|---|
+| 0 | none | |
+| 1 | wrong frame | a field frame command reached the drive |
+| 2 | non-finite command | |
+| 3 | unsupported motion | e.g. sideways on a tank |
+| 4 | stale command | older than `command_timeout`; also a stale manual demand |
+
+The names are the `toString()` texts. `telemetry_gtest.cpp` fails if a value changes, so these tables and the Pi's names stay in step.
+
 ## Tuning
 
 Units are physical, so gains transfer between robots with similar dynamics:
@@ -203,7 +268,7 @@ cmake --build build-brain -j8
 ctest --test-dir build-brain --output-on-failure
 ```
 
-- `actugatr_tests` cover kinematics signs and units, coupled limits, drive stops, followers closed loop through a drivetrain sim, Motion semantics, drive ownership and port checks.
+- `actugatr_tests` cover kinematics signs and units, coupled limits, drive stops, followers closed loop through a drivetrain sim, Motion semantics, drive ownership, port checks, and the TELEMETRY groups (units, rounding, wrapping, saturation, missing destination, motor targets, the enum values above).
 - `actugatr_integration_tests` run Motion with the real planner, a tank and a mecanum sim. They check the true rectangular footprint against every obstacle at every simulated step, through turns, corners and a replan after a field correction.
 
 ## Limits

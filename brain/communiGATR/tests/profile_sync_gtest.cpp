@@ -56,9 +56,9 @@ ClientConfig configFor(const RobotProfile& profile) {
     return config;
 }
 
-std::vector<gatr2::BrainRequest> requests(const FakeBus& bus, uint8_t op) {
-    std::vector<gatr2::BrainRequest> out;
-    for (const gatr2::BrainRequest& r : bus.brainRequests()) {
+std::vector<translagatr::BrainRequest> requests(const FakeBus& bus, uint8_t op) {
+    std::vector<translagatr::BrainRequest> out;
+    for (const translagatr::BrainRequest& r : bus.brainRequests()) {
         if (r.op == op) {
             out.push_back(r);
         }
@@ -79,7 +79,7 @@ TEST(ProfileSync, UploadsInChunksThenAppliesThroughPending) {
     Client&               client = rig.client();
     const ProfileStatus&  status = client.profile();
     const ProfileDocument doc    = makeProfileDocument(largeProfile());
-    EXPECT_EQ(doc.len, gatr2::kProfileMaxLen);
+    EXPECT_EQ(doc.len, translagatr::kProfileMaxLen);
     EXPECT_EQ(status.state, ProfileSync::kWaiting);
     EXPECT_EQ(status.id, profileId(doc));
 
@@ -89,10 +89,10 @@ TEST(ProfileSync, UploadsInChunksThenAppliesThroughPending) {
     applied(rig);
     EXPECT_EQ(rig.pi.appliedProfile(), status.id);
     EXPECT_EQ(status.received, doc.len);
-    EXPECT_EQ(status.reason, gatr2::kProfileReasonNone);
+    EXPECT_EQ(status.reason, translagatr::kProfileReasonNone);
 
-    const auto        writes = requests(rig.bus, gatr2::kOpProfileWrite);
-    const std::size_t chunks = (doc.len + gatr2::kProfileChunkMax - 1) / gatr2::kProfileChunkMax;
+    const auto        writes = requests(rig.bus, translagatr::kOpProfileWrite);
+    const std::size_t chunks = (doc.len + translagatr::kProfileChunkMax - 1) / translagatr::kProfileChunkMax;
     ASSERT_EQ(writes.size(), chunks);
     ASSERT_GE(chunks, 2u);
     uint16_t at = 0;
@@ -102,9 +102,9 @@ TEST(ProfileSync, UploadsInChunksThenAppliesThroughPending) {
         EXPECT_EQ(w.total_len, doc.len);
         at = static_cast<uint16_t>(at + w.data_len);
     }
-    EXPECT_EQ(writes.front().data_len, gatr2::kProfileChunkMax);
+    EXPECT_EQ(writes.front().data_len, translagatr::kProfileChunkMax);
     EXPECT_EQ(at, doc.len);
-    const auto applies = requests(rig.bus, gatr2::kOpProfileApply);
+    const auto applies = requests(rig.bus, translagatr::kOpProfileApply);
     EXPECT_GE(applies.size(), 2u); // Pending, then Ok
     EXPECT_EQ(rig.pi.profilesApplied(), 1);
 
@@ -123,17 +123,17 @@ TEST(ProfileSync, LostChunkRepliesAndRequestsResumeWithoutGaps) {
     rig.pi.setProfileMode(true);
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().ready(); }, kLimit));
     ASSERT_TRUE(rig.runUntil(
-        [&] { return !requests(rig.bus, gatr2::kOpProfileWrite).empty(); }, kLimit));
+        [&] { return !requests(rig.bus, translagatr::kOpProfileWrite).empty(); }, kLimit));
     rig.bus.fault(BusFault::kDropReply); // first chunk taken, answer lost
     ASSERT_TRUE(rig.runUntil(
-        [&] { return requests(rig.bus, gatr2::kOpProfileWrite).size() == 2; }, kLimit));
+        [&] { return requests(rig.bus, translagatr::kOpProfileWrite).size() == 2; }, kLimit));
     rig.bus.fault(BusFault::kDropRequest); // this chunk never arrives
     applied(rig);
     EXPECT_EQ(rig.client().stats().timeouts, 2u);
     EXPECT_EQ(rig.pi.appliedProfile(), rig.client().profile().id);
     // Every write started at or below what the Pi held; no gap was ever sent.
-    for (const auto& w : requests(rig.bus, gatr2::kOpProfileWrite)) {
-        EXPECT_EQ(w.offset % gatr2::kProfileChunkMax, 0);
+    for (const auto& w : requests(rig.bus, translagatr::kOpProfileWrite)) {
+        EXPECT_EQ(w.offset % translagatr::kProfileChunkMax, 0);
     }
 }
 
@@ -146,12 +146,12 @@ TEST(ProfileSync, BrainRestartWithSameProfileIsIdempotent) {
         [&] { return rig.client().placementResult(ticket) == PlacementResult::kApplied; },
         kLimit));
     const uint32_t    epoch  = rig.pi.robot().odometry_epoch;
-    const std::size_t writes = requests(rig.bus, gatr2::kOpProfileWrite).size();
+    const std::size_t writes = requests(rig.bus, translagatr::kOpProfileWrite).size();
 
     rig.rebootBrain();
     applied(rig);
     // The Pi already runs it: nothing uploaded, nothing reset, still placed.
-    EXPECT_EQ(requests(rig.bus, gatr2::kOpProfileWrite).size(), writes);
+    EXPECT_EQ(requests(rig.bus, translagatr::kOpProfileWrite).size(), writes);
     EXPECT_EQ(rig.pi.robot().odometry_epoch, epoch);
     EXPECT_EQ(rig.pi.profilesApplied(), 1);
     EXPECT_EQ(rig.driver().robot(rig.now()).status, RobotStatus::kValid);
@@ -182,15 +182,15 @@ TEST(ProfileSync, ChangedProfileLosesContinuityAndNeedsPlacement) {
 TEST(ProfileSync, RejectionIsSettledWithoutRetryStorm) {
     LinkRig rig(configFor(benchProfile()));
     rig.pi.setProfileMode(true);
-    rig.pi.setProfileRejection(gatr2::kProfileReasonEncoderPort, 1);
+    rig.pi.setProfileRejection(translagatr::kProfileReasonEncoderPort, 1);
     Client& client = rig.client();
     ASSERT_TRUE(rig.runUntil(
         [&] { return client.profile().state == ProfileSync::kRejected; }, kLimit));
-    EXPECT_EQ(client.profile().result, gatr2::kResultProfileRejected);
-    EXPECT_EQ(client.profile().reason, gatr2::kProfileReasonEncoderPort);
+    EXPECT_EQ(client.profile().result, translagatr::kResultProfileRejected);
+    EXPECT_EQ(client.profile().reason, translagatr::kProfileReasonEncoderPort);
     EXPECT_EQ(client.profile().detail, 1);
     rig.run(2.0);
-    EXPECT_EQ(requests(rig.bus, gatr2::kOpProfileApply).size(), 1u);
+    EXPECT_EQ(requests(rig.bus, translagatr::kOpProfileApply).size(), 1u);
     EXPECT_EQ(client.submitPlacement(1, 1, 1), 0u);
     EXPECT_EQ(rig.driver().robot(rig.now()).status, RobotStatus::kNoProfile);
 
@@ -200,14 +200,14 @@ TEST(ProfileSync, RejectionIsSettledWithoutRetryStorm) {
     ASSERT_TRUE(rig.runUntil(
         [&] { return client.profile().state == ProfileSync::kRejected; }, kLimit));
     rig.run(1.0);
-    EXPECT_EQ(requests(rig.bus, gatr2::kOpProfileApply).size(), 2u);
+    EXPECT_EQ(requests(rig.bus, translagatr::kOpProfileApply).size(), 2u);
 
     // A new session tries once more.
     rig.rebootBrain();
     ASSERT_TRUE(rig.runUntil(
         [&] { return rig.client().profile().state == ProfileSync::kRejected; }, kLimit));
     rig.run(1.0);
-    EXPECT_EQ(requests(rig.bus, gatr2::kOpProfileApply).size(), 3u);
+    EXPECT_EQ(requests(rig.bus, translagatr::kOpProfileApply).size(), 3u);
 }
 
 TEST(ProfileSync, PiWithoutBrainProfileSupportRejectsClearly) {
@@ -216,7 +216,7 @@ TEST(ProfileSync, PiWithoutBrainProfileSupportRejectsClearly) {
     Client& client = rig.client();
     ASSERT_TRUE(rig.runUntil(
         [&] { return client.profile().state == ProfileSync::kRejected; }, kLimit));
-    EXPECT_EQ(client.profile().reason, gatr2::kProfileReasonNotAccepted);
+    EXPECT_EQ(client.profile().reason, translagatr::kProfileReasonNotAccepted);
     EXPECT_STREQ(profileReasonName(client.profile().reason), "not accepted by this Pi");
     EXPECT_EQ(client.submitPlacement(1, 1, 1), 0u);
 }
@@ -228,11 +228,11 @@ TEST(ProfileSync, LocallyInvalidProfileIsNeverSent) {
     rig.pi.setProfileMode(true);
     Client& client = rig.client();
     EXPECT_EQ(client.profile().state, ProfileSync::kInvalid);
-    EXPECT_EQ(client.profile().reason, gatr2::kProfileReasonObservability);
+    EXPECT_EQ(client.profile().reason, translagatr::kProfileReasonObservability);
     ASSERT_TRUE(rig.runUntil([&] { return client.ready(); }, kLimit));
     rig.run(1.0);
-    EXPECT_TRUE(requests(rig.bus, gatr2::kOpProfileWrite).empty());
-    EXPECT_TRUE(requests(rig.bus, gatr2::kOpProfileApply).empty());
+    EXPECT_TRUE(requests(rig.bus, translagatr::kOpProfileWrite).empty());
+    EXPECT_TRUE(requests(rig.bus, translagatr::kOpProfileApply).empty());
     EXPECT_EQ(client.submitPlacement(1, 1, 1), 0u);
     client.resubmitProfile(); // no effect on a local rejection
     EXPECT_EQ(client.profile().state, ProfileSync::kInvalid);
@@ -245,7 +245,7 @@ TEST(ProfileSync, LocallyInvalidProfileIsNeverSent) {
     FakeBus bus(pi);
     Client  other(bus.brainPort(), [] { return 1u; }, raw);
     EXPECT_EQ(other.profile().state, ProfileSync::kInvalid);
-    EXPECT_EQ(other.profile().reason, gatr2::kProfileReasonFormat);
+    EXPECT_EQ(other.profile().reason, translagatr::kProfileReasonFormat);
 }
 
 TEST(ProfileSync, PiRestartReappliesAndRequiresPlacement) {
@@ -269,24 +269,24 @@ TEST(ProfileSync, InterruptedUploadCompletesInTheNextSession) {
     LinkRig rig(configFor(largeProfile()));
     rig.pi.setProfileMode(true);
     ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.client().profile().received == gatr2::kProfileChunkMax; }, kLimit));
+        [&] { return rig.client().profile().received == translagatr::kProfileChunkMax; }, kLimit));
 
     // Another HELLO takes the session between the chunks. Staging survives.
-    gatr2::BrainRequest hello;
-    hello.op         = gatr2::kOpHello;
+    translagatr::BrainRequest hello;
+    hello.op         = translagatr::kOpHello;
     hello.request_id = 1;
     hello.nonce      = 0xFEEDF00D;
-    ASSERT_EQ(rig.pi.answer(hello).result, gatr2::kResultOk);
+    ASSERT_EQ(rig.pi.answer(hello).result, translagatr::kResultOk);
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().stats().session_losses == 1; }, kLimit));
-    const std::size_t before = requests(rig.bus, gatr2::kOpProfileWrite).size();
+    const std::size_t before = requests(rig.bus, translagatr::kOpProfileWrite).size();
     applied(rig);
 
     // The new session starts at offset 0; the Pi reports the held bytes and
     // only the rest is sent.
-    const auto writes = requests(rig.bus, gatr2::kOpProfileWrite);
+    const auto writes = requests(rig.bus, translagatr::kOpProfileWrite);
     ASSERT_GE(writes.size(), before + 2);
     EXPECT_EQ(writes[before].offset, 0);
-    EXPECT_EQ(writes[before + 1].offset, gatr2::kProfileChunkMax);
+    EXPECT_EQ(writes[before + 1].offset, translagatr::kProfileChunkMax);
     for (std::size_t i = before + 1; i < writes.size(); ++i) {
         EXPECT_GT(writes[i].offset, writes[i - 1].offset);
     }
@@ -303,11 +303,11 @@ TEST(ProfileSync, ReplacedStagingIsRewritten) {
     // Something else staged another document on the Pi.
     const ProfileDocument other = makeProfileDocument(largeProfile());
     rig.pi.replaceStaging(profileId(other), other.len);
-    const std::size_t before = requests(rig.bus, gatr2::kOpProfileWrite).size();
+    const std::size_t before = requests(rig.bus, translagatr::kOpProfileWrite).size();
 
     applied(rig);
     EXPECT_EQ(rig.pi.appliedProfile(), rig.client().profile().id);
-    EXPECT_GT(requests(rig.bus, gatr2::kOpProfileWrite).size(), before); // rewritten
+    EXPECT_GT(requests(rig.bus, translagatr::kOpProfileWrite).size(), before); // rewritten
 }
 
 TEST(ProfileSync, NoProfileConfiguredSendsNothing) {
@@ -317,8 +317,8 @@ TEST(ProfileSync, NoProfileConfiguredSendsNothing) {
     EXPECT_FALSE(client.profileConfigured());
     ASSERT_TRUE(rig.runUntil([&] { return client.ready(); }, kLimit));
     rig.run(0.5);
-    EXPECT_TRUE(requests(rig.bus, gatr2::kOpProfileWrite).empty());
-    EXPECT_TRUE(requests(rig.bus, gatr2::kOpProfileApply).empty());
+    EXPECT_TRUE(requests(rig.bus, translagatr::kOpProfileWrite).empty());
+    EXPECT_TRUE(requests(rig.bus, translagatr::kOpProfileApply).empty());
     EXPECT_NE(client.submitPlacement(1, 1, 1), 0u);
 }
 
@@ -340,21 +340,21 @@ public:
     }
 
     bool write(const uint8_t* data, int len) override {
-        gatr2::BrainRequest request;
-        if (!gatr2::decodeBrainRequest(data, static_cast<uint16_t>(len), request)) {
+        translagatr::BrainRequest request;
+        if (!translagatr::decodeBrainRequest(data, static_cast<uint16_t>(len), request)) {
             return true;
         }
-        gatr2::BrainReply reply = pi_.answer(request);
+        translagatr::BrainReply reply = pi_.answer(request);
         if (hook) {
             hook(request, reply);
         }
-        uint8_t        frame[gatr2::kMaxFrameLen];
-        const uint16_t n = gatr2::encodeBrainReply(reply, frame, sizeof(frame));
+        uint8_t        frame[translagatr::kMaxFrameLen];
+        const uint16_t n = translagatr::encodeBrainReply(reply, frame, sizeof(frame));
         rx_.insert(rx_.end(), frame, frame + n);
         return true;
     }
 
-    std::function<void(const gatr2::BrainRequest&, gatr2::BrainReply&)> hook;
+    std::function<void(const translagatr::BrainRequest&, translagatr::BrainReply&)> hook;
 
 private:
     FakePi&             pi_;
@@ -372,16 +372,16 @@ TEST(ProfileSync, ApplyOkCountsOnlyWithAStateThatShowsIt) {
     HookedPort port(pi);
     int        stage          = 0; // 0 states hide the swap, 1 after the Ok, 2 honest
     int        writes_at_bend = -1;
-    port.hook = [&](const gatr2::BrainRequest& q, gatr2::BrainReply& r) {
-        if (q.op == gatr2::kOpProfileApply && r.result == gatr2::kResultOk && stage == 0) {
+    port.hook = [&](const translagatr::BrainRequest& q, translagatr::BrainReply& r) {
+        if (q.op == translagatr::kOpProfileApply && r.result == translagatr::kResultOk && stage == 0) {
             stage = 1;
             return;
         }
-        if (q.op != gatr2::kOpGetState) {
+        if (q.op != translagatr::kOpGetState) {
             return;
         }
         if (stage == 0) {
-            r.state.profile_state = gatr2::kProfileApplying;
+            r.state.profile_state = translagatr::kProfileApplying;
         } else if (stage == 1) {
             r.state.profile_id ^= 1u; // the first state after the Ok names another profile
             stage          = 2;

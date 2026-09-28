@@ -28,7 +28,7 @@ namespace
 constexpr Seconds kLimit = 5.0;
 constexpr double  kEps   = 1e-9;
 constexpr uint8_t kLocalized =
-    gatr2::kRobotPoseValid | gatr2::kRobotLocalized | gatr2::kRobotAgeKnown;
+    translagatr::kRobotPoseValid | translagatr::kRobotLocalized | translagatr::kRobotAgeKnown;
 
 void openSession(LinkRig& rig) {
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().ready(); }, kLimit));
@@ -42,10 +42,10 @@ void place(LinkRig& rig, const Pose& pose) {
         kLimit));
 }
 
-gatr2::BrainRequest lastSetPose(const FakePi& pi) {
-    gatr2::BrainRequest last;
-    for (const gatr2::BrainRequest& r : pi.requests()) {
-        if (r.op == gatr2::kOpSetPose) {
+translagatr::BrainRequest lastSetPose(const FakePi& pi) {
+    translagatr::BrainRequest last;
+    for (const translagatr::BrainRequest& r : pi.requests()) {
+        if (r.op == translagatr::kOpSetPose) {
             last = r;
         }
     }
@@ -99,13 +99,13 @@ TEST(LinkDriver, StatusFollowsTheDocumentedOrder) {
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().profileApplied(); }, kLimit));
     EXPECT_EQ(statusAfter(rig), RobotStatus::kUnplaced);
 
-    for (uint8_t cal : {gatr2::kCalibrationRunning, gatr2::kCalibrationWaitingStill,
-                        gatr2::kCalibrationWaitingData}) {
+    for (uint8_t cal : {translagatr::kCalibrationRunning, translagatr::kCalibrationWaitingStill,
+                        translagatr::kCalibrationWaitingData}) {
         rig.pi.robot().calibration = cal;
         EXPECT_EQ(statusAfter(rig), RobotStatus::kCalibrating) << int(cal);
     }
-    for (uint8_t cal : {gatr2::kCalibrationNone, gatr2::kCalibrationDone,
-                        gatr2::kCalibrationFailed}) {
+    for (uint8_t cal : {translagatr::kCalibrationNone, translagatr::kCalibrationDone,
+                        translagatr::kCalibrationFailed}) {
         rig.pi.robot().calibration = cal;
         EXPECT_EQ(statusAfter(rig), RobotStatus::kUnplaced) << int(cal);
     }
@@ -119,13 +119,13 @@ TEST(LinkDriver, StatusFollowsTheDocumentedOrder) {
 
     rig.pi.robot().robot_flags = kLocalized; // pose without an anchor origin
     EXPECT_EQ(statusAfter(rig), RobotStatus::kUnplaced);
-    rig.pi.robot().robot_flags = gatr2::kRobotLocalized | gatr2::kRobotAgeKnown |
-                                 gatr2::kRobotAnchorCommand;
+    rig.pi.robot().robot_flags = translagatr::kRobotLocalized | translagatr::kRobotAgeKnown |
+                                 translagatr::kRobotAnchorCommand;
     EXPECT_EQ(statusAfter(rig), RobotStatus::kNoPose);
-    rig.pi.robot().robot_flags = gatr2::kRobotPoseValid | gatr2::kRobotLocalized |
-                                 gatr2::kRobotAnchorCommand;
+    rig.pi.robot().robot_flags = translagatr::kRobotPoseValid | translagatr::kRobotLocalized |
+                                 translagatr::kRobotAnchorCommand;
     EXPECT_EQ(statusAfter(rig), RobotStatus::kNoPose);
-    rig.pi.robot().robot_flags = kLocalized | gatr2::kRobotAnchorCommand;
+    rig.pi.robot().robot_flags = kLocalized | translagatr::kRobotAnchorCommand;
     EXPECT_EQ(statusAfter(rig), RobotStatus::kValid);
 
     // Link down.
@@ -143,7 +143,7 @@ TEST(LinkDriver, ConfiguredAnchorOnlyWhenAccepted) {
     LinkDriverConfig accept;
     accept.accept_configured_anchor = true;
     LinkDriver configured(rig.client(), accept);
-    rig.pi.robot().robot_flags = kLocalized | gatr2::kRobotAnchorConfigured;
+    rig.pi.robot().robot_flags = kLocalized | translagatr::kRobotAnchorConfigured;
     rig.run(0.1);
     EXPECT_EQ(rig.driver().robot(rig.now()).status, RobotStatus::kUnplaced);
     EXPECT_EQ(configured.robot(rig.now()).status, RobotStatus::kValid);
@@ -174,7 +174,7 @@ TEST(LinkDriver, ConvertsWireUnitsAndAges) {
     LinkRig rig({}, bus);
     openSession(rig);
     place(rig, Pose{1.2344, -0.5676, kPi / 2.0});
-    const gatr2::BrainRequest sent = lastSetPose(rig.pi);
+    const translagatr::BrainRequest sent = lastSetPose(rig.pi);
     EXPECT_EQ(sent.x_mm, 1234);
     EXPECT_EQ(sent.y_mm, -568);
     EXPECT_EQ(sent.heading_cdeg, 9000);
@@ -233,11 +233,11 @@ TEST(LinkDriver, FrameGenerationFollowsInstanceSessionEpochAndAnchor) {
     EXPECT_TRUE(rig.driver().robot(rig.now()).valid());
 
     // Another HELLO takes the session. The pose carries over, the frame does not.
-    gatr2::BrainRequest hello;
-    hello.op         = gatr2::kOpHello;
+    translagatr::BrainRequest hello;
+    hello.op         = translagatr::kOpHello;
     hello.request_id = 1;
     hello.nonce      = 0xABCDEF;
-    ASSERT_EQ(rig.pi.answer(hello).result, gatr2::kResultOk);
+    ASSERT_EQ(rig.pi.answer(hello).result, translagatr::kResultOk);
     ASSERT_TRUE(rig.runUntil([&] { return rig.client().stats().session_losses == 1; }, kLimit));
     EXPECT_EQ(frame(), 0u);
     openSession(rig);
@@ -266,13 +266,13 @@ TEST(LinkDriver, FieldCarriesMapObjectsBoxesAndEstimatesInSiUnits) {
     place(rig, Pose{1.0, 1.0, 0.0});
 
     // Landmark 10 observed, landmark 50 lost, the rest nominal.
-    std::vector<gatr2::FieldEstimateRecord> records = rig.pi.nominalRecords();
-    records[0].source       = gatr2::kEstimateSourceObserved;
+    std::vector<translagatr::FieldEstimateRecord> records = rig.pi.nominalRecords();
+    records[0].source       = translagatr::kEstimateSourceObserved;
     records[0].x_mm         = 350;
     records[0].y_mm         = 280;
     records[0].heading_cdeg = -9000;
     records[0].age_ms       = 120;
-    records[4].source       = gatr2::kEstimateSourceNone;
+    records[4].source       = translagatr::kEstimateSourceNone;
     records[4].flags        = 0;
     const Seconds  t_pub    = rig.now();
     const uint32_t id       = rig.pi.publishEstimate(records);
@@ -366,8 +366,8 @@ TEST(LinkDriver, FieldFrameMatchesTheRobotFrameUnderTheSameAnchor) {
 TEST(LinkDriver, EstimateOlderThanTheSessionHasUnknownAge) {
     LinkRig rig;
     rig.pi.setField(makeFakeField(2));
-    std::vector<gatr2::FieldEstimateRecord> records = rig.pi.nominalRecords();
-    records[0].source = gatr2::kEstimateSourceObserved;
+    std::vector<translagatr::FieldEstimateRecord> records = rig.pi.nominalRecords();
+    records[0].source = translagatr::kEstimateSourceObserved;
     records[0].age_ms = 10;
     rig.pi.publishEstimate(records); // before the Brain connects
     openSession(rig);
@@ -414,7 +414,7 @@ TEST(LinkDriver, PathSinkReportsTranslationEndPoints) {
     ASSERT_TRUE(rig.runUntil([&] { return rig.pi.path().have; }, kLimit));
     const FakePath& got = rig.pi.path();
     EXPECT_EQ(got.command_id, 42u);
-    EXPECT_EQ(got.mode, gatr2::kPathAvoiding);
+    EXPECT_EQ(got.mode, translagatr::kPathAvoiding);
     ASSERT_EQ(got.points.size(), 3u);
     EXPECT_EQ(got.points[0].x_mm, 100);
     EXPECT_EQ(got.points[0].y_mm, 200);
@@ -425,7 +425,7 @@ TEST(LinkDriver, PathSinkReportsTranslationEndPoints) {
     path.mode = investigatr::PlanMode::kDirect;
     sink.reportPath(43, path);
     ASSERT_TRUE(rig.runUntil([&] { return rig.pi.path().command_id == 43; }, kLimit));
-    EXPECT_EQ(rig.pi.path().mode, gatr2::kPathDirect);
+    EXPECT_EQ(rig.pi.path().mode, translagatr::kPathDirect);
     sink.reportPath(43, investigatr::Path{});
     ASSERT_TRUE(rig.runUntil([&] { return !rig.pi.path().have; }, kLimit));
 }
@@ -442,7 +442,7 @@ TEST(LinkDriver, LongPathsAreThinnedAndNonFinitePathsDropped) {
     }
     rig.driver().reportPath(7, path);
     ASSERT_TRUE(rig.runUntil([&] { return rig.pi.path().have; }, kLimit));
-    ASSERT_EQ(rig.pi.path().points.size(), gatr2::kPathReportMaxPoints);
+    ASSERT_EQ(rig.pi.path().points.size(), translagatr::kPathReportMaxPoints);
     EXPECT_EQ(rig.pi.path().points.front().x_mm, 0);
     EXPECT_EQ(rig.pi.path().points.back().x_mm, 3000);
 

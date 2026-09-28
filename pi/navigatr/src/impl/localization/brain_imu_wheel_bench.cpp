@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "math/angles.h"
+#include "math/quaternion.h"
 #include "payloads/robot_observations.h"
 #include "resources/resource_store.h"
 #include "resources/wheel_geometry.h"
@@ -43,6 +44,14 @@ BrainImuWheelBench::create(const ConfigNode& node, RobotObservationInitializatio
         ResourceId{node.child("Imu").attr("resource_id")}, err);
     if (!model->imu_) {
         return nullptr;
+    }
+    const ConfigNode attitude = node.child("Attitude");
+    if (attitude.valid()) {
+        model->attitude_output_ = ObservationId{attitude.attr("observation_id")};
+        if (model->attitude_output_.empty() || model->attitude_output_ == model->output_) {
+            err = attitude.path() + ": Attitude needs its own observation_id";
+            return nullptr;
+        }
     }
 
     // Inline TrackingWheel elements or a Wheels reference to wheel_geometry.
@@ -183,8 +192,36 @@ BrainImuWheelBench::create(const ConfigNode& node, RobotObservationInitializatio
 }
 
 std::vector<RobotObservationOutputDecl> BrainImuWheelBench::outputs() const {
-    return {{output_,
-             PayloadDescriptor::of<BodyMotionIncrement>(payload_names::kBodyMotionIncrement)}};
+    std::vector<RobotObservationOutputDecl> out = {
+        {output_, PayloadDescriptor::of<BodyMotionIncrement>(payload_names::kBodyMotionIncrement)}};
+    if (!attitude_output_.empty()) {
+        out.push_back({attitude_output_, PayloadDescriptor::of<AttitudeObservation>(
+                                             payload_names::kAttitudeObservation)});
+    }
+    return out;
+}
+
+void BrainImuWheelBench::publishAttitude(RobotObservationMap& out) {
+    if (attitude_output_.empty() || !imu_->attitude_valid ||
+        imu_->attitude_sequence == attitude_sequence_ ||
+        imu_->attitude_received.domain != ClockDomain::kHost) {
+        return;
+    }
+    attitude_sequence_ = imu_->attitude_sequence;
+    AttitudeObservation a;
+    a.q_reference_body = quaternionFromEuler(cdegToRad(imu_->roll_cdeg),
+                                             cdegToRad(imu_->pitch_cdeg), 0.0);
+    a.reference  = "gravity";
+    a.has_yaw    = false;
+    a.measuredAt = imu_->attitude_received;   // Pi arrival: the bench time base
+    a.source     = Provenance{"brain_vex_imu", "brain.vex_imu.attitude", "host",
+                          imu_->attitude_sequence, imu_->epoch};
+    a.quality    = 1.0;   // measured by the VEX IMU; no quality estimate exists
+    RobotObservationRecord record;
+    record.measuredAt = a.measuredAt;
+    record.receivedAt = a.measuredAt;
+    record.payload    = TypedPayload::store(std::move(a), payload_names::kAttitudeObservation);
+    out[attitude_output_] = std::move(record);
 }
 
 ObservationReadiness BrainImuWheelBench::readiness() const {
@@ -241,6 +278,7 @@ void BrainImuWheelBench::observeStillness(const std::array<const StoredSample*, 
 }
 
 FunctionStatus BrainImuWheelBench::run(const RobotObservationInput& in, RobotObservationMap& out) {
+    publishAttitude(out);   // independent of the motion step below
     const auto fresh = [&](MonotonicTime t) {
         return t.domain == ClockDomain::kHost && in.context.now.domain == ClockDomain::kHost &&
                in.context.now.ms >= t.ms && in.context.now.ms - t.ms <= max_age_ms_;

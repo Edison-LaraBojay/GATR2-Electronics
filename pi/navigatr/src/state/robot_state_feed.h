@@ -7,6 +7,7 @@
 
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -17,6 +18,8 @@
 
 namespace navigatr
 {
+
+class DiagnosticsHub;
 
 // Per observation function readiness, for publishers and inspection.
 struct ObservationFunctionStatus {
@@ -84,6 +87,11 @@ class RobotStateFeed : public PoseLookup
 public:
     explicit RobotStateFeed(PoseHistoryConfig history = {}) : history_(history) {}
 
+    // The capture tap: while the hub wants robot states, every publish also
+    // posts one small record (after the feed lock is released). Set once,
+    // before publishing starts; null (the default) posts nothing.
+    void setDiagnostics(std::shared_ptr<DiagnosticsHub> hub);
+
     // Writer side.
     void publish(const RobotState& state, const LocalizationStatus& status,
                  bool append_history, uint64_t publication);
@@ -110,6 +118,9 @@ private:
     LocalizationStatus status_;
     PoseHistory        history_;
     uint64_t           publication_ = 0;
+
+    std::shared_ptr<DiagnosticsHub> hub_;
+    uint16_t                        hub_source_ = 0;
 };
 
 } // namespace navigatr

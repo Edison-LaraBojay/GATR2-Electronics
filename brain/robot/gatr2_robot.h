@@ -46,6 +46,20 @@ constexpr Setup kSetup = Setup::kTwoWheelVexImu;
 // VEX IMU, read by the Brain (kTwoWheelVexImu only).
 constexpr uint8_t kVexImuPort = 1;
 
+// VEX IMU mounting for the viewer's roll and pitch: the direction its +x
+// axis points in the robot frame, CCW from forward, degrees (0, 90, 180 or
+// 270; the IMU lies flat). PLACEHOLDER. Heading and localization do not use
+// it. Check with the bench test in docs/brain_setup.md.
+constexpr double kVexImuMountYawDeg = 0.0;
+
+// TELEMETRY to the Pi for the viewer and recordings: attitude from the VEX
+// IMU, and from operaGATR the movement and wheel targets. Display only; the
+// Pi never uses it for localization. false sends nothing. Each TELEMETRY
+// exchange can push the next state poll back by about 10 to 15 ms, one
+// exchange plus the 5 ms gap (docs/communigatr.md).
+constexpr bool     kSendTelemetry     = true;
+constexpr uint32_t kTelemetryPeriodMs = 100;
+
 // ---------------------------------------------------------------------------
 // Tracking wheels (not the driven wheels). Port = naviGATR encoder port:
 // 0 J2, 1 J3, 2 J4 on HAT v2.
@@ -54,7 +68,7 @@ constexpr uint8_t kVexImuPort = 1;
 //   encoder    counts_per_rev of the encoder shaft, reversed (encoder
 //              polarity), gear_ratio (encoder turns per wheel turn)
 //   geometry   radius, x, y (contact point), angle (measuring direction)
-//   measured   travel_scale from the wheel calibration in localization-test;
+//   measured   travel_scale from the wheel calibration in locaGATR;
 //              keep 1.0 until calibrated, never use it to hide a wrong radius
 // ---------------------------------------------------------------------------
 constexpr double   kTrackingRadius = 0.024; // UNMEASURED, provisional 48 mm wheel
@@ -158,6 +172,7 @@ constexpr investigatr::Pose kStartPose{kStartX, kStartY, kStartHeadingDegrees * 
 
 static_assert(kLinkPort >= 1 && kLinkPort <= 21, "Smart Port 1..21");
 static_assert(kVexImuPort >= 1 && kVexImuPort <= 21, "Smart Port 1..21");
+static_assert(kVexImuMountYawDeg >= -360.0 && kVexImuMountYawDeg <= 360.0, "degrees");
 static_assert(kUseUsb || !usesVexImu() || kVexImuPort != kLinkPort,
               "VEX IMU and RS-485 link on one Smart Port");
 

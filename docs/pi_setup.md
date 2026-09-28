@@ -19,10 +19,10 @@ Pi needs the config that matches the Brain's link:
 
 That is the only Brain setting the Pi must match; nothing detects the
 transport automatically. Build and upload the
-[Brain localization-test app](brain_setup.md#2-build-and-upload); the Pi service
+[Brain locaGATR app](brain_setup.md#2-build-and-upload); the Pi service
 does not start a program on the Brain. See
-[Brain robot profiles](../pi/navigatr/docs/brain_profile.md) for what the Pi does
-with the profile and [USB bench](../pi/navigatr/docs/usb_localization_bench.md)
+[Brain robot profiles](../pi/naviGATR/docs/brain_profile.md) for what the Pi does
+with the profile and [USB bench](../pi/naviGATR/docs/usb_localization_bench.md)
 for the bench procedure.
 
 ## 1. Get the Pi online once, over Ethernet
@@ -66,7 +66,7 @@ changes that have not been committed and pushed. To copy the current Pi program
 and shared protocol from Windows, run these in the repository's top directory:
 
 ```powershell
-tar.exe -czf "$env:TEMP\navigatr-source.tar.gz" --exclude=build --exclude=build-* --exclude=.pio pi/navigatr common
+tar.exe -czf "$env:TEMP\navigatr-source.tar.gz" --exclude=build --exclude=build-* --exclude=.pio pi/naviGATR common
 scp "$env:TEMP\navigatr-source.tar.gz" YOUR_USER@PI_ROUTER_IP:/tmp/navigatr-source.tar.gz
 ```
 
@@ -75,7 +75,7 @@ Then on the Pi:
 ```sh
 mkdir -p ~/GATR2-Electronics
 tar -xzf /tmp/navigatr-source.tar.gz -C ~/GATR2-Electronics
-cd ~/GATR2-Electronics/pi/navigatr
+cd ~/GATR2-Electronics/pi/naviGATR
 cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release \
   -DNAVIGATR_BUILD_TESTS=OFF -DNAVIGATR_WITH_LIBCAMERA=OFF
 cmake --build build-bench -j2
@@ -131,7 +131,7 @@ does not stop unrelated processes. From the Pi's program directory, install the
 service as your normal Pi account:
 
 ```sh
-cd ~/GATR2-Electronics/pi/navigatr
+cd ~/GATR2-Electronics/pi/naviGATR
 sudo bash tools/install_service.sh --user "$USER"
 sudo systemctl status navigatr --no-pager
 sudo journalctl -u navigatr -n 50 --no-pager
@@ -241,7 +241,7 @@ ssh -L 8765:127.0.0.1:8765 YOUR_USER@192.168.50.2
 Open **http://127.0.0.1:8765/** on Windows. Keep this SSH window open while viewing.
 To forward the viewer without an interactive terminal, add `-N`. Closing the
 viewer or disconnecting Ethernet does not stop the Pi service. The
-[inspection guide](../pi/navigatr/docs/inspection.md) explains the field, pose,
+[inspection guide](../pi/naviGATR/docs/inspection.md) explains the field, pose,
 Brain link readiness and diagnostics. The Brain-profile configs have no live
 camera or AprilTag updates.
 

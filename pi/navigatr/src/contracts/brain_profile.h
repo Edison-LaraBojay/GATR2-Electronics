@@ -15,8 +15,8 @@
 #include <string>
 #include <vector>
 
-#include "common/frames.h"
-#include "common/link_documents.h"
+#include "translaGATR/frames.h"
+#include "translaGATR/link_documents.h"
 #include "core/ids.h"
 #include "core/time.h"
 #include "resources/brain_imu_bench.h"
@@ -27,7 +27,7 @@ namespace navigatr
 // What the running profile uses, fixed from one apply to the next.
 struct ProfileBinding {
     uint32_t               id = 0;
-    gatr2::RobotProfileDoc profile;
+    translagatr::RobotProfileDoc profile;
     uint64_t               generation = 0;   // counts applies
 
     std::vector<SensorId>          encoders;    // one per profile wheel, profile order
@@ -43,15 +43,15 @@ public:
     virtual ~BrainProfileHost() = default;
 
     // Capability checks and candidate build. False: reason is a
-    // gatr2::ProfileReason, detail the wheel or camera index.
-    virtual bool prepare(const gatr2::RobotProfileDoc& profile, uint32_t profile_id,
+    // translagatr::ProfileReason, detail the wheel or camera index.
+    virtual bool prepare(const translagatr::RobotProfileDoc& profile, uint32_t profile_id,
                          uint8_t& reason, uint8_t& detail) = 0;
 
     // The running profile; null before the first apply.
     virtual std::shared_ptr<const ProfileBinding> applied() const = 0;
 
-    // CONTROL action (gatr2::ControlAction). Returns a gatr2::BrainResult;
-    // detail is a gatr2::ControlDetail. Pending: the Pico is still working.
+    // CONTROL action (translagatr::ControlAction). Returns a translagatr::BrainResult;
+    // detail is a translagatr::ControlDetail. Pending: the Pico is still working.
     virtual uint8_t control(uint8_t action, uint8_t arg, MonotonicTime now,
                             uint8_t& detail) = 0;
 
@@ -61,9 +61,9 @@ public:
                                     uint8_t& detail) = 0;
 
     // READ_WHEELS: one reading per profile wheel, profile order, into
-    // wheels[0..count). A gatr2::BrainResult; NotReady before an apply.
+    // wheels[0..count). A translagatr::BrainResult; NotReady before an apply.
     virtual uint8_t readWheels(MonotonicTime now, uint8_t& count,
-                               gatr2::WheelReading* wheels) = 0;
+                               translagatr::WheelReading* wheels) = 0;
 };
 
 } // namespace navigatr

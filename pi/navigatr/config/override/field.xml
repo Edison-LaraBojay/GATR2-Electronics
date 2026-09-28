@@ -31,7 +31,7 @@
     the Brain names; printed tag ids repeat), and CollisionBox elements.
     Only an element with a CollisionBox is an obstacle. Every value is
     provisional, with its source in the note. After editing any of it,
-    bump revision and regenerate brain/testing/include/field_references.h
+    bump revision and regenerate brain/operaGATR/include/field_references.h
     (build target field_references); navigatr_tests fails while the
     header is stale.
     -->

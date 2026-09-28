@@ -90,6 +90,7 @@ std::optional<ResourceBuild> make_resources(const ConfigNode&         node,
                                             std::vector<std::string>* warnings,
                                             std::string&              err) {
     ResourceStoreBuilder builder(functions, warnings);
+    builder.setDiagnostics(options.diagnostics);
 
     // index everything first so declaration order never matters
     if (node.valid()) {

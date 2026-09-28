@@ -35,7 +35,7 @@ three wheels with or without the Pico IMU. No camera or AprilTags are needed.
    change for the Pi.
 3. Before a Brain connects the Pi waits: the log and the viewer show no pose,
    profile none, and the raw encoder counts in the sources table.
-4. Start the Brain program (`brain/localization-test` or `brain/testing`, see
+4. Start the Brain program (`brain/locaGATR` or `brain/operaGATR`, see
    [Brain setup](../../../docs/brain_setup.md)). It sends the profile; the Pi
    logs `event: profile <id> applied (...)` with the wheels, IMU and footprint,
    or the refusal reason. Hold the robot still while the IMU starts.
@@ -91,12 +91,12 @@ On the Pi, install the build and camera tools and obtain this repository:
 sudo apt update
 sudo apt install git build-essential cmake pkg-config libcamera-dev rpicam-apps libgtest-dev
 git clone <repository-clone-url> GATR2-Electronics
-cd GATR2-Electronics/pi/navigatr
+cd GATR2-Electronics/pi/naviGATR
 ```
 
 An existing `rpicam-apps-lite` installation is also sufficient for headless
 camera checks. Unless a block says otherwise, subsequent Pi commands run from
-`GATR2-Electronics/pi/navigatr`. Reuse an existing checkout instead of cloning
+`GATR2-Electronics/pi/naviGATR`. Reuse an existing checkout instead of cloning
 over it. See [Pi access](../../../docs/pi_setup.md) for SSH troubleshooting.
 
 ### Pico firmware and wiring
@@ -106,12 +106,12 @@ on the development computer, open this repository's `pico` project, and run from
 its PlatformIO terminal:
 
 ```sh
-cd pico
+cd pico/aggreGATR
 pio run -e hat2_bno08x
 pio run -e hat2_bno08x --target upload
 ```
 
-Use the board revision's schematic and [Pico pin map](../../../pico/src/board.h)
+Use the board revision's schematic and [Pico pin map](../../../pico/aggreGATR/src/board.h)
 for connections. The firmware reads the encoder A/B quadrature channels and the
 IMU through the Pico: `hat2_bno08x` for the BNO08X, `hat2_asm330` for the
 ASM330. It sends binary telemetry to the Pi at 115200 baud. [Pico firmware](../../../pico/README.md) and
@@ -341,7 +341,7 @@ frames, including frames containing no AprilTags. JPEG is lossy even at quality
 whose dimensions do not match the requested calibration dimensions.
 
 On your **viewing computer**, with a checkout of this repository and the SSH
-tunnel running, change to `pi/navigatr`. Create an isolated Python environment:
+tunnel running, change to `pi/naviGATR`. Create an isolated Python environment:
 
 ```sh
 python3 -m venv build-camera-tools/venv

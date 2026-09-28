@@ -188,7 +188,7 @@ Display metadata (`Dimensions`, `Feature`,
 
 ## Build
 
-Host (Windows, Git Bash, from `pi/navigatr`):
+Host (Windows, Git Bash, from `pi/naviGATR`):
 
 ```text
 export PATH=/c/msys64/ucrt64/bin:$PATH
@@ -197,7 +197,7 @@ cmake --build build -j8
 ctest --test-dir build --output-on-failure
 ```
 
-Pi (Raspberry Pi OS, from `pi/navigatr`; packages in the Pi camera setup
+Pi (Raspberry Pi OS, from `pi/naviGATR`; packages in the Pi camera setup
 document):
 
 ```text

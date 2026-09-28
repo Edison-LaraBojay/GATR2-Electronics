@@ -6,6 +6,7 @@ get_filename_component(GATR2_REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../.. ABSOLUT
 
 # Library.
 add_library(communigatr STATIC
+    src/attitude.cpp
     src/client.cpp
     src/doc_assembly.cpp
     src/link_driver.cpp
@@ -16,8 +17,8 @@ add_library(communigatr STATIC
     src/usb_line.cpp
     src/vex_imu_recalibration.cpp
     src/wheel_calibration.cpp
-    ${GATR2_REPO_ROOT}/common/frame_codec.cpp
-    ${GATR2_REPO_ROOT}/common/link_documents.cpp
+    ${GATR2_REPO_ROOT}/translaGATR/frame_codec.cpp
+    ${GATR2_REPO_ROOT}/translaGATR/link_documents.cpp
 )
 target_include_directories(communigatr PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -54,6 +55,8 @@ set(COMMUNIGATR_TEST_SOURCES
     tests/wheel_calibration_gtest.cpp
     tests/startup_placement_gtest.cpp
     tests/link_events_gtest.cpp
+    tests/attitude_gtest.cpp
+    tests/client_telemetry_gtest.cpp
 )
 
 add_executable(communigatr_tests ${COMMUNIGATR_TEST_SOURCES})

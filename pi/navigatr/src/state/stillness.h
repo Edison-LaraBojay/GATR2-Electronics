@@ -11,7 +11,7 @@
 namespace navigatr
 {
 
-// Values equal gatr2::CalibrationState.
+// Values equal translagatr::CalibrationState.
 enum class BiasCalibration : uint8_t {
     kNone         = 0,   // nothing to calibrate
     kRunning      = 1,   // collecting a stationary window

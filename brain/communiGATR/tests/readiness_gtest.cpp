@@ -19,7 +19,7 @@ namespace
 
 constexpr Seconds kLimit = 5.0;
 
-constexpr uint8_t kSensorsFresh = gatr2::kHealthEncodersFresh | gatr2::kHealthGyroFresh;
+constexpr uint8_t kSensorsFresh = translagatr::kHealthEncodersFresh | translagatr::kHealthGyroFresh;
 
 RobotProfile profileWith(LocalizationTopology topology, ImuSource imu) {
     RobotProfile p;
@@ -74,7 +74,7 @@ TEST(ReadinessNames, EveryStateHasItsOwnName) {
     EXPECT_EQ(names.size(), static_cast<std::size_t>(Readiness::kReady) + 1);
     EXPECT_EQ(names.count("?"), 0u);
     EXPECT_STREQ(toString(Readiness::kReady), "ready");
-    for (uint8_t c = gatr2::kCalibrationNone; c <= gatr2::kCalibrationFailed; ++c) {
+    for (uint8_t c = translagatr::kCalibrationNone; c <= translagatr::kCalibrationFailed; ++c) {
         EXPECT_STRNE(calibrationName(c), "?");
     }
     EXPECT_STREQ(calibrationName(99), "?");
@@ -89,14 +89,14 @@ TEST(ReadinessNames, HealthBitsDecodeOneByOne) {
         uint8_t bit;
         bool HealthBits::*field;
     } bits[] = {
-        {gatr2::kHealthEncodersFresh, &HealthBits::encoders_fresh},
-        {gatr2::kHealthGyroFresh, &HealthBits::imu_fresh},
-        {gatr2::kHealthVisionAlive, &HealthBits::vision_alive},
-        {gatr2::kHealthBiasCalibrated, &HealthBits::bias_calibrated},
-        {gatr2::kHealthPicoLink, &HealthBits::pico_link},
-        {gatr2::kHealthImuInitializing, &HealthBits::imu_initializing},
-        {gatr2::kHealthImuFailed, &HealthBits::imu_failed},
-        {gatr2::kHealthStationary, &HealthBits::stationary},
+        {translagatr::kHealthEncodersFresh, &HealthBits::encoders_fresh},
+        {translagatr::kHealthGyroFresh, &HealthBits::imu_fresh},
+        {translagatr::kHealthVisionAlive, &HealthBits::vision_alive},
+        {translagatr::kHealthBiasCalibrated, &HealthBits::bias_calibrated},
+        {translagatr::kHealthPicoLink, &HealthBits::pico_link},
+        {translagatr::kHealthImuInitializing, &HealthBits::imu_initializing},
+        {translagatr::kHealthImuFailed, &HealthBits::imu_failed},
+        {translagatr::kHealthStationary, &HealthBits::stationary},
     };
     for (const auto& b : bits) {
         const HealthBits h   = decodeHealth(b.bit);
@@ -149,11 +149,11 @@ TEST_F(ReadinessSummary, ProfilePendingThenRejectedByThePi) {
     config.profile = makeProfileDocument(
         profileWith(LocalizationTopology::kTwoWheelImu, ImuSource::kPico));
     start(config);
-    rig.pi.setProfileRejection(gatr2::kProfileReasonEncoderPort, 1);
+    rig.pi.setProfileRejection(translagatr::kProfileReasonEncoderPort, 1);
     rig.pi.setProfileApplyDelay(0);
     ASSERT_TRUE(reach(Readiness::kProfilePending));
     ASSERT_TRUE(reach(Readiness::kProfileRejected));
-    EXPECT_EQ(rig.client().profile().reason, gatr2::kProfileReasonEncoderPort);
+    EXPECT_EQ(rig.client().profile().reason, translagatr::kProfileReasonEncoderPort);
 }
 
 TEST_F(ReadinessSummary, ProfileRefusedByTheBrainCheckIsRejectedAtOnce) {
@@ -181,12 +181,12 @@ TEST_F(ReadinessSummary, VexProfileIgnoresThePicoImuAndWaitsForTheBrainImu) {
     start(config);
 
     // No encoders yet.
-    rig.pi.robot().health = gatr2::kHealthGyroFresh;
+    rig.pi.robot().health = translagatr::kHealthGyroFresh;
     ASSERT_TRUE(reach(Readiness::kSensorsUnavailable));
 
     // The VEX IMU calibrating on the Brain: the Pi sees no fresh IMU.
     brain_calibrating     = true;
-    rig.pi.robot().health = gatr2::kHealthEncodersFresh;
+    rig.pi.robot().health = translagatr::kHealthEncodersFresh;
     ASSERT_TRUE(reach(Readiness::kSensorsInitializing));
     EXPECT_TRUE(rig.driver().readiness(rig.now()).brain_imu_calibrating);
 
@@ -195,7 +195,7 @@ TEST_F(ReadinessSummary, VexProfileIgnoresThePicoImuAndWaitsForTheBrainImu) {
     ASSERT_TRUE(reach(Readiness::kSensorsUnavailable));
 
     // A broken external IMU on the Pico does not matter to this profile.
-    rig.pi.robot().health = kSensorsFresh | gatr2::kHealthImuFailed | gatr2::kHealthImuInitializing;
+    rig.pi.robot().health = kSensorsFresh | translagatr::kHealthImuFailed | translagatr::kHealthImuInitializing;
     ASSERT_TRUE(reach(Readiness::kNeedsPlacement));
     const LinkReadiness r = rig.driver().readiness(rig.now());
     EXPECT_EQ(r.imu, ImuUse::kBrainVex);
@@ -209,14 +209,14 @@ TEST_F(ReadinessSummary, PicoProfileFollowsImuHealthAndCalibration) {
     config.profile = makeProfileDocument(
         profileWith(LocalizationTopology::kTwoWheelImu, ImuSource::kPico));
     start(config);
-    rig.pi.robot().health = gatr2::kHealthEncodersFresh | gatr2::kHealthImuInitializing;
+    rig.pi.robot().health = translagatr::kHealthEncodersFresh | translagatr::kHealthImuInitializing;
     ASSERT_TRUE(reach(Readiness::kSensorsInitializing));
-    rig.pi.robot().health = gatr2::kHealthEncodersFresh | gatr2::kHealthImuFailed;
+    rig.pi.robot().health = translagatr::kHealthEncodersFresh | translagatr::kHealthImuFailed;
     ASSERT_TRUE(reach(Readiness::kSensorsUnavailable));
-    rig.pi.robot().health = kSensorsFresh | gatr2::kHealthImuFailed; // failure outranks freshness
+    rig.pi.robot().health = kSensorsFresh | translagatr::kHealthImuFailed; // failure outranks freshness
     rig.run(0.1);
     EXPECT_EQ(now(), Readiness::kSensorsUnavailable);
-    rig.pi.robot().health = gatr2::kHealthEncodersFresh; // IMU not fresh
+    rig.pi.robot().health = translagatr::kHealthEncodersFresh; // IMU not fresh
     rig.run(0.1);
     EXPECT_EQ(now(), Readiness::kSensorsUnavailable);
 
@@ -225,11 +225,11 @@ TEST_F(ReadinessSummary, PicoProfileFollowsImuHealthAndCalibration) {
         uint8_t                calibration;
         Readiness expected;
     } steps[] = {
-        {gatr2::kCalibrationRunning, Readiness::kCalibrating},
-        {gatr2::kCalibrationWaitingStill, Readiness::kWaitingStill},
-        {gatr2::kCalibrationWaitingData, Readiness::kCalibrating},
-        {gatr2::kCalibrationFailed, Readiness::kCalibrationFailed},
-        {gatr2::kCalibrationDone, Readiness::kNeedsPlacement},
+        {translagatr::kCalibrationRunning, Readiness::kCalibrating},
+        {translagatr::kCalibrationWaitingStill, Readiness::kWaitingStill},
+        {translagatr::kCalibrationWaitingData, Readiness::kCalibrating},
+        {translagatr::kCalibrationFailed, Readiness::kCalibrationFailed},
+        {translagatr::kCalibrationDone, Readiness::kNeedsPlacement},
     };
     for (const auto& s : steps) {
         rig.pi.setCalibrationRequests(0); // hold the scripted state
@@ -246,7 +246,7 @@ TEST_F(ReadinessSummary, ThreeWheelsWithoutImuNeedNoImuHealth) {
     config.profile =
         makeProfileDocument(profileWith(LocalizationTopology::kThreeWheel, ImuSource::kNone));
     start(config);
-    rig.pi.robot().health = gatr2::kHealthEncodersFresh | gatr2::kHealthImuFailed;
+    rig.pi.robot().health = translagatr::kHealthEncodersFresh | translagatr::kHealthImuFailed;
     ASSERT_TRUE(reach(Readiness::kNeedsPlacement));
     EXPECT_EQ(rig.driver().readiness(rig.now()).imu, ImuUse::kNone);
 }
@@ -271,17 +271,17 @@ TEST_F(ReadinessSummary, PlacementInFlightAndFirstPoseAreNotReady) {
     ASSERT_TRUE(rig.runUntil([&] { return !rig.client().placementPending(); }, kLimit));
 
     // Placed but the estimator has no pose yet.
-    rig.pi.robot().robot_flags = gatr2::kRobotLocalized | gatr2::kRobotAnchorCommand;
+    rig.pi.robot().robot_flags = translagatr::kRobotLocalized | translagatr::kRobotAnchorCommand;
     ASSERT_TRUE(reach(Readiness::kSensorsInitializing));
-    rig.pi.robot().robot_flags |= gatr2::kRobotPoseValid | gatr2::kRobotAgeKnown;
+    rig.pi.robot().robot_flags |= translagatr::kRobotPoseValid | translagatr::kRobotAgeKnown;
     ASSERT_TRUE(reach(Readiness::kReady));
 }
 
 TEST_F(ReadinessSummary, WithoutABrainProfileOnlyEncodersAndPlacementCount) {
     start(ClientConfig{}, false);
-    rig.pi.robot().health      = gatr2::kHealthEncodersFresh;
-    rig.pi.robot().robot_flags = gatr2::kRobotPoseValid | gatr2::kRobotAgeKnown |
-                                 gatr2::kRobotLocalized | gatr2::kRobotAnchorConfigured;
+    rig.pi.robot().health      = translagatr::kHealthEncodersFresh;
+    rig.pi.robot().robot_flags = translagatr::kRobotPoseValid | translagatr::kRobotAgeKnown |
+                                 translagatr::kRobotLocalized | translagatr::kRobotAnchorConfigured;
     ASSERT_TRUE(reach(Readiness::kNeedsPlacement));
     EXPECT_EQ(rig.driver().readiness(rig.now()).imu, ImuUse::kUnknown);
     // The Pi's configured anchor counts only when accepted.

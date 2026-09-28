@@ -24,7 +24,7 @@ constexpr uint32_t kNoInputMs = 5;    // receive task after an empty or failed r
 constexpr uint32_t kStopWaitMs = 50;  // destructor wait for the tasks
 
 struct UsbFrame {
-    uint8_t  bytes[gatr2::kMaxFrameLen] = {};
+    uint8_t  bytes[translagatr::kMaxFrameLen] = {};
     uint16_t size                       = 0;
     uint32_t queued_at_ms               = 0;
 };
@@ -244,7 +244,7 @@ int ProsUsbPort::read(uint8_t* buf, int max) {
 }
 
 bool ProsUsbPort::write(const uint8_t* data, int len) {
-    if (len < 0 || len > static_cast<int>(gatr2::kMaxFrameLen) || !isOpen()) {
+    if (len < 0 || len > static_cast<int>(translagatr::kMaxFrameLen) || !isOpen()) {
         return false;
     }
     if (len == 0) {

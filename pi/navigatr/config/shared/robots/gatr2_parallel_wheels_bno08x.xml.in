@@ -28,7 +28,7 @@ the robot drives forward). Encoder invert stays false so there is one sign
 knob per wheel.
 
 Known values already filled in: Pico link /dev/ttyAMA0 at 115200
-(pico/src/board.h) and brain link UART5 /dev/ttyAMA5 at 115200 with RS-485
+(pico/aggreGATR/src/board.h) and brain link UART5 /dev/ttyAMA5 at 115200 with RS-485
 driver enable on GPIO 6 (docs/hardware.md).
 
 The camera stack lives in gatr2_front_camera.xml, used only by the camera

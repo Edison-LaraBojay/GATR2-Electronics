@@ -9,7 +9,7 @@
 #include <memory>
 #include <string>
 
-#include "common/frame_codec.h"
+#include "translaGATR/frame_codec.h"
 #include "core/diagnostics.h"
 #include "impl/localization/weighted_planar_fusion.h"
 #include "impl/resources/serial_links.h"
@@ -1207,15 +1207,15 @@ const char* kTwoWheelsTwoImuIds = R"(
 
 std::vector<uint8_t> sensorPacket(uint8_t seq, uint32_t stamp_ms, int32_t enc0, int32_t enc1,
                                   int32_t gyro_mdps) {
-    gatr2::SensorSample s{};
+    translagatr::SensorSample s{};
     s.seq      = seq;
     s.stamp_ms = stamp_ms;
-    s.mask     = gatr2::kSensorEnc0 | gatr2::kSensorEnc1 | gatr2::kSensorGyroZ;
+    s.mask     = translagatr::kSensorEnc0 | translagatr::kSensorEnc1 | translagatr::kSensorGyroZ;
     s.enc[0]   = enc0;
     s.enc[1]   = enc1;
     s.gyro_z   = gyro_mdps;
-    std::vector<uint8_t> buf(gatr2::kMaxFrameLen);
-    buf.resize(gatr2::encodeSensorFrame(s, buf.data(), gatr2::kMaxFrameLen));
+    std::vector<uint8_t> buf(translagatr::kMaxFrameLen);
+    buf.resize(translagatr::encodeSensorFrame(s, buf.data(), translagatr::kMaxFrameLen));
     return buf;
 }
 

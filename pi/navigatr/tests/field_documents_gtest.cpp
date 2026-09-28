@@ -19,8 +19,8 @@
 #include <utility>
 #include <vector>
 
-#include "common/frame_codec.h"
-#include "common/link_documents.h"
+#include "translaGATR/frame_codec.h"
+#include "translaGATR/link_documents.h"
 #include "impl/publishing/field_documents.h"
 #include "impl/resources/serial_links.h"
 #include "math/angles.h"
@@ -88,9 +88,9 @@ FieldObjectState observedAt(const Pose2D& T_odom, uint64_t epoch, int64_t seen_m
     return s;
 }
 
-gatr2::FieldEstimateRecord recordFor(const std::vector<gatr2::FieldEstimateRecord>& records,
+translagatr::FieldEstimateRecord recordFor(const std::vector<translagatr::FieldEstimateRecord>& records,
                                      uint16_t id) {
-    for (const gatr2::FieldEstimateRecord& r : records) {
+    for (const translagatr::FieldEstimateRecord& r : records) {
         if (r.object_id == id) {
             return r;
         }
@@ -102,10 +102,10 @@ gatr2::FieldEstimateRecord recordFor(const std::vector<gatr2::FieldEstimateRecor
 // The newest estimate through FieldDocuments::read, chunk by chunk.
 std::vector<uint8_t> wholeEstimate(const FieldDocuments& docs) {
     std::vector<uint8_t> bytes;
-    gatr2::BrainReply    reply;
+    translagatr::BrainReply    reply;
     for (uint16_t offset = 0;;) {
-        if (docs.read(gatr2::kDocFieldEstimate, docs.estimateId(), offset, gatr2::kDocChunkMax,
-                      reply) != gatr2::kResultOk) {
+        if (docs.read(translagatr::kDocFieldEstimate, docs.estimateId(), offset, translagatr::kDocChunkMax,
+                      reply) != translagatr::kResultOk) {
             ADD_FAILURE() << "estimate read refused at " << offset;
             return bytes;
         }
@@ -119,24 +119,24 @@ std::vector<uint8_t> wholeEstimate(const FieldDocuments& docs) {
 
 // ---- wire --------------------------------------------------------------------
 
-std::vector<uint8_t> requestBytes(const gatr2::BrainRequest& r) {
-    std::vector<uint8_t> buf(gatr2::kMaxFrameLen);
-    buf.resize(gatr2::encodeBrainRequest(r, buf.data(), gatr2::kMaxFrameLen));
+std::vector<uint8_t> requestBytes(const translagatr::BrainRequest& r) {
+    std::vector<uint8_t> buf(translagatr::kMaxFrameLen);
+    buf.resize(translagatr::encodeBrainRequest(r, buf.data(), translagatr::kMaxFrameLen));
     EXPECT_FALSE(buf.empty());
     return buf;
 }
 
-gatr2::BrainRequest request(uint8_t op, uint32_t session, uint16_t rid) {
-    gatr2::BrainRequest r;
+translagatr::BrainRequest request(uint8_t op, uint32_t session, uint16_t rid) {
+    translagatr::BrainRequest r;
     r.op         = op;
     r.session    = session;
     r.request_id = rid;
     return r;
 }
 
-gatr2::BrainRequest readRequest(uint32_t session, uint16_t rid, uint8_t kind, uint32_t doc_id,
-                                uint16_t offset, uint8_t max_len = gatr2::kDocChunkMax) {
-    gatr2::BrainRequest r = request(gatr2::kOpReadDoc, session, rid);
+translagatr::BrainRequest readRequest(uint32_t session, uint16_t rid, uint8_t kind, uint32_t doc_id,
+                                uint16_t offset, uint8_t max_len = translagatr::kDocChunkMax) {
+    translagatr::BrainRequest r = request(translagatr::kOpReadDoc, session, rid);
     r.doc_kind            = kind;
     r.doc_id              = doc_id;
     r.doc_offset          = offset;
@@ -144,26 +144,26 @@ gatr2::BrainRequest readRequest(uint32_t session, uint16_t rid, uint8_t kind, ui
     return r;
 }
 
-std::vector<gatr2::BrainReply> takeReplies(MemoryLink& link) {
-    std::vector<gatr2::BrainReply> out;
-    gatr2::FrameReader             reader;
+std::vector<translagatr::BrainReply> takeReplies(MemoryLink& link) {
+    std::vector<translagatr::BrainReply> out;
+    translagatr::FrameReader             reader;
     for (uint8_t b : link.output().takeAll()) {
         if (!reader.push(b)) {
             continue;
         }
         do {
-            gatr2::BrainReply reply;
-            EXPECT_TRUE(gatr2::decodeBrainReply(reader.frame(), reader.frameLen(), reply));
+            translagatr::BrainReply reply;
+            EXPECT_TRUE(translagatr::decodeBrainReply(reader.frame(), reader.frameLen(), reply));
             out.push_back(reply);
         } while (reader.next());
     }
     return out;
 }
 
-using Exchange = std::function<gatr2::BrainReply(const gatr2::BrainRequest&)>;
+using Exchange = std::function<translagatr::BrainReply(const translagatr::BrainRequest&)>;
 
 struct Assembled {
-    uint8_t              result = gatr2::kResultOk;   // first refusal
+    uint8_t              result = translagatr::kResultOk;   // first refusal
     uint32_t             id     = 0;
     uint32_t             crc    = 0;
     int                  chunks = 0;
@@ -177,9 +177,9 @@ Assembled readWhole(const Exchange& one, uint32_t session, uint16_t& rid, uint8_
     uint16_t  total  = 0;
     uint16_t  offset = 0;
     do {
-        const gatr2::BrainReply reply =
+        const translagatr::BrainReply reply =
             one(readRequest(session, rid++, kind, a.chunks == 0 ? doc_id : a.id, offset));
-        if (reply.result != gatr2::kResultOk) {
+        if (reply.result != translagatr::kResultOk) {
             a.result = reply.result;
             return a;
         }
@@ -201,7 +201,7 @@ Assembled readWhole(const Exchange& one, uint32_t session, uint16_t& rid, uint8_
             break;
         }
     } while (offset < total);
-    EXPECT_EQ(gatr2::crc32(a.bytes.data(), static_cast<uint32_t>(a.bytes.size())), a.crc);
+    EXPECT_EQ(translagatr::crc32(a.bytes.data(), static_cast<uint32_t>(a.bytes.size())), a.crc);
     return a;
 }
 
@@ -297,7 +297,7 @@ struct DocHarness {
         return (*factory)(ConfigNode{doc.RootElement()}, context, err);
     }
 
-    std::vector<gatr2::BrainReply> cycle() {
+    std::vector<translagatr::BrainReply> cycle() {
         clock_us += 5000;
         now_ms += 5;
         command = commands->run({command, hostTime(now_ms), &diagnostics}).command;
@@ -306,29 +306,29 @@ struct DocHarness {
         return takeReplies(*brain);
     }
 
-    gatr2::BrainReply one(const gatr2::BrainRequest& r) {
+    translagatr::BrainReply one(const translagatr::BrainRequest& r) {
         brain->input().feed(requestBytes(r));
-        const std::vector<gatr2::BrainReply> replies = cycle();
+        const std::vector<translagatr::BrainReply> replies = cycle();
         EXPECT_EQ(replies.size(), 1u);
-        return replies.empty() ? gatr2::BrainReply{} : replies.front();
+        return replies.empty() ? translagatr::BrainReply{} : replies.front();
     }
 
     void open() {
-        gatr2::BrainRequest r = request(gatr2::kOpHello, 0, rid++);
+        translagatr::BrainRequest r = request(translagatr::kOpHello, 0, rid++);
         r.nonce               = 0x5EED;
-        const gatr2::BrainReply reply = one(r);
-        EXPECT_EQ(reply.result, gatr2::kResultOk);
+        const translagatr::BrainReply reply = one(r);
+        EXPECT_EQ(reply.result, translagatr::kResultOk);
         session = reply.session;
     }
 
-    gatr2::BrainState state() {
-        const gatr2::BrainReply reply = one(request(gatr2::kOpGetState, session, rid++));
-        EXPECT_EQ(reply.result, gatr2::kResultOk);
+    translagatr::BrainState state() {
+        const translagatr::BrainReply reply = one(request(translagatr::kOpGetState, session, rid++));
+        EXPECT_EQ(reply.result, translagatr::kResultOk);
         return reply.state;
     }
 
     Assembled read(uint8_t kind, uint32_t doc_id = 0) {
-        return readWhole([this](const gatr2::BrainRequest& r) { return one(r); }, session, rid,
+        return readWhole([this](const translagatr::BrainRequest& r) { return one(r); }, session, rid,
                          kind, doc_id);
     }
 };
@@ -342,14 +342,14 @@ const char* kField = R"(<Field resource_id="field" estimate_period_ms="200"/>)";
 TEST(FieldMapDocument, OverrideFieldEncodesValidatesAndNamesItselfByCrc) {
     const FieldMapDocument doc = overrideDocument();
     const uint16_t         len = static_cast<uint16_t>(doc.bytes.size());
-    EXPECT_EQ(len, gatr2::fieldMapLen(17));   // 9 goals, 4 loaders, 4 toggles
-    EXPECT_EQ(gatr2::validateFieldMap(doc.bytes.data(), len), gatr2::DocError::kNone);
-    EXPECT_EQ(doc.map_id, gatr2::crc32(doc.bytes.data(), len));
+    EXPECT_EQ(len, translagatr::fieldMapLen(17));   // 9 goals, 4 loaders, 4 toggles
+    EXPECT_EQ(translagatr::validateFieldMap(doc.bytes.data(), len), translagatr::DocError::kNone);
+    EXPECT_EQ(doc.map_id, translagatr::crc32(doc.bytes.data(), len));
     EXPECT_NE(doc.map_id, 0u);
     EXPECT_EQ(doc.revision, 1u);
 
-    gatr2::FieldMapHeader header;
-    ASSERT_TRUE(gatr2::decodeFieldMapHeader(doc.bytes.data(), len, header));
+    translagatr::FieldMapHeader header;
+    ASSERT_TRUE(translagatr::decodeFieldMapHeader(doc.bytes.data(), len, header));
     EXPECT_EQ(header.revision, 1u);
     EXPECT_EQ(header.object_count, 17u);
     EXPECT_EQ(header.min_x_mm, 0);
@@ -363,8 +363,8 @@ TEST(FieldMapDocument, OverrideFieldEncodesValidatesAndNamesItselfByCrc) {
     ASSERT_EQ(doc.objects.size(), 17u);
     uint16_t previous = 0;
     for (uint16_t i = 0; i < header.object_count; ++i) {
-        gatr2::FieldObjectRecord r;
-        ASSERT_TRUE(gatr2::decodeFieldObjectRecord(doc.bytes.data(), len, i, r));
+        translagatr::FieldObjectRecord r;
+        ASSERT_TRUE(translagatr::decodeFieldObjectRecord(doc.bytes.data(), len, i, r));
         const FieldMapDocument::Object& o = doc.objects[i];
         EXPECT_GT(r.object_id, previous);
         previous = r.object_id;
@@ -373,9 +373,9 @@ TEST(FieldMapDocument, OverrideFieldEncodesValidatesAndNamesItselfByCrc) {
             const LandmarkDecl* l = map.find(FieldObjectId{o.name});
             ASSERT_NE(l, nullptr) << o.name;
             EXPECT_EQ(r.object_id, l->wire_id);
-            EXPECT_EQ(r.kind, gatr2::kObjectLandmark);
+            EXPECT_EQ(r.kind, translagatr::kObjectLandmark);
             EXPECT_EQ(r.flags,
-                      gatr2::kObjectEstimated | gatr2::kObjectReference | gatr2::kObjectObstacle);
+                      translagatr::kObjectEstimated | translagatr::kObjectReference | translagatr::kObjectObstacle);
             EXPECT_LE(std::fabs(r.x_mm - l->nominal.x_m * 1000.0), 0.5) << o.name;
             EXPECT_LE(std::fabs(r.y_mm - l->nominal.y_m * 1000.0), 0.5) << o.name;
             EXPECT_EQ(r.heading_cdeg, 0);
@@ -387,8 +387,8 @@ TEST(FieldMapDocument, OverrideFieldEncodesValidatesAndNamesItselfByCrc) {
             const ObstacleDecl* ob = map.findObstacle(o.name);
             ASSERT_NE(ob, nullptr) << o.name;
             EXPECT_EQ(r.object_id, ob->wire_id);
-            EXPECT_EQ(r.kind, gatr2::kObjectFixed);
-            EXPECT_EQ(r.flags, gatr2::kObjectObstacle);
+            EXPECT_EQ(r.kind, translagatr::kObjectFixed);
+            EXPECT_EQ(r.flags, translagatr::kObjectObstacle);
             EXPECT_LE(std::fabs(r.x_mm - ob->pose.x_m * 1000.0), 0.5) << o.name;
             EXPECT_LE(std::fabs(r.y_mm - ob->pose.y_m * 1000.0), 0.5) << o.name;
             // never smaller than declared, at most 1 mm larger
@@ -451,11 +451,11 @@ TEST(FieldMapDocument, RotatedOffsetBoxesAndObjectsWithoutBoxes) {
     ASSERT_TRUE(parseInline(xml, map, err)) << err;
     ASSERT_TRUE(buildFieldMapDocument(map, doc, err)) << err;
     ASSERT_EQ(doc.objects.size(), 3u);
-    EXPECT_EQ(gatr2::validateFieldMap(doc.bytes.data(), static_cast<uint16_t>(doc.bytes.size())),
-              gatr2::DocError::kNone);
+    EXPECT_EQ(translagatr::validateFieldMap(doc.bytes.data(), static_cast<uint16_t>(doc.bytes.size())),
+              translagatr::DocError::kNone);
 
-    gatr2::FieldMapHeader header;
-    ASSERT_TRUE(gatr2::decodeFieldMapHeader(doc.bytes.data(),
+    translagatr::FieldMapHeader header;
+    ASSERT_TRUE(translagatr::decodeFieldMapHeader(doc.bytes.data(),
                                             static_cast<uint16_t>(doc.bytes.size()), header));
     EXPECT_EQ(header.min_x_mm, -500);   // inward: -500.4 -> -500
     EXPECT_EQ(header.min_y_mm, 1);      // 0.6 -> 1
@@ -468,14 +468,14 @@ TEST(FieldMapDocument, RotatedOffsetBoxesAndObjectsWithoutBoxes) {
     EXPECT_EQ(doc.objects[2].name, "beacon");
 
     // a landmark without a box is a reference, not an obstacle
-    const gatr2::FieldObjectRecord& beacon = doc.objects[2].record;
+    const translagatr::FieldObjectRecord& beacon = doc.objects[2].record;
     EXPECT_EQ(beacon.object_id, 50u);
-    EXPECT_EQ(beacon.flags, gatr2::kObjectEstimated | gatr2::kObjectReference);
+    EXPECT_EQ(beacon.flags, translagatr::kObjectEstimated | translagatr::kObjectReference);
     EXPECT_EQ(beacon.heading_cdeg, 9000);
     EXPECT_EQ(beacon.box_length_mm, 0u);
 
-    const gatr2::FieldObjectRecord& post = doc.objects[0].record;
-    EXPECT_EQ(post.flags, gatr2::kObjectObstacle);
+    const translagatr::FieldObjectRecord& post = doc.objects[0].record;
+    EXPECT_EQ(post.flags, translagatr::kObjectObstacle);
     EXPECT_EQ(post.heading_cdeg, -3000);
     EXPECT_EQ(post.box_x_mm, 10);
     EXPECT_EQ(post.box_y_mm, -21);
@@ -484,8 +484,8 @@ TEST(FieldMapDocument, RotatedOffsetBoxesAndObjectsWithoutBoxes) {
     EXPECT_EQ(post.box_width_mm, 120u);
 
     // a fixed element without a box is not an obstacle
-    const gatr2::FieldObjectRecord& marker = doc.objects[1].record;
-    EXPECT_EQ(marker.kind, gatr2::kObjectFixed);
+    const translagatr::FieldObjectRecord& marker = doc.objects[1].record;
+    EXPECT_EQ(marker.kind, translagatr::kObjectFixed);
     EXPECT_EQ(marker.flags, 0u);
     EXPECT_EQ(marker.box_width_mm, 0u);
 }
@@ -525,7 +525,7 @@ TEST(FieldMapDocument, PublishingNeedsRevisionBoundaryWireIdsAndRoom) {
     std::string      err;
     ASSERT_TRUE(parseInline(fieldXml(120, 8), map, err)) << err;
     ASSERT_TRUE(buildFieldMapDocument(map, doc, err)) << err;   // exactly the cap
-    EXPECT_EQ(doc.bytes.size(), gatr2::kFieldMapMaxLen);
+    EXPECT_EQ(doc.bytes.size(), translagatr::kFieldMapMaxLen);
 }
 
 TEST(FieldMapDocument, ReferenceHeaderNamesEveryLandmarkOnce) {
@@ -582,14 +582,14 @@ TEST(FieldMapDocument, ReferenceHeaderNamesEveryLandmarkOnce) {
 
 TEST(FieldEstimate, NoopWorldEstimationGivesEveryObjectNominal) {
     const FieldMapDocument doc = overrideDocument();
-    const std::vector<gatr2::FieldEstimateRecord> records =
+    const std::vector<translagatr::FieldEstimateRecord> records =
         fieldEstimateRecords(doc, FieldState{}, RobotState{}, hostTime(5000));
     ASSERT_EQ(records.size(), doc.objects.size());
     for (std::size_t i = 0; i < records.size(); ++i) {
-        const gatr2::FieldObjectRecord& o = doc.objects[i].record;
+        const translagatr::FieldObjectRecord& o = doc.objects[i].record;
         EXPECT_EQ(records[i].object_id, o.object_id);
-        EXPECT_EQ(records[i].source, gatr2::kEstimateSourceNominal);
-        EXPECT_EQ(records[i].flags, gatr2::kEstimateValid);
+        EXPECT_EQ(records[i].source, translagatr::kEstimateSourceNominal);
+        EXPECT_EQ(records[i].flags, translagatr::kEstimateValid);
         EXPECT_EQ(records[i].x_mm, o.x_mm);
         EXPECT_EQ(records[i].y_mm, o.y_mm);
         EXPECT_EQ(records[i].heading_cdeg, o.heading_cdeg);
@@ -600,11 +600,11 @@ TEST(FieldEstimate, NoopWorldEstimationGivesEveryObjectNominal) {
     docs.update(FieldState{}, RobotState{}, hostTime(5000));
     ASSERT_EQ(docs.estimateId(), 1u);
     const std::vector<uint8_t> bytes = wholeEstimate(docs);
-    EXPECT_EQ(bytes.size(), gatr2::fieldEstimateLen(17));
-    EXPECT_EQ(gatr2::validateFieldEstimate(bytes.data(), static_cast<uint16_t>(bytes.size()),
+    EXPECT_EQ(bytes.size(), translagatr::fieldEstimateLen(17));
+    EXPECT_EQ(translagatr::validateFieldEstimate(bytes.data(), static_cast<uint16_t>(bytes.size()),
                                            doc.bytes.data(),
                                            static_cast<uint16_t>(doc.bytes.size()), doc.map_id),
-              gatr2::DocError::kNone);
+              translagatr::DocError::kNone);
 }
 
 TEST(FieldEstimate, ObservedOnlyInTheRobotsEpochComposedWithTheCurrentAnchor) {
@@ -631,26 +631,26 @@ TEST(FieldEstimate, ObservedOnlyInTheRobotsEpochComposedWithTheCurrentAnchor) {
     no_time.lastObservedAt   = MonotonicTime{};
     field.objects[FieldObjectId{"neutral_goal_4_south"}] = no_time;   // 9
 
-    const std::vector<gatr2::FieldEstimateRecord> records =
+    const std::vector<translagatr::FieldEstimateRecord> records =
         fieldEstimateRecords(doc, field, robot, hostTime(1000));
 
     // T_field_odom * T_odom_object: (0.5 - 2.0, -0.25 + 1.0), heading 0.3 + 90 deg
-    const gatr2::FieldEstimateRecord center = recordFor(records, 5);
-    EXPECT_EQ(center.source, gatr2::kEstimateSourceObserved);
-    EXPECT_EQ(center.flags, gatr2::kEstimateValid);
+    const translagatr::FieldEstimateRecord center = recordFor(records, 5);
+    EXPECT_EQ(center.source, translagatr::kEstimateSourceObserved);
+    EXPECT_EQ(center.flags, translagatr::kEstimateValid);
     EXPECT_EQ(center.x_mm, -1500);
     EXPECT_EQ(center.y_mm, 750);
     EXPECT_EQ(center.heading_cdeg, radToCdeg(0.3 + kPi / 2.0));
     EXPECT_EQ(center.age_ms, 100u);
 
     for (const uint16_t id : {2, 6, 8, 9, 101}) {
-        const gatr2::FieldEstimateRecord r = recordFor(records, id);
+        const translagatr::FieldEstimateRecord r = recordFor(records, id);
         const auto nominal = std::find_if(doc.objects.begin(), doc.objects.end(),
                                           [&](const FieldMapDocument::Object& o) {
                                               return o.record.object_id == id;
                                           });
         ASSERT_NE(nominal, doc.objects.end());
-        EXPECT_EQ(r.source, gatr2::kEstimateSourceNominal) << id;
+        EXPECT_EQ(r.source, translagatr::kEstimateSourceNominal) << id;
         EXPECT_EQ(r.x_mm, nominal->record.x_mm) << id;
         EXPECT_EQ(r.y_mm, nominal->record.y_mm) << id;
         EXPECT_EQ(r.age_ms, 0u) << id;
@@ -659,24 +659,24 @@ TEST(FieldEstimate, ObservedOnlyInTheRobotsEpochComposedWithTheCurrentAnchor) {
     // the same estimate after the odometry epoch moved on is nominal again
     robot.odometry_epoch = 5;
     EXPECT_EQ(recordFor(fieldEstimateRecords(doc, field, robot, hostTime(1000)), 5).source,
-              gatr2::kEstimateSourceNominal);
+              translagatr::kEstimateSourceNominal);
 
     // the document carries the robot frame it was composed under and validates
     robot.odometry_epoch = 4;
     FieldDocuments docs(doc, 200);
     docs.update(field, robot, hostTime(1000));
     const std::vector<uint8_t> bytes = wholeEstimate(docs);
-    gatr2::FieldEstimateHeader header;
-    ASSERT_TRUE(gatr2::decodeFieldEstimateHeader(bytes.data(),
+    translagatr::FieldEstimateHeader header;
+    ASSERT_TRUE(translagatr::decodeFieldEstimateHeader(bytes.data(),
                                                  static_cast<uint16_t>(bytes.size()), header));
     EXPECT_EQ(header.map_id, doc.map_id);
     EXPECT_EQ(header.estimate_id, 1u);
     EXPECT_EQ(header.odometry_epoch, 4u);
     EXPECT_EQ(header.anchor_revision, 2u);
-    EXPECT_EQ(gatr2::validateFieldEstimate(bytes.data(), static_cast<uint16_t>(bytes.size()),
+    EXPECT_EQ(translagatr::validateFieldEstimate(bytes.data(), static_cast<uint16_t>(bytes.size()),
                                            doc.bytes.data(),
                                            static_cast<uint16_t>(doc.bytes.size()), doc.map_id),
-              gatr2::DocError::kNone);
+              translagatr::DocError::kNone);
 }
 
 TEST(FieldEstimate, AgeAloneIsNotAChange) {
@@ -692,11 +692,11 @@ TEST(FieldEstimate, AgeAloneIsNotAChange) {
 
     // the snapshot keeps the age it was taken with
     const std::vector<uint8_t> bytes = wholeEstimate(docs);
-    gatr2::FieldEstimateRecord r;
-    ASSERT_TRUE(gatr2::decodeFieldEstimateRecord(bytes.data(),
+    translagatr::FieldEstimateRecord r;
+    ASSERT_TRUE(translagatr::decodeFieldEstimateRecord(bytes.data(),
                                                  static_cast<uint16_t>(bytes.size()), 4, r));
     EXPECT_EQ(r.object_id, 5u);
-    EXPECT_EQ(r.source, gatr2::kEstimateSourceObserved);
+    EXPECT_EQ(r.source, translagatr::kEstimateSourceObserved);
     EXPECT_EQ(r.age_ms, 0u);
 }
 
@@ -750,18 +750,18 @@ TEST(FieldEstimate, RetainsThreeAndNeverReusesAnId) {
     docs.update(field, robot, hostTime(t + 1100));
     EXPECT_EQ(docs.estimateId(), 5u);
 
-    gatr2::BrainReply reply;
-    EXPECT_EQ(docs.read(gatr2::kDocFieldEstimate, 2, 0, 96, reply), gatr2::kResultStale);
+    translagatr::BrainReply reply;
+    EXPECT_EQ(docs.read(translagatr::kDocFieldEstimate, 2, 0, 96, reply), translagatr::kResultStale);
     for (const uint32_t id : {3u, 4u, 5u}) {
-        EXPECT_EQ(docs.read(gatr2::kDocFieldEstimate, id, 0, 96, reply), gatr2::kResultOk);
+        EXPECT_EQ(docs.read(translagatr::kDocFieldEstimate, id, 0, 96, reply), translagatr::kResultOk);
         EXPECT_EQ(reply.doc_id, id);
     }
-    EXPECT_EQ(docs.read(gatr2::kDocFieldEstimate, 0, 0, 96, reply), gatr2::kResultOk);
+    EXPECT_EQ(docs.read(translagatr::kDocFieldEstimate, 0, 0, 96, reply), translagatr::kResultOk);
     EXPECT_EQ(reply.doc_id, 5u);
 
     docs.reset();
     EXPECT_EQ(docs.estimateId(), 0u);
-    EXPECT_EQ(docs.read(gatr2::kDocFieldEstimate, 0, 0, 96, reply), gatr2::kResultUnavailable);
+    EXPECT_EQ(docs.read(translagatr::kDocFieldEstimate, 0, 0, 96, reply), translagatr::kResultUnavailable);
     docs.update(field, robot, hostTime(t + 1110));
     EXPECT_EQ(docs.estimateId(), 6u);
 }
@@ -769,34 +769,34 @@ TEST(FieldEstimate, RetainsThreeAndNeverReusesAnId) {
 TEST(FieldEstimate, ReadRefusesUnknownDocumentsAndOffsetsPastTheEnd) {
     const FieldMapDocument map = overrideDocument();
     FieldDocuments         docs(map, 200);
-    gatr2::BrainReply      reply;
-    EXPECT_EQ(docs.read(gatr2::kDocFieldEstimate, 0, 0, 96, reply), gatr2::kResultUnavailable);
+    translagatr::BrainReply      reply;
+    EXPECT_EQ(docs.read(translagatr::kDocFieldEstimate, 0, 0, 96, reply), translagatr::kResultUnavailable);
     docs.update(FieldState{}, RobotState{}, hostTime(10));
 
     const uint16_t total = static_cast<uint16_t>(map.bytes.size());
-    ASSERT_EQ(docs.read(gatr2::kDocFieldMap, 0, 0, 200, reply), gatr2::kResultOk);
+    ASSERT_EQ(docs.read(translagatr::kDocFieldMap, 0, 0, 200, reply), translagatr::kResultOk);
     EXPECT_EQ(reply.doc_id, map.map_id);
     EXPECT_EQ(reply.doc_crc32, map.map_id);
     EXPECT_EQ(reply.doc_total_len, total);
-    EXPECT_EQ(reply.data_len, gatr2::kDocChunkMax);   // capped by the frame
-    EXPECT_EQ(0, std::memcmp(reply.data, map.bytes.data(), gatr2::kDocChunkMax));
+    EXPECT_EQ(reply.data_len, translagatr::kDocChunkMax);   // capped by the frame
+    EXPECT_EQ(0, std::memcmp(reply.data, map.bytes.data(), translagatr::kDocChunkMax));
 
-    ASSERT_EQ(docs.read(gatr2::kDocFieldMap, map.map_id, total - 20, 96, reply),
-              gatr2::kResultOk);
+    ASSERT_EQ(docs.read(translagatr::kDocFieldMap, map.map_id, total - 20, 96, reply),
+              translagatr::kResultOk);
     EXPECT_EQ(reply.data_len, 20u);   // the tail
-    ASSERT_EQ(docs.read(gatr2::kDocFieldMap, 0, 8, 10, reply), gatr2::kResultOk);
+    ASSERT_EQ(docs.read(translagatr::kDocFieldMap, 0, 8, 10, reply), translagatr::kResultOk);
     EXPECT_EQ(reply.data_len, 10u);   // max_len
     EXPECT_EQ(reply.doc_offset, 8u);
 
-    EXPECT_EQ(docs.read(gatr2::kDocFieldMap, 0, total, 96, reply),
-              gatr2::kResultInvalidArgument);
-    EXPECT_EQ(docs.read(gatr2::kDocFieldMap, 0, 0, 0, reply), gatr2::kResultInvalidArgument);
-    EXPECT_EQ(docs.read(3, 0, 0, 96, reply), gatr2::kResultInvalidArgument);
-    EXPECT_EQ(docs.read(gatr2::kDocFieldMap, map.map_id ^ 1u, 0, 96, reply),
-              gatr2::kResultStale);
-    EXPECT_EQ(docs.read(gatr2::kDocFieldEstimate, 77, 0, 96, reply), gatr2::kResultStale);
-    EXPECT_EQ(docs.read(gatr2::kDocFieldEstimate, 1, gatr2::fieldEstimateLen(17), 96, reply),
-              gatr2::kResultInvalidArgument);
+    EXPECT_EQ(docs.read(translagatr::kDocFieldMap, 0, total, 96, reply),
+              translagatr::kResultInvalidArgument);
+    EXPECT_EQ(docs.read(translagatr::kDocFieldMap, 0, 0, 0, reply), translagatr::kResultInvalidArgument);
+    EXPECT_EQ(docs.read(3, 0, 0, 96, reply), translagatr::kResultInvalidArgument);
+    EXPECT_EQ(docs.read(translagatr::kDocFieldMap, map.map_id ^ 1u, 0, 96, reply),
+              translagatr::kResultStale);
+    EXPECT_EQ(docs.read(translagatr::kDocFieldEstimate, 77, 0, 96, reply), translagatr::kResultStale);
+    EXPECT_EQ(docs.read(translagatr::kDocFieldEstimate, 1, translagatr::fieldEstimateLen(17), 96, reply),
+              translagatr::kResultInvalidArgument);
 }
 
 // ---- READ_DOC over the link ----------------------------------------------------
@@ -807,25 +807,25 @@ TEST(FieldReadDoc, OverrideDocumentsAssembleFromChunks) {
     f.open();
     const FieldMapDocument expected = overrideDocument();
 
-    const gatr2::BrainState s = f.state();
+    const translagatr::BrainState s = f.state();
     EXPECT_EQ(s.map_id, expected.map_id);
     EXPECT_EQ(s.estimate_id, 1u);
 
-    const Assembled map = f.read(gatr2::kDocFieldMap);
-    ASSERT_EQ(map.result, gatr2::kResultOk);
+    const Assembled map = f.read(translagatr::kDocFieldMap);
+    ASSERT_EQ(map.result, translagatr::kResultOk);
     EXPECT_EQ(map.chunks, 6);   // 500 bytes
     EXPECT_EQ(map.id, expected.map_id);
     EXPECT_EQ(map.bytes, expected.bytes);
 
-    const Assembled estimate = f.read(gatr2::kDocFieldEstimate);
-    ASSERT_EQ(estimate.result, gatr2::kResultOk);
+    const Assembled estimate = f.read(translagatr::kDocFieldEstimate);
+    ASSERT_EQ(estimate.result, translagatr::kResultOk);
     EXPECT_EQ(estimate.chunks, 4);   // 364 bytes
     EXPECT_EQ(estimate.id, s.estimate_id);
-    EXPECT_EQ(gatr2::validateFieldEstimate(estimate.bytes.data(),
+    EXPECT_EQ(translagatr::validateFieldEstimate(estimate.bytes.data(),
                                            static_cast<uint16_t>(estimate.bytes.size()),
                                            map.bytes.data(),
                                            static_cast<uint16_t>(map.bytes.size()), map.id),
-              gatr2::DocError::kNone);
+              translagatr::DocError::kNone);
 }
 
 TEST(FieldReadDoc, AnotherObjectCountFromInlineXml) {
@@ -834,21 +834,21 @@ TEST(FieldReadDoc, AnotherObjectCountFromInlineXml) {
         ASSERT_NE(f.publisher, nullptr) << f.build_error;
         f.open();
         const uint16_t  n   = static_cast<uint16_t>(counts.first + counts.second);
-        const Assembled map = f.read(gatr2::kDocFieldMap);
-        ASSERT_EQ(map.result, gatr2::kResultOk);
-        EXPECT_EQ(map.bytes.size(), gatr2::fieldMapLen(n));
-        EXPECT_EQ(map.chunks, (gatr2::fieldMapLen(n) + 95) / 96);
-        EXPECT_EQ(gatr2::validateFieldMap(map.bytes.data(), static_cast<uint16_t>(map.bytes.size())),
-                  gatr2::DocError::kNone);
+        const Assembled map = f.read(translagatr::kDocFieldMap);
+        ASSERT_EQ(map.result, translagatr::kResultOk);
+        EXPECT_EQ(map.bytes.size(), translagatr::fieldMapLen(n));
+        EXPECT_EQ(map.chunks, (translagatr::fieldMapLen(n) + 95) / 96);
+        EXPECT_EQ(translagatr::validateFieldMap(map.bytes.data(), static_cast<uint16_t>(map.bytes.size())),
+                  translagatr::DocError::kNone);
         EXPECT_EQ(f.state().map_id, map.id);
 
-        const Assembled estimate = f.read(gatr2::kDocFieldEstimate);
-        ASSERT_EQ(estimate.result, gatr2::kResultOk);
-        EXPECT_EQ(estimate.bytes.size(), gatr2::fieldEstimateLen(n));
-        EXPECT_EQ(gatr2::validateFieldEstimate(
+        const Assembled estimate = f.read(translagatr::kDocFieldEstimate);
+        ASSERT_EQ(estimate.result, translagatr::kResultOk);
+        EXPECT_EQ(estimate.bytes.size(), translagatr::fieldEstimateLen(n));
+        EXPECT_EQ(translagatr::validateFieldEstimate(
                       estimate.bytes.data(), static_cast<uint16_t>(estimate.bytes.size()),
                       map.bytes.data(), static_cast<uint16_t>(map.bytes.size()), map.id),
-                  gatr2::DocError::kNone);
+                  translagatr::DocError::kNone);
     }
 }
 
@@ -858,11 +858,11 @@ TEST(FieldReadDoc, ReplacedEstimateGoesStaleAndTheReaderRestarts) {
     f.open();
 
     // first chunk of the current estimate, then the anchor moves twice
-    const gatr2::BrainReply first =
-        f.one(readRequest(f.session, f.rid++, gatr2::kDocFieldEstimate, 0, 0));
-    ASSERT_EQ(first.result, gatr2::kResultOk);
+    const translagatr::BrainReply first =
+        f.one(readRequest(f.session, f.rid++, translagatr::kDocFieldEstimate, 0, 0));
+    ASSERT_EQ(first.result, translagatr::kResultOk);
     const uint32_t id = first.doc_id;
-    ASSERT_GT(first.doc_total_len, gatr2::kDocChunkMax);
+    ASSERT_GT(first.doc_total_len, translagatr::kDocChunkMax);
     const auto move = [&] {
         ++f.robot.anchor_revision;
         f.cycle();
@@ -871,19 +871,19 @@ TEST(FieldReadDoc, ReplacedEstimateGoesStaleAndTheReaderRestarts) {
     move();
     move();
     EXPECT_EQ(f.state().estimate_id, id + 2);
-    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, gatr2::kDocFieldEstimate, id, 96)).result,
-              gatr2::kResultOk);   // still one of the last three
+    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, translagatr::kDocFieldEstimate, id, 96)).result,
+              translagatr::kResultOk);   // still one of the last three
 
     move();
-    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, gatr2::kDocFieldEstimate, id, 192)).result,
-              gatr2::kResultStale);
+    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, translagatr::kDocFieldEstimate, id, 192)).result,
+              translagatr::kResultStale);
 
     // restart from the newest: complete and consistent with its header
-    const Assembled again = f.read(gatr2::kDocFieldEstimate);
-    ASSERT_EQ(again.result, gatr2::kResultOk);
+    const Assembled again = f.read(translagatr::kDocFieldEstimate);
+    ASSERT_EQ(again.result, translagatr::kResultOk);
     EXPECT_EQ(again.id, id + 3);
-    gatr2::FieldEstimateHeader header;
-    ASSERT_TRUE(gatr2::decodeFieldEstimateHeader(
+    translagatr::FieldEstimateHeader header;
+    ASSERT_TRUE(translagatr::decodeFieldEstimateHeader(
         again.bytes.data(), static_cast<uint16_t>(again.bytes.size()), header));
     EXPECT_EQ(header.estimate_id, id + 3);
     EXPECT_EQ(header.anchor_revision, 3u);
@@ -893,15 +893,15 @@ TEST(FieldReadDoc, PublisherResetDropsEstimatesAndTakesANewOneAtOnce) {
     DocHarness f(fieldXml(3, 1), kField);   // 200 ms period
     ASSERT_NE(f.publisher, nullptr) << f.build_error;
     f.open();
-    const gatr2::BrainState before = f.state();
+    const translagatr::BrainState before = f.state();
     ASSERT_EQ(before.estimate_id, 1u);
     f.publisher->reset();
     f.cycle();   // well inside the period
-    const gatr2::BrainState after = f.state();
+    const translagatr::BrainState after = f.state();
     EXPECT_EQ(after.estimate_id, 2u);   // ids are never reused
     EXPECT_EQ(after.map_id, before.map_id);
-    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, gatr2::kDocFieldEstimate, 1, 0)).result,
-              gatr2::kResultStale);
+    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, translagatr::kDocFieldEstimate, 1, 0)).result,
+              translagatr::kResultStale);
 }
 
 TEST(FieldReadDoc, RefusalsOverTheLink) {
@@ -909,16 +909,16 @@ TEST(FieldReadDoc, RefusalsOverTheLink) {
     ASSERT_NE(f.publisher, nullptr) << f.build_error;
     f.open();
     const uint32_t map_id = f.state().map_id;
-    const uint16_t total  = gatr2::fieldMapLen(4);
-    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, gatr2::kDocFieldMap, 0, total)).result,
-              gatr2::kResultInvalidArgument);
-    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, gatr2::kDocFieldMap, map_id + 1, 0)).result,
-              gatr2::kResultStale);
-    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, gatr2::kDocFieldMap, 0, 0, 0)).result,
-              gatr2::kResultInvalidArgument);
-    const gatr2::BrainReply tail =
-        f.one(readRequest(f.session, f.rid++, gatr2::kDocFieldMap, map_id, total - 1));
-    ASSERT_EQ(tail.result, gatr2::kResultOk);
+    const uint16_t total  = translagatr::fieldMapLen(4);
+    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, translagatr::kDocFieldMap, 0, total)).result,
+              translagatr::kResultInvalidArgument);
+    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, translagatr::kDocFieldMap, map_id + 1, 0)).result,
+              translagatr::kResultStale);
+    EXPECT_EQ(f.one(readRequest(f.session, f.rid++, translagatr::kDocFieldMap, 0, 0, 0)).result,
+              translagatr::kResultInvalidArgument);
+    const translagatr::BrainReply tail =
+        f.one(readRequest(f.session, f.rid++, translagatr::kDocFieldMap, map_id, total - 1));
+    ASSERT_EQ(tail.result, translagatr::kResultOk);
     EXPECT_EQ(tail.data_len, 1u);
 }
 
@@ -948,11 +948,11 @@ TEST(FieldReadDoc, PublisherFieldConfiguration) {
     DocHarness none(good, "");
     ASSERT_NE(none.publisher, nullptr) << none.build_error;
     none.open();
-    const gatr2::BrainState s = none.state();
+    const translagatr::BrainState s = none.state();
     EXPECT_EQ(s.map_id, 0u);
     EXPECT_EQ(s.estimate_id, 0u);
-    EXPECT_EQ(none.one(readRequest(none.session, none.rid++, gatr2::kDocFieldMap, 0, 0)).result,
-              gatr2::kResultUnavailable);
+    EXPECT_EQ(none.one(readRequest(none.session, none.rid++, translagatr::kDocFieldMap, 0, 0)).result,
+              translagatr::kResultUnavailable);
 }
 
 // ---- whole Pi ------------------------------------------------------------------
@@ -1029,16 +1029,16 @@ TEST(FieldReadDoc, WholePiServesTheFieldAndFollowsItsAnchor) {
         system->step(hostTime(now_ms));
         return takeReplies(*brain);
     };
-    const Exchange one = [&](const gatr2::BrainRequest& r) {
+    const Exchange one = [&](const translagatr::BrainRequest& r) {
         brain->input().feed(requestBytes(r));
-        const std::vector<gatr2::BrainReply> replies = step();
+        const std::vector<translagatr::BrainReply> replies = step();
         EXPECT_EQ(replies.size(), 1u);
-        return replies.empty() ? gatr2::BrainReply{} : replies.front();
+        return replies.empty() ? translagatr::BrainReply{} : replies.front();
     };
     step();
 
     uint16_t            rid   = 1;
-    gatr2::BrainRequest hello = request(gatr2::kOpHello, 0, rid++);
+    translagatr::BrainRequest hello = request(translagatr::kOpHello, 0, rid++);
     hello.nonce               = 7;
     const uint32_t session    = one(hello).session;
 
@@ -1046,41 +1046,41 @@ TEST(FieldReadDoc, WholePiServesTheFieldAndFollowsItsAnchor) {
     FieldMapDocument expected;
     ASSERT_TRUE(parseInline(fieldXml(5, 2), map, err)) << err;
     ASSERT_TRUE(buildFieldMapDocument(map, expected, err)) << err;
-    gatr2::BrainState s = one(request(gatr2::kOpGetState, session, rid++)).state;
+    translagatr::BrainState s = one(request(translagatr::kOpGetState, session, rid++)).state;
     EXPECT_EQ(s.map_id, expected.map_id);
     EXPECT_EQ(s.estimate_id, 1u);
-    EXPECT_EQ(readWhole(one, session, rid, gatr2::kDocFieldMap).bytes, expected.bytes);
+    EXPECT_EQ(readWhole(one, session, rid, translagatr::kDocFieldMap).bytes, expected.bytes);
 
     // a placement moves the anchor; the next snapshot names it
-    gatr2::BrainRequest place = request(gatr2::kOpSetPose, session, rid++);
+    translagatr::BrainRequest place = request(translagatr::kOpSetPose, session, rid++);
     place.x_mm                = 610;
     place.y_mm                = 457;
     place.heading_cdeg        = 9000;
-    ASSERT_EQ(one(place).result, gatr2::kResultOk);
+    ASSERT_EQ(one(place).result, translagatr::kResultOk);
     for (int i = 0; i < 5; ++i) {
         step();
     }
-    s = one(request(gatr2::kOpGetState, session, rid++)).state;
+    s = one(request(translagatr::kOpGetState, session, rid++)).state;
     EXPECT_EQ(s.anchor_revision, 1u);
     EXPECT_EQ(s.estimate_id, 2u);
-    const Assembled estimate = readWhole(one, session, rid, gatr2::kDocFieldEstimate);
-    ASSERT_EQ(estimate.result, gatr2::kResultOk);
+    const Assembled estimate = readWhole(one, session, rid, translagatr::kDocFieldEstimate);
+    ASSERT_EQ(estimate.result, translagatr::kResultOk);
     EXPECT_EQ(estimate.id, s.estimate_id);
-    gatr2::FieldEstimateHeader header;
-    ASSERT_TRUE(gatr2::decodeFieldEstimateHeader(
+    translagatr::FieldEstimateHeader header;
+    ASSERT_TRUE(translagatr::decodeFieldEstimateHeader(
         estimate.bytes.data(), static_cast<uint16_t>(estimate.bytes.size()), header));
     EXPECT_EQ(header.anchor_revision, s.anchor_revision);
     EXPECT_EQ(header.odometry_epoch, s.odometry_epoch);
-    EXPECT_EQ(gatr2::validateFieldEstimate(estimate.bytes.data(),
+    EXPECT_EQ(translagatr::validateFieldEstimate(estimate.bytes.data(),
                                            static_cast<uint16_t>(estimate.bytes.size()),
                                            expected.bytes.data(),
                                            static_cast<uint16_t>(expected.bytes.size()),
                                            expected.map_id),
-              gatr2::DocError::kNone);
+              translagatr::DocError::kNone);
     for (uint16_t i = 0; i < header.object_count; ++i) {
-        gatr2::FieldEstimateRecord r;
-        ASSERT_TRUE(gatr2::decodeFieldEstimateRecord(
+        translagatr::FieldEstimateRecord r;
+        ASSERT_TRUE(translagatr::decodeFieldEstimateRecord(
             estimate.bytes.data(), static_cast<uint16_t>(estimate.bytes.size()), i, r));
-        EXPECT_EQ(r.source, gatr2::kEstimateSourceNominal);   // noop world estimation
+        EXPECT_EQ(r.source, translagatr::kEstimateSourceNominal);   // noop world estimation
     }
 }
