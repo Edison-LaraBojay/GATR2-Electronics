@@ -57,4 +57,14 @@ private:
 // Drive task: hands a taken request to the owner.
 void apply(const DriveRequest& request, DriveOwner& owner);
 
+// A command that has not ended, including one requested but not yet taken.
+bool moving(const DriveSnapshot& snapshot);
+
+// Operator loop rule for manual input. Sticks off center always take over.
+// Centered sticks send a zero demand only while nothing moves, and never in
+// the cycle that requested a command: the demand would replace that request
+// (latest wins) or cancel it.
+bool sendManual(const ManualDemand& demand, bool requested_this_cycle,
+                const DriveSnapshot& snapshot);
+
 } // namespace actugatr

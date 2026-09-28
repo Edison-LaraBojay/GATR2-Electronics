@@ -40,8 +40,11 @@
 // calibration_window_ms, still_rate_cdps and still_travel_um replace
 // window_ms, still_rate_dps and still_travel_m when nonzero. Timing
 // sensor_loss_ms is how long a used source may go without a sample before
-// pose continuity is lost (spec 8.10, sensor_loss.h); on_sensor_loss
-// unplace (default) unplaces the robot then, warn only logs it.
+// pose continuity is lost (spec 8.10, sensor_loss.h), and the longest step
+// of the Brain VEX IMU bench model. Continuity is also lost whenever a model
+// discards measured motion (a gap past its own limit, a restart, movement
+// while a bias calibrates). on_sensor_loss unplace (default) unplaces the
+// robot then; warn only logs it.
 //
 // Models per topology and IMU source; anything else is refused:
 //   two wheel, pico           tracking_wheel_motion + HeadingConstraint,

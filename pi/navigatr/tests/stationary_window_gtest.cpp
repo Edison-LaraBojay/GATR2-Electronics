@@ -154,6 +154,8 @@ TEST(StationaryWindow, GapsStalenessAndIdentityChangesWaitForData) {
     const uint64_t windows = r.w.windows();
     r.still(20);
     EXPECT_EQ(r.w.windows(), windows);   // the whole window again, from the rebase
+    EXPECT_GT(r.w.restarts(), 0u);
+    EXPECT_EQ(r.w.movements(), 0u);   // none of these was movement
 }
 
 TEST(StationaryWindow, OutOfOrderSamplesAndAccumulatorDropsRestart) {
@@ -187,6 +189,7 @@ TEST(StationaryWindow, MovingStoppingMoving) {
         EXPECT_EQ(r.w.phase(), Phase::kWaitingStill);
     }
     EXPECT_NE(r.w.reason().find("moved"), std::string::npos);
+    EXPECT_EQ(r.w.movements(), 10u);
 
     // stopped: waiting for stillness a quarter window, then collecting
     const uint64_t windows = r.w.windows();
@@ -201,8 +204,10 @@ TEST(StationaryWindow, MovingStoppingMoving) {
     // creeping under the travel limit stays still; one more millimeter does not
     r.still(10, 0.0, travel + 0.0009);
     EXPECT_TRUE(r.w.stationary());
+    EXPECT_EQ(r.w.movements(), 10u);
     r.tick(travel + 0.0021, 0.0);
     EXPECT_FALSE(r.w.stationary());
+    EXPECT_EQ(r.w.movements(), 11u);
 }
 
 TEST(StationaryWindow, GyroMagnitudeAndVariationAreMovement) {

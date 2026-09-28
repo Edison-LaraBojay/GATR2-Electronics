@@ -20,6 +20,8 @@ std::vector<ObservationFunctionStatus> LocalizationExecutor::functionStatus() co
         s.ready                       = r.ready;
         s.note                        = r.note;
         s.stillness                   = r.stillness;
+        s.dropped_intervals           = r.dropped_intervals;
+        s.dropped_why                 = r.dropped_why;
         out.push_back(std::move(s));
     }
     return out;
@@ -108,6 +110,14 @@ RobotState LocalizationExecutor::operator()(const SensorMap&            sensors,
     status.clock_mapped      = update.clock_mapped;
     status.continuity_breaks = continuity_breaks_;
     status.last_break        = last_break_;
+    for (std::size_t i = 0; i < functions_.size() && i < status.functions.size(); ++i) {
+        const ObservationFunctionStatus& s = status.functions[i];
+        if (s.dropped_intervals > functions_[i].dropped) {
+            dropped_intervals_ += s.dropped_intervals - functions_[i].dropped;
+            last_drop_ = s.id + ": " + s.dropped_why;
+        }
+        functions_[i].dropped = s.dropped_intervals;
+    }
     if (status.stationary()) {
         // gated stationary handling, not a zero velocity filter update: the
         // pose is untouched, only the reported velocity is known to be zero
@@ -133,6 +143,10 @@ void LocalizationExecutor::loseContinuity(const std::string& why) {
     configured_placement_pending_ = false;
     ++continuity_breaks_;
     last_break_ = why;
+    LocalizationStatus status = feed_->status();
+    status.continuity_breaks  = continuity_breaks_;
+    status.last_break         = last_break_;
+    feed_->publish(state_, status, false, ++publication_);
 }
 
 void LocalizationExecutor::reset() {

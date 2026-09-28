@@ -185,11 +185,6 @@ actugatr::CommandId runLandmark() {
     return g_task->goToAvoiding(robot_config::kLandmarkOffset, robot_config::landmark(), o);
 }
 
-bool moving(const actugatr::DriveSnapshot& s) {
-    return s.motion.command_id != 0 && s.motion.state != actugatr::MotionState::kIdle &&
-           !actugatr::isTerminal(s.motion.state);
-}
-
 // Waits for command id to end, at most limit seconds. False unless completed.
 bool waitFor(actugatr::CommandId id, Seconds limit) {
     if (id == 0) {
@@ -384,21 +379,32 @@ void opcontrol() {
         }
         // The robot stays still while the IMU recalibrates: no tests, no sticks.
         const bool recalibrating = g_recal.active();
+        bool       requested     = false; // a test requested this cycle
+        auto       request       = [&](actugatr::CommandId id, const char* running) {
+            requested = requested || id != 0;
+            g_message = id != 0 ? running : "Drive busy";
+        };
         if (motionReady()) {
             if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A)) {
-                g_message = recalibrating      ? "IMU calibrating: hold still"
-                            : runDirect() != 0 ? "Direct test running"
-                                               : "Drive busy";
+                if (recalibrating) {
+                    g_message = "IMU calibrating: hold still";
+                } else {
+                    request(runDirect(), "Direct test running");
+                }
             }
             if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_X)) {
-                g_message = recalibrating        ? "IMU calibrating: hold still"
-                            : runAvoiding() != 0 ? "Avoiding test running"
-                                                 : "Drive busy";
+                if (recalibrating) {
+                    g_message = "IMU calibrating: hold still";
+                } else {
+                    request(runAvoiding(), "Avoiding test running");
+                }
             }
             if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_Y)) {
-                g_message = recalibrating        ? "IMU calibrating: hold still"
-                            : runLandmark() != 0 ? "Landmark test running"
-                                                 : "Drive busy";
+                if (recalibrating) {
+                    g_message = "IMU calibrating: hold still";
+                } else {
+                    request(runLandmark(), "Landmark test running");
+                }
             }
             if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_B)) {
                 g_task->cancel();
@@ -416,7 +422,7 @@ void opcontrol() {
                                                                     : "Place refused";
         }
         if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_DOWN)) {
-            if (moving(drive)) {
+            if (actugatr::moving(drive)) {
                 g_message = "Recalibrate refused: a movement is running";
             } else if (g_vex) {
                 g_message = g_recal.begin(g_link->recalibrate())
@@ -455,9 +461,10 @@ void opcontrol() {
             if (g_recal.active()) {
                 d = actugatr::ManualDemand{};
             }
-            const bool sticks = d.forward != 0 || d.strafe != 0 || d.turn != 0;
-            // Sticks take over from a running test; otherwise the test keeps the drive.
-            if (sticks || !moving(drive)) {
+            // Sticks take over from a running test; otherwise the test keeps
+            // the drive. A fresh read shows a test requested above as waiting.
+            g_task->status(drive);
+            if (actugatr::sendManual(d, requested, drive)) {
                 g_task->manual(d);
             }
         }

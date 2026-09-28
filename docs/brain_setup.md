@@ -181,7 +181,7 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 | Step | What it does |
 |---|---|
 | Gravity alignment | On the BNO08X, at every IMU start. It finds the up axis over 2 s still and level, which makes yaw correct for any fixed mounting. It does not track later rocking or tilt, and gives neither field heading nor mounting yaw. |
-| Gyro bias | Measured by the Pi over a still window: wheels still, gyro steady, samples fresh and continuous. Movement restarts the window. Without a still window in 60 s the calibration fails and X retries. The bias is re-measured after any Pico or IMU restart. |
+| Gyro bias | Measured by the Pi over a still window: wheels still, gyro steady, samples fresh and continuous. Movement restarts the window. Without a still window in 60 s the calibration fails and X retries. The bias is re-measured after any Pico or IMU restart. If the robot is placed and moves before the bias is measured (a recalibration, or a placement during the first calibration), that motion is lost and the pose becomes invalid ("motion lost"): keep the robot still until readiness shows Ready. |
 | Bias upkeep | While the robot stays still after calibration, the bias is nudged by bounded steps. Any movement or doubtful data stops it at once. |
 | Field heading | Comes only from placement. |
 

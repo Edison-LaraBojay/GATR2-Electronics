@@ -66,3 +66,46 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(navigatr_tests)
+
+# The real Brain stack (communiGATR, investiGATR, actuGATR, compiled from
+# brain/) against the Pi runtime over the USB link. Separate target so the
+# Pi tests do not depend on the Brain sources.
+set(BRAIN_ROOT ${REPO_ROOT}/brain)
+add_executable(brain_link_e2e_tests
+    brain_link_e2e_gtest.cpp
+    ${BRAIN_ROOT}/communiGATR/src/client.cpp
+    ${BRAIN_ROOT}/communiGATR/src/doc_assembly.cpp
+    ${BRAIN_ROOT}/communiGATR/src/link_driver.cpp
+    ${BRAIN_ROOT}/communiGATR/src/readiness.cpp
+    ${BRAIN_ROOT}/communiGATR/src/robot_profile.cpp
+    ${BRAIN_ROOT}/communiGATR/src/usb_line.cpp
+    ${BRAIN_ROOT}/investiGATR/src/geometry.cpp
+    ${BRAIN_ROOT}/investiGATR/src/field.cpp
+    ${BRAIN_ROOT}/investiGATR/src/state_source.cpp
+    ${BRAIN_ROOT}/investiGATR/src/reference.cpp
+    ${BRAIN_ROOT}/investiGATR/src/motion_model.cpp
+    ${BRAIN_ROOT}/investiGATR/src/path.cpp
+    ${BRAIN_ROOT}/investiGATR/src/collision.cpp
+    ${BRAIN_ROOT}/investiGATR/src/planner.cpp
+    ${BRAIN_ROOT}/actuGATR/src/chassis.cpp
+    ${BRAIN_ROOT}/actuGATR/src/pid.cpp
+    ${BRAIN_ROOT}/actuGATR/src/kinematics.cpp
+    ${BRAIN_ROOT}/actuGATR/src/drivetrain.cpp
+    ${BRAIN_ROOT}/actuGATR/src/drive.cpp
+    ${BRAIN_ROOT}/actuGATR/src/follower.cpp
+    ${BRAIN_ROOT}/actuGATR/src/motion.cpp
+    ${BRAIN_ROOT}/actuGATR/sim/sim_motor_output.cpp
+    ${BRAIN_ROOT}/actuGATR/sim/drive_sim.cpp
+)
+target_include_directories(brain_link_e2e_tests PRIVATE
+    ${BRAIN_ROOT}/communiGATR/include
+    ${BRAIN_ROOT}/investiGATR/include
+    ${BRAIN_ROOT}/actuGATR/include
+    ${BRAIN_ROOT}/actuGATR)
+target_compile_definitions(brain_link_e2e_tests PRIVATE
+    NAVIGATR_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../config")
+target_link_libraries(brain_link_e2e_tests PRIVATE navigatr_core GTest::gtest_main)
+if(NOT MSVC)
+    target_compile_options(brain_link_e2e_tests PRIVATE -Wall -Wextra)
+endif()
+gtest_discover_tests(brain_link_e2e_tests)

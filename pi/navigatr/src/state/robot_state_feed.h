@@ -25,6 +25,8 @@ struct ObservationFunctionStatus {
     bool            ready = false;   // calibration complete, producing
     std::string     note;            // calibrating, waiting for wheels, ...
     StillnessStatus stillness;       // stationary window and bias calibration
+    uint64_t        dropped_intervals = 0;   // measured motion discarded (localization.h)
+    std::string     dropped_why;
 };
 
 struct LocalizationStatus {

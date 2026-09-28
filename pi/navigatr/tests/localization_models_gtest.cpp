@@ -152,7 +152,7 @@ const char* kTwoWheelXml = R"(
                    position_y_m="0" measurement_angle_deg="0" direction="positive"/>
     <TrackingWheel sensor_id="enc_b" radius_m="0.0254" position_x_m="0"
                    position_y_m="0" measurement_angle_deg="90" direction="positive"/>
-    <HeadingConstraint sensor_id="imu" bias_samples="2"/>
+    <HeadingConstraint sensor_id="imu" bias_samples="2" window_ms="5"/>
     <Output observation_id="motion"/>
 </Observation>)";
 
@@ -386,32 +386,170 @@ TEST(TrackingWheelMotion, CalibrationRebasesWheelsAndRestartsOnMotion) {
     f.putImu(0.02, 1000, 1);
     f.run(*fn);   // seeds; bias sample 1
 
-    // the robot moves 20 mm while bias collection runs: collection restarts
+    // the robot moves 20 mm while bias collection runs: collection restarts,
+    // and that motion, never integrated, counts as dropped
+    EXPECT_EQ(fn->readiness().dropped_intervals, 0u);
     f.putEncoder("enc_a", 0.02 / r, 1005, 2);
     f.putEncoder("enc_b", 0.0, 1005, 2);
     f.putImu(0.02, 1005, 2);
     EXPECT_TRUE(f.run(*fn).empty());
     EXPECT_EQ(fn->readiness().stillness.calibration, BiasCalibration::kWaitingStill);
+    EXPECT_EQ(fn->readiness().dropped_intervals, 1u);   // one movement, counted once
+    EXPECT_NE(fn->readiness().dropped_why.find("calibrated"), std::string::npos);
+    const uint64_t dropped = fn->readiness().dropped_intervals;
 
-    // stationary again: completes the restarted run
+    // stationary again: completes the restarted run, nothing more dropped
     f.putEncoder("enc_a", 0.02 / r, 1010, 3);
     f.putEncoder("enc_b", 0.0, 1010, 3);
     f.putImu(0.02, 1010, 3);
     EXPECT_TRUE(f.run(*fn).empty());
     EXPECT_TRUE(fn->readiness().ready);
+    EXPECT_EQ(fn->readiness().dropped_intervals, dropped);
 
-    // post-calibration motion contains only travel after calibration
+    // the sample that completed the window seeds the gyro and the wheels
+    // alike: the first solve spans one interval and holds only travel after
+    // calibration
     f.putEncoder("enc_a", 0.03 / r, 1015, 4);
     f.putEncoder("enc_b", 0.0, 1015, 4);
-    f.putImu(0.02, 1015, 4);   // seeds the integrator
-    EXPECT_TRUE(f.run(*fn).empty());
+    f.putImu(0.02, 1015, 4);
+    const auto first = Fixture::motion(f.run(*fn));
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(first->startAt.ms, 1010);
+    EXPECT_EQ(first->endAt.ms, 1015);
+    EXPECT_NEAR(first->dx_m, 0.01, 1e-9);   // 0.03 would leak calibration travel
+    EXPECT_NEAR(first->dtheta_rad, 0.0, 1e-9);
     f.putEncoder("enc_a", 0.04 / r, 1020, 5);
     f.putEncoder("enc_b", 0.0, 1020, 5);
     f.putImu(0.02, 1020, 5);
     const auto delta = Fixture::motion(f.run(*fn));
     ASSERT_NE(delta, nullptr);
-    EXPECT_NEAR(delta->dx_m, 0.02, 1e-9);   // 0.04 total would leak cal travel
+    EXPECT_NEAR(delta->dx_m, 0.01, 1e-9);
     EXPECT_NEAR(delta->dtheta_rad, 0.0, 1e-9);
+    EXPECT_EQ(fn->readiness().dropped_intervals, dropped);
+}
+
+// Turning while the bias calibrates is movement even when no wheel sees it
+// (both wheels here sit at the origin); once calibrated, turning is measured
+// and drops nothing.
+TEST(TrackingWheelMotion, TurningWhileCalibratingCounts) {
+    Fixture     f;
+    std::string err;
+    auto        fn = f.makeMotion(kTwoWheelXml, err);
+    ASSERT_NE(fn, nullptr) << err;
+    int64_t    t    = 1000;
+    uint64_t   seq  = 0;
+    const auto tick = [&](double rate) {
+        ++seq;
+        f.putEncoder("enc_a", 0.0, t, seq);
+        f.putEncoder("enc_b", 0.0, t, seq);
+        f.putImu(rate, t, seq);
+        f.run(*fn);
+        t += 5;
+    };
+    tick(0.02);
+    tick(0.5);   // about 29 deg/s
+    EXPECT_EQ(fn->readiness().dropped_intervals, 1u);
+    EXPECT_EQ(fn->readiness().stillness.movements, 1u);
+    EXPECT_NE(fn->readiness().dropped_why.find("turning"), std::string::npos);
+    tick(0.02);   // stopping varies the rate: movement again
+    tick(0.02);
+    tick(0.02);
+    ASSERT_TRUE(fn->readiness().ready);
+    const uint64_t dropped = fn->readiness().dropped_intervals;
+    EXPECT_EQ(dropped, 2u);
+    tick(0.5);
+    tick(0.5);
+    EXPECT_EQ(fn->readiness().dropped_intervals, dropped);
+}
+
+// The travel rebased away while calibrating sums from each calibration's
+// start: a recalibration and a dropped window both start it at zero, so
+// travel from before never adds to what the next calibration sees.
+TEST(TrackingWheelMotion, TheCalibrationTravelSumStartsAtEachCalibration) {
+    Fixture     f;
+    std::string err;
+    auto        fn = f.makeMotion(kTwoWheelXml, err);   // limit 5 mm
+    ASSERT_NE(fn, nullptr) << err;
+    const double r    = 0.0254;
+    uint64_t     seq  = 0;
+    const auto   tick = [&](int64_t t, double a_m, uint64_t b_discontinuity = 0) {
+        ++seq;
+        f.putEncoder("enc_a", a_m / r, t, seq);
+        f.putEncoder("enc_b", 0.0, t, seq, b_discontinuity);
+        f.putImu(0.02, t, seq);
+        f.run(*fn);
+    };
+    tick(1000, 0.0);
+    tick(1005, 0.004);   // a 4 mm creep, under the limit; calibrated
+    ASSERT_TRUE(fn->readiness().ready);
+    ASSERT_TRUE(fn->recalibrate());
+    tick(1010, 0.007);   // 3 mm more: 3 mm since this calibration started
+    EXPECT_EQ(fn->readiness().dropped_intervals, 0u);
+
+    tick(1015, 0.007, 1);   // wheel b restarts: a dropped window
+    EXPECT_EQ(fn->readiness().dropped_intervals, 1u);
+    tick(1020, 0.007, 1);   // new baselines
+    tick(1025, 0.010, 1);   // 3 mm since the drop
+    EXPECT_EQ(fn->readiness().dropped_intervals, 1u);
+}
+
+// Wheel travel that the window cannot see as movement, a push across a
+// sample gap while the bias calibrates, still counts as dropped; after
+// calibration ordinary motion drops nothing.
+TEST(TrackingWheelMotion, TravelRebasedAwayWhileCalibratingCounts) {
+    Fixture     f;
+    std::string err;
+    auto        fn = f.makeMotion(R"(
+<Observation id="m" type="tracking_wheel_motion">
+    <TrackingWheel sensor_id="enc_a" radius_m="0.0254" position_x_m="0"
+                   position_y_m="0" measurement_angle_deg="0" direction="positive"/>
+    <TrackingWheel sensor_id="enc_b" radius_m="0.0254" position_x_m="0"
+                   position_y_m="0" measurement_angle_deg="90" direction="positive"/>
+    <HeadingConstraint sensor_id="imu" bias_samples="4" window_ms="15"
+                       max_calibration_travel_m="0.005" evidence_gap_ms="20"/>
+    <Output observation_id="motion"/>
+</Observation>)",
+                                  err);
+    ASSERT_NE(fn, nullptr) << err;
+    const double r    = 0.0254;
+    int64_t      t    = 1000;
+    uint64_t     seq  = 0;
+    double       x    = 0.0;
+    const auto   tick = [&](int64_t dt, double dx) {
+        t += dt;
+        x += dx;
+        ++seq;
+        f.putEncoder("enc_a", x / r, t, seq);
+        f.putEncoder("enc_b", 0.0, t, seq);
+        f.putImu(0.02, t, seq);
+        return f.run(*fn);
+    };
+    tick(0, 0.0);
+    tick(5, 0.0);
+    // a 30 mm push inside a 60 ms gap: the window restarts for the gap and
+    // never compares across it, the rebased travel adds up
+    tick(60, 0.03);
+    EXPECT_EQ(fn->readiness().stillness.movements, 0u);
+    EXPECT_EQ(fn->readiness().dropped_intervals, 1u);
+    EXPECT_NE(fn->readiness().dropped_why.find("travelled"), std::string::npos);
+
+    // a creep under the limit between gaps adds up too
+    tick(60, 0.002);
+    tick(60, 0.002);
+    EXPECT_EQ(fn->readiness().dropped_intervals, 1u);
+    tick(60, 0.002);
+    EXPECT_EQ(fn->readiness().stillness.movements, 0u);
+    EXPECT_EQ(fn->readiness().dropped_intervals, 2u);
+
+    // still: calibrated; then driving drops nothing
+    for (int i = 0; i < 5; ++i) {
+        tick(5, 0.0);
+    }
+    ASSERT_TRUE(fn->readiness().ready);
+    for (int i = 0; i < 5; ++i) {
+        tick(5, 0.01);
+    }
+    EXPECT_EQ(fn->readiness().dropped_intervals, 2u);
 }
 
 TEST(TrackingWheelMotion, ConfigurationErrors) {
@@ -674,7 +812,7 @@ TEST(ImuHeadingIncrement, CalibratesThenIntegratesWithProvenance) {
     auto        fn = f.makeHeading(R"(
 <Observation id="imu_heading" type="imu_heading_increment">
     <Input sensor_id="imu"/>
-    <Calibration bias_samples="2"/>
+    <Calibration bias_samples="2" window_ms="5"/>
     <Output observation_id="heading"/>
 </Observation>)",
                                    err);
@@ -741,6 +879,59 @@ TEST(TrackingWheelMotion, LaterStationaryWindowsMoveTheBiasInBoundedSteps) {
     EXPECT_EQ(fn->readiness().stillness.attempts, 1u);   // never recalibrated
 }
 
+// Every bias window is sample time: 2 s unless configured, never zero, so
+// a burst of samples is no calibration.
+TEST(TrackingWheelMotion, BiasWindowsAreSampleTimeByDefault) {
+    const std::string motion_xml = R"(
+<Observation id="m" type="tracking_wheel_motion">
+    <TrackingWheel sensor_id="enc_a" radius_m="0.0254" position_x_m="0"
+                   position_y_m="0" measurement_angle_deg="0" direction="positive"/>
+    <TrackingWheel sensor_id="enc_b" radius_m="0.0254" position_x_m="0"
+                   position_y_m="0" measurement_angle_deg="90" direction="positive"/>
+    <HeadingConstraint sensor_id="imu" bias_samples="2"WINDOW/>
+    <Output observation_id="motion"/>
+</Observation>)";
+    const std::string heading_xml = R"(
+<Observation id="imu_heading" type="imu_heading_increment">
+    <Input sensor_id="imu"/>
+    <Calibration bias_samples="2"WINDOW/>
+    <Output observation_id="heading"/>
+</Observation>)";
+    const auto with = [](std::string xml, const std::string& window) {
+        xml.replace(xml.find("WINDOW"), 6, window);
+        return xml;
+    };
+
+    Fixture     f;
+    std::string err;
+    auto        motion = f.makeMotion(with(motion_xml, ""), err);
+    ASSERT_NE(motion, nullptr) << err;
+    auto heading = f.makeHeading(with(heading_xml, ""), err);
+    ASSERT_NE(heading, nullptr) << err;
+    EXPECT_EQ(motion->readiness().stillness.window_ms, 2000);
+    EXPECT_EQ(heading->readiness().stillness.window_ms, 2000);
+    for (uint64_t i = 1; i <= 50; ++i) {   // 50 still samples over 245 ms
+        const int64_t t = 1000 + 5 * static_cast<int64_t>(i - 1);
+        f.putEncoder("enc_a", 0.0, t, i);
+        f.putEncoder("enc_b", 0.0, t, i);
+        f.putImu(0.02, t, i);
+        f.run(*motion);
+        f.run(*heading);
+    }
+    EXPECT_FALSE(motion->readiness().ready);
+    EXPECT_FALSE(heading->readiness().ready);
+    EXPECT_EQ(motion->readiness().stillness.calibration, BiasCalibration::kRunning);
+
+    for (const char* bad : {R"( window_ms="0")", R"( window_ms="-5")"}) {
+        err.clear();
+        EXPECT_EQ(f.makeMotion(with(motion_xml, bad), err), nullptr) << bad;
+        EXPECT_NE(err.find("window_ms"), std::string::npos) << err;
+        err.clear();
+        EXPECT_EQ(f.makeHeading(with(heading_xml, bad), err), nullptr) << bad;
+        EXPECT_NE(err.find("window_ms"), std::string::npos) << err;
+    }
+}
+
 TEST(TrackingWheelMotion, AGyroSourceRestartInvalidatesTheBias) {
     Fixture     f;
     std::string err;
@@ -773,7 +964,7 @@ TEST(ImuHeadingIncrement, ASourceRestartInvalidatesTheBias) {
     auto        fn = f.makeHeading(R"(
 <Observation id="imu_heading" type="imu_heading_increment">
     <Input sensor_id="imu"/>
-    <Calibration bias_samples="2"/>
+    <Calibration bias_samples="2" window_ms="5"/>
     <Output observation_id="heading"/>
 </Observation>)",
                                    err);
@@ -800,7 +991,7 @@ TEST(ImuHeadingIncrement, WheelsGateTheBiasWindow) {
     auto        fn = f.makeHeading(R"(
 <Observation id="imu_heading" type="imu_heading_increment">
     <Input sensor_id="imu"/>
-    <Calibration bias_samples="3" still_travel_m="0.001">
+    <Calibration bias_samples="3" window_ms="10" still_travel_m="0.001">
         <Wheel sensor_id="enc_a" radius_m="0.0254"/>
     </Calibration>
     <Output observation_id="heading"/>

@@ -8,8 +8,9 @@
 // its newest sample; for the VEX IMU its newest valid sample, an invalid one
 // counts as missing) and while a used Pico IMU reports itself anything but
 // ready. A change of its identity is a loss at that moment: a record epoch,
-// an encoder discontinuity, a source epoch, the Brain IMU epoch, a Pico
-// reboot or acquisition restart, or a restart of a used Pico IMU. A
+// an encoder discontinuity, a source epoch, the Brain IMU epoch (moved by an
+// invalid sample or a new Brain session too), a Pico reboot or acquisition
+// restart, or a restart of a used Pico IMU. A
 // physically disconnected quadrature encoder keeps its last count and reads
 // as standing still; that cannot be seen here. Estimation worker only.
 

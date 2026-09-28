@@ -19,9 +19,9 @@ bool readStillness(const ConfigNode& node, StillnessConfig& c, std::string& err)
         !node.getDouble("max_rate_dps", max_dps, max_dps, err)) {
         return false;
     }
-    if (window_ms < 0 || gap_ms <= 0 || !(still_dps > 0.0) || !(max_dps > 0.0)) {
-        err = node.path() + ": window_ms cannot be negative; evidence_gap_ms, still_rate_dps "
-                            "and max_rate_dps must be positive";
+    if (window_ms <= 0 || gap_ms <= 0 || !(still_dps > 0.0) || !(max_dps > 0.0)) {
+        err = node.path() + ": window_ms, evidence_gap_ms, still_rate_dps and max_rate_dps "
+                            "must be positive";
         return false;
     }
     c.window_ms        = window_ms;
@@ -183,6 +183,7 @@ bool StationaryWindow::add(size_t index, const StillSample& sample) {
     std::string why;
     if (moves(s, sample, why)) {
         restart(Phase::kWaitingStill, why);
+        ++movements_;
         begin(s, sample);   // the newest sample is the new baseline
         return true;
     }
@@ -398,6 +399,7 @@ StillnessStatus stillnessOf(const StationaryWindow& window, const GyroBiasCalibr
     s.window_ms   = window.config().window_ms;
     s.windows     = window.windows();
     s.restarts    = window.restarts();
+    s.movements   = window.movements();
     if (calibration != nullptr) {
         s.calibration = calibration->state(window.phase());
         s.attempts    = calibration->attempts();

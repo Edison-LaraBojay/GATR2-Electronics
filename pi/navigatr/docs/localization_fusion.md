@@ -63,7 +63,8 @@ Pi builds `tracking_wheel_motion` without a heading constraint,
 
 `imu_heading_increment` publishes nothing until its bias is calibrated from a
 qualified stationary window, the same `StationaryWindow` every IMU bias path
-uses: `bias_samples` gyro samples spanning `window_ms` of sample time, the rate
+uses: `bias_samples` gyro samples spanning `window_ms` of sample time (2 s
+unless configured; never zero, so a burst of samples is no window), the rate
 steady and small, no gap over `evidence_gap_ms`, and every listed
 `<Calibration><Wheel sensor_id radius_m/>` still within `still_travel_m`. The
 wheels only gate the window; they are no part of the heading's lineage, so

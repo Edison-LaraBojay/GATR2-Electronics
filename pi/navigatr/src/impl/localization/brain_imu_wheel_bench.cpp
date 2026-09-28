@@ -157,6 +157,15 @@ BrainImuWheelBench::create(const ConfigNode& node, RobotObservationInitializatio
     }
     still.min_samples = samples;
     model->window_.configure(still);
+
+    const ConfigNode freshness = node.child("Freshness");
+    if (!freshness.getInt("max_age_ms", 200, model->max_age_ms_, err)) {
+        return nullptr;
+    }
+    if (model->max_age_ms_ <= 0) {
+        err = freshness.path() + ": max_age_ms must be positive";
+        return nullptr;
+    }
     for (Wheel& w : model->wheels_) {
         w.source = model->window_.addSource(StationaryWindow::Kind::kWheel,
                                             "wheel " + w.binding.id.value);
@@ -180,10 +189,17 @@ std::vector<RobotObservationOutputDecl> BrainImuWheelBench::outputs() const {
 
 ObservationReadiness BrainImuWheelBench::readiness() const {
     ObservationReadiness r;
-    r.ready     = ready_;
-    r.note      = note_;
-    r.stillness = stillnessOf(window_, nullptr);
+    r.ready             = ready_;
+    r.note              = note_;
+    r.stillness         = stillnessOf(window_, nullptr);
+    r.dropped_intervals = dropped_;
+    r.dropped_why       = dropped_why_;
     return r;
+}
+
+void BrainImuWheelBench::lostMotion(const std::string& why) {
+    ++dropped_;
+    dropped_why_ = why;
 }
 
 void BrainImuWheelBench::reset() {
@@ -227,22 +243,32 @@ void BrainImuWheelBench::observeStillness(const std::array<const StoredSample*, 
 FunctionStatus BrainImuWheelBench::run(const RobotObservationInput& in, RobotObservationMap& out) {
     const auto fresh = [&](MonotonicTime t) {
         return t.domain == ClockDomain::kHost && in.context.now.domain == ClockDomain::kHost &&
-               in.context.now.ms >= t.ms && in.context.now.ms - t.ms <= 200;
+               in.context.now.ms >= t.ms && in.context.now.ms - t.ms <= max_age_ms_;
     };
     std::array<const StoredSample*, 2>  stored{};
     std::array<const EncoderSample*, 2> samples{};
-    bool                                valid = imu_->valid && fresh(imu_->received);
+    std::string                         missing;   // why no step can be measured now
+    if (!imu_->valid) {
+        missing = "VEX IMU sample invalid";
+    } else if (!fresh(imu_->received)) {
+        missing = "VEX IMU stale";
+    }
     for (std::size_t i = 0; i < 2; ++i) {
         stored[i]  = wheels_[i].binding.freshStored(in.sensors);
         samples[i] = stored[i] ? stored[i]->payload.get<EncoderSample>() : nullptr;
-        valid      = valid && stored[i] && samples[i] && fresh(stored[i]->receivedAt) &&
-                std::isfinite(samples[i]->angle_rad);
+        if (missing.empty() && !(stored[i] && samples[i] && fresh(stored[i]->receivedAt) &&
+                                 std::isfinite(samples[i]->angle_rad))) {
+            missing = "encoder " + wheels_[i].binding.id.value + " missing or stale";
+        }
     }
     observeStillness(stored, samples, in.context.now);
-    if (!valid) {
+    if (!missing.empty()) {
+        if (baseline_) {
+            lostMotion(missing);   // the travel from here to the next baseline is lost
+        }
         baseline_ = false;
         ready_    = false;
-        note_     = "bench: VEX IMU or encoder missing/stale; hold pose and rebaseline";
+        note_     = "bench: " + missing + "; hold pose and rebaseline";
         return FunctionStatus::kNoData;
     }
     if (offered_) {
@@ -251,13 +277,24 @@ FunctionStatus BrainImuWheelBench::run(const RobotObservationInput& in, RobotObs
     if (baseline_ && imu_->sequence == imu_sequence_ && imu_->epoch == imu_epoch_) {
         return FunctionStatus::kNoData;
     }
-    bool rebase = !baseline_ || imu_->epoch != imu_epoch_ || imu_->received.ms <= previous_.ms ||
-                  imu_->received.ms - previous_.ms > 200;
+    // a rebaseline after a baseline existed discards the interval since it
+    std::string dropped;
+    if (baseline_ && imu_->epoch != imu_epoch_) {
+        dropped = "VEX IMU restarted";
+    } else if (baseline_ && imu_->received.ms <= previous_.ms) {
+        dropped = "VEX IMU receipt did not advance";
+    } else if (baseline_ && imu_->received.ms - previous_.ms > max_age_ms_) {
+        dropped = "no VEX IMU and wheel pair for " +
+                  std::to_string(imu_->received.ms - previous_.ms) + " ms";
+    }
     for (std::size_t i = 0; i < 2; ++i) {
         const Wheel& w = wheels_[i];
-        rebase         = rebase || stored[i]->epoch != w.epoch ||
-                 samples[i]->discontinuity_epoch != w.discontinuity;
+        if (baseline_ && dropped.empty() &&
+            (stored[i]->epoch != w.epoch || samples[i]->discontinuity_epoch != w.discontinuity)) {
+            dropped = "encoder " + w.binding.id.value + " restarted";
+        }
     }
+    bool rebase = !baseline_ || !dropped.empty();
     // Do not emit heading-only updates while wheel records are retained. A
     // later new wheel sample captures the whole cumulative travel instead.
     if (!rebase && (stored[0]->sequence == wheels_[0].sequence ||
@@ -272,7 +309,8 @@ FunctionStatus BrainImuWheelBench::run(const RobotObservationInput& in, RobotObs
     motion.dtheta_rad = degToRad((static_cast<double>(imu_->rotation_mdeg) - rotation_) / 1000.0);
     // Catch unannounced zeroing or discontinuous angles rather than teleporting.
     if (!rebase && std::fabs(motion.dtheta_rad) > 12.0 * motion.dt_s + 0.1) {
-        rebase = true;
+        rebase  = true;
+        dropped = "VEX IMU rotation jumped";
     }
     std::array<double, 2> travel{};
     for (std::size_t i = 0; i < 2; ++i) {
@@ -311,6 +349,9 @@ FunctionStatus BrainImuWheelBench::run(const RobotObservationInput& in, RobotObs
     note_         = planar_ ? "BENCH: arrival-time pairing; forward and sideways wheel solve"
                             : "BENCH: arrival-time pairing; sideways motion unmeasured";
     if (rebase) {
+        if (!dropped.empty()) {
+            lostMotion(dropped);
+        }
         return FunctionStatus::kNoData;
     }
     RobotObservationRecord record;

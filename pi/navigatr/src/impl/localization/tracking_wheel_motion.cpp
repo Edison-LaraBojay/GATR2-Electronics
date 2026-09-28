@@ -262,7 +262,6 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
         double                      still_travel = 0.005;
         StillnessConfig             still;
         GyroBiasCalibration::Config calibration;
-        still.window_ms = 0;
         if (!constraint.getInt("bias_samples", 200, bias_samples, err) ||
             !constraint.getInt("max_gap_ms", 250, model->heading_.max_gap_ms, err) ||
             !constraint.getDouble("max_calibration_travel_m", 0.005, still_travel, err) ||
@@ -271,8 +270,8 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
             return nullptr;
         }
         if (bias_samples < 0 || model->heading_.max_gap_ms <= 0 || still_travel <= 0.0) {
-            err = constraint.path() + ": bias_samples and window_ms cannot be negative; "
-                  "max_gap_ms and max_calibration_travel_m must be positive";
+            err = constraint.path() + ": bias_samples cannot be negative; max_gap_ms and "
+                  "max_calibration_travel_m must be positive";
             return nullptr;
         }
         // the stationary window runs for the status even with calibration off
@@ -398,6 +397,8 @@ std::vector<RobotObservationOutputDecl> TrackingWheelMotion::outputs() const {
 
 ObservationReadiness TrackingWheelMotion::readiness() const {
     ObservationReadiness r;
+    r.dropped_intervals = drops_;
+    r.dropped_why       = dropped_why_;
     if (heading_.configured) {
         r.stillness = stillnessOf(heading_.window, &heading_.bias);
     }
@@ -423,6 +424,7 @@ void TrackingWheelMotion::reset() {
         w.pending_travel_m   = 0.0;
         w.baselined          = true;
     }
+    clearCalibrationTravel();
     awaiting_baselines_ = false;
     if (heading_.configured) {
         heading_.window.restart(StationaryWindow::Phase::kWaitingData, "reset");
@@ -452,13 +454,34 @@ void TrackingWheelMotion::dropWindow(const char* why) {
     heading_.baselined      = false;
     awaiting_baselines_     = true;
     last_drop_reason_       = why;
-    ++drops_;
+    clearCalibrationTravel();
+    lostMotion(why);
 }
 
 void TrackingWheelMotion::takeWindow(MonotonicTime now) {
     StationaryWindow::Qualified q;
     if (heading_.window.takeQualified(q) && q.gyro) {
         heading_.bias.qualified(q.gyro_rate, now);
+    }
+}
+
+void TrackingWheelMotion::lostMotion(const std::string& why) {
+    ++drops_;
+    dropped_why_ = why;
+}
+
+bool TrackingWheelMotion::calibrationMovement(uint64_t movements_before) {
+    if (heading_.bias.calibrated() || heading_.window.movements() == movements_before) {
+        return false;
+    }
+    clearCalibrationTravel();
+    lostMotion("moved while the gyro bias calibrated (" + heading_.window.reason() + ")");
+    return true;
+}
+
+void TrackingWheelMotion::clearCalibrationTravel() {
+    for (Wheel& w : wheels_) {
+        w.calibration_travel_m = 0.0;
     }
 }
 
@@ -476,6 +499,7 @@ bool TrackingWheelMotion::recalibrate() {
     heading_.pending        = false;
     heading_.pending_dtheta = 0.0;
     heading_.have_prev      = false;
+    clearCalibrationTravel();
     awaiting_baselines_     = false;   // calibration rebases every wheel
     heading_.window.restart(StationaryWindow::Phase::kWaitingData, "recalibration requested");
     heading_.bias.start("recalibration requested");
@@ -518,8 +542,10 @@ FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
         if (!newest_stamp.isSet() || stored->measuredAt > newest_stamp) {
             newest_stamp = stored->measuredAt;
         }
+        bool moved = false;   // the window counted this sample as movement
         if (heading_.configured) {
-            StillSample evidence;
+            const uint64_t movements = heading_.window.movements();
+            StillSample    evidence;
             evidence.sequence      = stored->sequence;
             evidence.epoch         = stored->epoch;
             evidence.discontinuity = sample->discontinuity_epoch;
@@ -527,6 +553,7 @@ FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
             evidence.received      = stored->receivedAt;
             evidence.value         = sample->angle_rad * w.radius_m * w.scale;
             heading_.window.add(w.source, evidence);
+            moved = calibrationMovement(movements);
             takeWindow(now);
         }
 
@@ -560,6 +587,18 @@ FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
         if (was_calibrating || awaiting_baselines_) {
             // rebase only: travel while calibrating is not motion data, and
             // travel before a post-drop baseline may span an invalid stretch
+            // (that drop was counted). Travel rebased away while calibrating
+            // adds up, so a creep or a push across a sample gap still counts.
+            if (was_calibrating && !awaiting_baselines_ && !moved) {
+                const double limit = heading_.window.config().still_travel_m;
+                w.calibration_travel_m +=
+                    (sample->angle_rad - w.prev_angle_rad) * w.radius_m * w.scale * w.sign;
+                if (std::fabs(w.calibration_travel_m) > limit) {
+                    clearCalibrationTravel();
+                    lostMotion("wheel " + (w.label.empty() ? w.binding.id.value : w.label) +
+                               " travelled while the gyro bias calibrated");
+                }
+            }
             w.prev_angle_rad = sample->angle_rad;
             w.prev_stamp     = stored->measuredAt;
             w.baselined      = true;
@@ -610,21 +649,22 @@ FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
             evidence.has_accumulated   = sample->has_accumulated;
             evidence.accumulated       = sample->accumulated_angle_rad;
             evidence.accumulated_epoch = sample->accumulated_epoch;
-            const bool bias_ready      = heading_.bias.calibrated();
+            const uint64_t movements   = heading_.window.movements();
             heading_.window.add(heading_.source, evidence);
+            calibrationMovement(movements);
             if ((record_restart || source_restart) && heading_.bias.enabled()) {
-                // a restarted IMU invalidates its bias; the pose holds while
-                // it calibrates again
+                // a restarted IMU invalidates its bias; it calibrates again
                 dropWindow("gyro source restart");
                 heading_.bias.start("IMU source restarted");
             }
             takeWindow(now);
 
-            // a sample that completed the calibration window is calibration
-            // data; the next one seeds the integrator
-            if (!bias_ready || !heading_.bias.calibrated()) {
+            // Calibration data only while calibrating. The sample that
+            // completes the window finds no previous one below and seeds the
+            // integrator: the wheels rebased on that same sample.
+            if (!heading_.bias.calibrated()) {
                 heading_.baselined = true;
-                heading_.have_prev = false;   // the first sample after calibration reseeds
+                heading_.have_prev = false;
             } else {
                 const double bias = heading_.bias.bias();
                 const double rate = sample->yaw_rate_rad_s - bias;

@@ -72,7 +72,9 @@ detection.
   CommandCollection's `<BenchImu>`.
 - `Calibration` and `Timing` are the Pi defaults. A profile's calibration
   window, still rate and still travel replace `window_ms`, `still_rate_dps`
-  and `still_travel_m` when they are not 0.
+  and `still_travel_m` when they are not 0. `max_gap_ms` is the longest gyro
+  gap integrated; `sensor_loss_ms` is how long a used source may stay quiet,
+  and also the longest step of the VEX IMU bench model (see Sensor loss).
 - The noise values in `Fusion` are PLACEHOLDER assumptions, used only by three
   wheels with the Pico IMU.
 - `<Pico resource_id="pico_telemetry"/>` on the CommandCollection enables
@@ -190,7 +192,8 @@ One `StationaryWindow` serves every IMU bias path and the stationary status:
   than `still_rate_dps` (1) from the window mean, a VEX rotation change above
   the still rate times the window.
 - It qualifies on elapsed sample time: every source spans `window_ms` (2 s)
-  with at least `bias_samples` (20) samples. It is time, not a sample count.
+  with at least `bias_samples` (20) samples. It is time, not a sample count;
+  `window_ms` must be positive, and XML models without it use 2 s as well.
 
 The gyro bias (Pico IMU profiles):
 
@@ -202,9 +205,14 @@ The gyro bias (Pico IMU profiles):
   0.2 deg/s per window. A window that restarts contributes nothing.
 - A gyro restart, IMU epoch change or Pico reboot invalidates the bias and
   starts a new attempt.
-- Two wheels: the HeadingConstraint in `tracking_wheel_motion` owns it, and
-  wheels do not integrate while it collects. Three wheels: `imu_heading_increment`
-  owns it, with the wheels as stillness evidence.
+- Two wheels: the HeadingConstraint in `tracking_wheel_motion` owns it.
+  Neither the wheels nor the gyro integrate while it calibrates, so a placed
+  robot must stay still until calibration is done: movement the window sees,
+  or wheel travel over `still_travel_m` in all, ends pose continuity (motion
+  lost, below). The sample that completes the window starts integration for
+  the wheels and the gyro alike. Three wheels: `imu_heading_increment` owns
+  it, with the wheels as stillness evidence; the wheels keep measuring
+  rotation meanwhile, so nothing is lost.
 
 The state block's `calibration` is none, collecting, done, waiting for
 stillness, waiting for data or failed.
@@ -235,7 +243,7 @@ Movement above the thresholds ends it at once.
 
 | Action | What the Pi does |
 |---|---|
-| 1 recalibrate | Stationary precheck, then the running model restarts its bias calibration; the pose holds. VEX profiles: Ok with nothing to do on the Pi. |
+| 1 recalibrate | Stationary precheck, then the running model restarts its bias calibration. The pose holds while the robot stays still; moving before calibration is done needs a placement (two-wheel Pico IMU profiles). VEX profiles: Ok with nothing to do on the Pi. |
 | 2 reinitialize | Stationary precheck, then a localization reset: odometry epoch + 1, unplaced, placements withdrawn, bias recalibrates. |
 | 3 reinitialize the Pico IMU | Needs a Pico IMU profile (else Failed, IMU unused) and Pico firmware with identity (else Failed, Pico link). Pending while the Pico works on it, Ok once it reports completion; the bias then recalibrates. |
 | 4 restart acquisition | Stationary precheck, then the Pico zeroes its counters under a new acquisition epoch. Pending until frames of the new epoch arrive, then Ok. |
@@ -269,9 +277,36 @@ was), earlier placements withdrawn, and an event "sensor lost: <source> ...:
 place again". A placement made while the source is still lost does not hold.
 `on_sensor_loss="warn"` keeps the pose and only logs.
 
+**Motion lost.** The loss check runs at the start of each cycle, so a gap
+that ends between two checks is never seen stale. The models close that gap:
+whenever one discards measured motion after it had a baseline, its
+`dropped_intervals` rises, and a rise while placed ends continuity the same
+way, with the event "motion lost: <function>: <why>: place again". A
+placement sent in that very cycle is withdrawn with it. The models discard
+motion on:
+
+- a step longer than their limit. The VEX IMU bench model's limit is
+  `sensor_loss_ms` (the builder writes it), for the VEX samples and the wheel
+  samples alike; it also stops when an encoder sensor goes stale (`Encoders
+  stale_after_ms`, 250). The Pico gyro model integrates gaps up to
+  `Calibration max_gap_ms` (250), and the Pico link cuts its gyro accumulator
+  at 250 ms. A limit shorter than `sensor_loss_ms` therefore ends continuity
+  first: raising `sensor_loss_ms` alone never lets a gap pass unmeasured.
+- a source restart or discontinuity, a nonpositive or misaligned interval,
+  or a VEX rotation jump (an unannounced zeroing).
+- movement while the gyro bias calibrates (above).
+
+Nothing is lost, and nothing unplaces, for gaps within every limit: the next
+step measures across them. A model that measures across a longer gap that
+ended between two checks keeps the placement too, since nothing went
+unmeasured: three wheels read cumulative counts and see rotation themselves.
+A Pi stall longer than a model's limit looks like a gap to that model (the
+two-wheel Pico gyro model sees only the newest sample afterwards), so it
+unplaces too. Warn mode logs motion lost too.
+
 | Situation | Automatic | Needs the operator |
 |---|---|---|
-| Brain link cable out, then back | The Pi keeps localizing; the Brain resumes its session. | VEX profile, out over 250 ms: place again. |
+| Brain link cable out, then back | The Pi keeps localizing; the Brain resumes its session. | VEX profile, out longer than `sensor_loss_ms` (250 ms): place again. |
 | Brain program restart | New session; the unchanged profile re-applies with no reset. | VEX profile: place again (startup placement does it). |
 | Pi restart | Waits, takes the profile again, serves the field again. | Place again. |
 | Pico reboot or acquisition restart | New identity: encoders rebase with no false displacement; Pico IMU bias recalibrates. | Place again. |

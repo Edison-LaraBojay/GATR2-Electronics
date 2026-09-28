@@ -337,6 +337,7 @@ void stillness(JsonWriter& w, const char* key, const StillnessStatus& s) {
     w.field("window_ms", static_cast<int64_t>(s.window_ms));
     w.field("windows", s.windows);
     w.field("restarts", s.restarts);
+    w.field("movements", s.movements);
     w.field("attempts", static_cast<uint64_t>(s.attempts));
     w.field("steps", static_cast<uint64_t>(s.steps));
     w.key("bias_dps");
@@ -1058,6 +1059,8 @@ std::string snapshotDocument(const System& system, const InspectionServiceStats&
         w.field("type", f.type);
         w.field("ready", f.ready);
         w.field("note", f.note);
+        w.field("dropped_intervals", f.dropped_intervals);
+        w.field("dropped_why", f.dropped_why);
         stillness(w, "stillness", f.stillness);
         w.endObject();
     }

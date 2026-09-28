@@ -474,7 +474,8 @@ uint8_t System::controlProfile(uint8_t action, uint8_t, MonotonicTime now, uint8
             return gatr2::kResultNotStationary;
         }
         const bool any = execute_localization_.recalibrate();
-        noteEvent(now, any ? "IMU bias recalibration started; pose holds"
+        noteEvent(now, any ? "IMU bias recalibration started; the pose holds while the robot "
+                             "stays still"
                            : "recalibrate: nothing to calibrate on the Pi for this profile");
         return gatr2::kResultOk;
     }
@@ -596,14 +597,14 @@ void System::updatePicoOperation(MonotonicTime now) {
             execute_localization_.recalibrate();
             settle(gatr2::kResultOk, gatr2::kControlDetailNone,
                    "Pico IMU reinitialized; bias recalibration started");
-            loseSensor(now, "pico_imu reinitialized", true);
+            losePlacement(now, "sensor lost: pico_imu reinitialized", true);
             return;
         }
         if (link.acq_epoch != op.acq_epoch || link.restarts != op.restarts) {
             settle(gatr2::kResultOk, gatr2::kControlDetailNone,
                    "Pico acquisition restarted (acquisition epoch " +
                        std::to_string(link.acq_epoch) + "); encoders rebased");
-            loseSensor(now, "Pico acquisition restarted", true);
+            losePlacement(now, "sensor lost: Pico acquisition restarted", true);
             return;
         }
         break;   // completed on the Pico; waiting for frames of the new epoch
@@ -666,6 +667,7 @@ uint8_t System::readWheels(MonotonicTime now, uint8_t& count, gatr2::WheelReadin
 }
 
 void System::watchSensors(const SensorMap& sensors, MonotonicTime now) {
+    sensor_lost_ = false;
     if (!sensor_loss_.active()) {
         return;
     }
@@ -677,27 +679,37 @@ void System::watchSensors(const SensorMap& sensors, MonotonicTime now) {
     }
     const SensorLossMonitor::Result r = sensor_loss_.update(sensors, pico, now);
     if (!r.edge.empty()) {
-        loseSensor(now, r.edge, true);
+        losePlacement(now, "sensor lost: " + r.edge, true);
     } else if (!r.level.empty()) {
-        loseSensor(now, r.level, !loss_warned_);
+        losePlacement(now, "sensor lost: " + r.level, !loss_warned_);
     }
     loss_warned_ = !r.level.empty();
+    sensor_lost_ = !r.edge.empty() || !r.level.empty();
 }
 
-void System::loseSensor(MonotonicTime now, const std::string& why, bool note) {
+void System::watchModels(MonotonicTime now) {
+    const uint64_t dropped = execute_localization_.droppedIntervals();
+    if (dropped > models_dropped_) {
+        // a sensor loss found this cycle already explains it
+        losePlacement(now, "motion lost: " + execute_localization_.lastDrop(), !sensor_lost_);
+    }
+    models_dropped_ = dropped;
+}
+
+void System::losePlacement(MonotonicTime now, const std::string& why, bool note) {
     if (!robot_.initialized) {
         return;   // nothing placed, nothing to lose
     }
     if (!profile_config_.unplace_on_sensor_loss) {
         if (note) {
-            noteEvent(now, "sensor lost: " + why + " (warn only; the pose is kept)");
+            noteEvent(now, why + " (warn only; the pose is kept)");
         }
         return;
     }
-    execute_localization_.loseContinuity("sensor lost: " + why);
+    execute_localization_.loseContinuity(why);
     robot_           = execute_localization_.state();
     placement_floor_ = command_.init_sequence;
-    noteEvent(now, "sensor lost: " + why + ": place again (odometry epoch " +
+    noteEvent(now, why + ": place again (odometry epoch " +
                        std::to_string(robot_.odometry_epoch) + ")");
 }
 
@@ -828,7 +840,9 @@ void System::swapProfile() {
     }
     sensor_loss_.configure(used, c->binding->imu, c->binding->profile.imu_port,
                            c->binding->bench_imu, profile_config_.sensor_loss_ms, last_now_);
-    loss_warned_ = false;
+    loss_warned_    = false;
+    sensor_lost_    = false;
+    models_dropped_ = execute_localization_.droppedIntervals();
     seen_.stillness.clear();
     field_handoff_.clear();
     profile_warnings_ = std::move(c->warnings);
@@ -860,6 +874,7 @@ void System::swapToWaiting() {
     placement_floor_ = 0;
     precheck_.configure({}, SensorId{}, nullptr);
     sensor_loss_.clear();
+    models_dropped_ = execute_localization_.droppedIntervals();
     seen_.stillness.clear();
     pico_op_        = PicoOperation{};
     profile_warnings_.clear();
@@ -993,6 +1008,9 @@ void System::estimationCycle(MonotonicTime now) {
     }
 
     robot_ = execute_localization_(sensor_map, requestsFrom(command_), context);
+    if (profiled_) {
+        watchModels(now);
+    }
     noteRecovery(now);
     if (pico_ != nullptr) {
         updatePicoOperation(now);

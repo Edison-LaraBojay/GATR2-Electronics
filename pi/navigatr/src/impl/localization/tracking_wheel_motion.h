@@ -13,7 +13,7 @@
 //       ...   or   <Wheels resource_id="wheel_geometry"><Use wheel_id=.../></Wheels>
 //       <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
 //                          max_calibration_travel_m="0.005" max_gap_ms="250"
-//                          window_ms="0" still_rate_dps="1" max_rate_dps="5"
+//                          window_ms="2000" still_rate_dps="1" max_rate_dps="5"
 //                          evidence_gap_ms="100" attempt_s="60"/>
 //       <LateralMotion assume="zero"/>   optional, forward-only wheels
 //       <Timing interval_tolerance_ms="20" max_pending_ms="500"/>
@@ -33,10 +33,16 @@
 // max_calibration_travel_m, the gyro within still_rate_dps of the window
 // mean and under max_rate_dps, no gap over evidence_gap_ms. Until then wheel
 // baselines rebase and nothing is produced; no qualified window within
-// attempt_s fails calibration until recalibrate(). Later qualified windows
-// adjust the bias in bounded steps. A gyro source restart (record or source
-// epoch) invalidates the bias and calibration starts again; the pose holds.
-// bias_samples 0 turns calibration off (bias zero).
+// attempt_s fails calibration until recalibrate(). The sample that completes
+// the window seeds the integrator, the same sample the wheels rebase on.
+// Later qualified windows adjust the bias in bounded steps. A gyro source
+// restart (record or source epoch) invalidates the bias and calibration
+// starts again. bias_samples 0 turns calibration off (bias zero).
+//
+// Motion while the bias calibrates is never integrated: movement the window
+// sees, or a wheel rebasing away more than max_calibration_travel_m in all,
+// counts as a dropped interval, like every dropped window below
+// (ObservationReadiness::dropped_intervals).
 //
 // Wheels that all measure along body x cannot see sideways motion. They
 // build only with LateralMotion assume="zero", which needs the heading
@@ -113,6 +119,8 @@ private:
         MonotonicTime pending_end;
         Provenance    provenance;   // newest consumed sample
         bool          baselined = true;   // has a post-drop baseline sample
+
+        double calibration_travel_m = 0.0;   // rebased away while the bias calibrates
     };
 
     struct HeadingConstraint {
@@ -150,6 +158,13 @@ private:
     bool calibrating() const { return heading_.configured && !heading_.bias.calibrated(); }
     void takeWindow(MonotonicTime now);
 
+    // Counts motion that was measured and discarded (dropped_intervals).
+    void lostMotion(const std::string& why);
+    // Movement the window saw since movements_before, while not calibrated;
+    // true when it counted one.
+    bool calibrationMovement(uint64_t movements_before);
+    void clearCalibrationTravel();
+
     ObservationFunctionId id_;
     std::string           type_ = "tracking_wheel_motion";
     ObservationId         output_;
@@ -170,7 +185,8 @@ private:
     bool          awaiting_baselines_ = false;
     MonotonicTime last_received_;   // host receipt of the newest consumed sample
     std::string   last_drop_reason_;
-    uint64_t      drops_ = 0;
+    uint64_t      drops_ = 0;   // dropped_intervals; never reset
+    std::string   dropped_why_;
     bool          offered_ = false;
 };
 

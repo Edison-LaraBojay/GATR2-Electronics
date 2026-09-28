@@ -27,7 +27,8 @@
         </Observation>
         <Observation id="imu_heading" type="imu_heading_increment">
             <Input sensor_id="robot_imu"/>
-            <Calibration bias_samples="60" max_gap_ms="250"/>
+            <!-- the rig holds still for its first 2 s: a 1 s window fits -->
+            <Calibration bias_samples="60" max_gap_ms="250" window_ms="1000"/>
             <Output observation_id="imu_heading"/>
         </Observation>
         <Observation id="attitude" type="attitude_reference">

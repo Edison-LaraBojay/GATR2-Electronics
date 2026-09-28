@@ -1220,6 +1220,7 @@ TEST(BrainProfile, RecalibrateNeedsStillnessAndHoldsThePose) {
     const gatr2::BrainState done = r.still(30);
     EXPECT_EQ(done.calibration, gatr2::kCalibrationDone);
     EXPECT_NE(done.health & gatr2::kHealthBiasCalibrated, 0);
+    EXPECT_NE(done.robot_flags & gatr2::kRobotLocalized, 0);   // still throughout
     EXPECT_NEAR(r.pose().x_m, held.x_m, 1e-9);
     EXPECT_NEAR(r.pose().y_m, held.y_m, 1e-9);
 
@@ -1348,6 +1349,12 @@ TEST(BrainProfile, ConfigurationSchemaIsStrict) {
               removeChild(root, "Pipeline/Localization/BrainProfile/Fusion", "HeadingNoise");
           },
           "HeadingNoise");
+    fails("a calibration window of no time",
+          [](tinyxml2::XMLElement* root) {
+              findChild(root, "Pipeline/Localization/BrainProfile/Calibration")
+                  ->SetAttribute("window_ms", 0);
+          },
+          "window_ms");
 }
 
 TEST(BrainProfile, Rs485ConfigDiffersFromUsbOnlyInTheBrainLink) {
@@ -2233,6 +2240,26 @@ TEST(SensorLoss, AnInvalidVexSampleIsARestart) {
     expectLostThenPlacedAgain(r, before);
 }
 
+// One invalid sample is one restart: the valid samples after it are the
+// new epoch, not another restart.
+TEST(SensorLoss, AnInvalidVexSampleIsOneRestart) {
+    Rig r([](tinyxml2::XMLElement* root) {
+        findChild(root, (std::string(kProfilePath) + "/Timing").c_str())
+            ->SetAttribute("on_sensor_loss", "warn");
+    });
+    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
+    r.vex_valid = false;
+    r.cycle();
+    r.vex_valid = true;
+    r.still(5);
+    int restarts = 0;
+    for (const RuntimeEvent& e : r.system->events()) {
+        restarts += e.text.find("brain_vex_imu restarted") != std::string::npos ? 1 : 0;
+    }
+    EXPECT_EQ(restarts, 1);
+    EXPECT_FALSE(eventNamed(r, "motion lost"));   // the sensor loss explains it
+}
+
 TEST(SensorLoss, ABrainRestartRestartsTheVexImu) {
     Rig r;
     const gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourceBrainVex);
@@ -2380,6 +2407,202 @@ TEST(SensorLoss, WarnOnlyKeepsThePoseAndLogsOnce) {
     EXPECT_EQ(warnings, 1);
 }
 
+// Rolling through gaps shorter than sensor_loss_ms (250): nothing is lost,
+// the placement holds and the pose is the truth.
+TEST(SensorLoss, GapsUnderTheLimitLoseNoTravelWhileRolling) {
+    const std::array<double, 3> half = {kCpr / 2.0, 0, 0};
+    {
+        Rig r;
+        ready(r, perpendicular(gatr2::kImuSourceBrainVex));
+        const gatr2::BrainState before = r.still(1);
+        r.translate(half, 10);
+        quietLink(r, 10, half);   // the next VEX sample 220 ms after the last
+        r.translate(half, 10);
+        quietPico(r, 10, half);   // the next wheel sample 220 ms after the last
+        r.translate(half, 10);
+        const gatr2::BrainState after = r.still(2);
+        EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+        EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
+        EXPECT_NEAR(r.pose().x_m, 1.0 + 2.5 * kRevolution, 1e-6);
+        EXPECT_FALSE(eventNamed(r, "sensor lost") || eventNamed(r, "motion lost"));
+    }
+    {
+        Rig r;
+        ready(r, perpendicular(gatr2::kImuSourcePico));
+        const gatr2::BrainState before = r.still(1);
+        r.translate(half, 10);
+        quietPico(r, 10, half);   // a 220 ms gyro and wheel gap, under max_gap_ms
+        r.translate(half, 10);
+        const gatr2::BrainState after = r.still(2);
+        EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+        EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
+        EXPECT_NEAR(r.pose().x_m, 1.0 + 1.5 * kRevolution, 1e-6);
+        EXPECT_FALSE(eventNamed(r, "sensor lost") || eventNamed(r, "motion lost"));
+    }
+}
+
+// Rolling through a 260 ms gap: the source was never quiet longer than
+// 250 ms at a cycle start, so only the model that could not measure across
+// the gap sees it. It drops the interval, and that ends continuity.
+TEST(SensorLoss, AGapPastTheLimitBetweenChecksEndsContinuity) {
+    const std::array<double, 3> half = {kCpr / 2.0, 0, 0};
+    const auto run = [&](uint8_t imu_source, bool link_gap, const char* why) {
+        SCOPED_TRACE(why);
+        Rig r;
+        ready(r, perpendicular(imu_source));
+        const gatr2::BrainState before = r.still(1);
+        r.translate(half, 10);
+        if (link_gap) {
+            quietLink(r, 12, half);
+        } else {
+            quietPico(r, 12, half);
+        }
+        r.translate(half, 2);
+        EXPECT_TRUE(eventNamed(r, std::string("motion lost: profile_motion: ") + why));
+        EXPECT_FALSE(eventNamed(r, "sensor lost"));
+        expectLostThenPlacedAgain(r, before);
+    };
+    run(gatr2::kImuSourceBrainVex, true, "no VEX IMU and wheel pair for 260 ms");
+    run(gatr2::kImuSourceBrainVex, false, "no VEX IMU and wheel pair for 260 ms");
+    run(gatr2::kImuSourcePico, false, "gyro gap");
+}
+
+// A VEX rotation that jumps (an unannounced zeroing) is no measurement: the
+// bench model drops that step, and the placement goes with it.
+TEST(SensorLoss, AVexRotationJumpEndsContinuity) {
+    Rig r;
+    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
+    const gatr2::BrainState before = r.still(1);
+    r.theta_mdeg += 90000.0;   // 90 degrees within one 20 ms poll
+    r.still(1);
+    EXPECT_TRUE(eventNamed(r, "motion lost: profile_motion: VEX IMU rotation jumped"));
+    expectLostThenPlacedAgain(r, before);
+}
+
+// A placement sent in the cycle whose model drops an interval is withdrawn
+// with the earlier ones.
+TEST(SensorLoss, APlacementInTheCycleOfADroppedIntervalIsWithdrawn) {
+    Rig r;
+    ready(r, perpendicular(gatr2::kImuSourcePico));
+    const gatr2::BrainState before = r.still(1);
+    quietPico(r, 12, {kCpr / 2.0, 0, 0});
+    EXPECT_EQ(r.place(1500, 500, 0).result, gatr2::kResultPending);   // with the 260 ms frame
+    EXPECT_FALSE(r.system->robotFeed()->latest().initialized);   // published at once
+    const gatr2::BrainState after = r.still(2);
+    EXPECT_TRUE(eventNamed(r, "motion lost: profile_motion: gyro gap"));
+    EXPECT_EQ(after.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_GT(after.odometry_epoch, before.odometry_epoch);
+    ASSERT_EQ(r.place(1200, 500, 0).result, gatr2::kResultOk);
+    EXPECT_NE(r.still(1).robot_flags & gatr2::kRobotLocalized, 0);
+}
+
+// The Brain VEX IMU bench model takes its step limit from sensor_loss_ms,
+// never a number of its own.
+TEST(SensorLoss, TheVexStepLimitIsTheProfileLossLimit) {
+    Rig r([](tinyxml2::XMLElement* root) {
+        findChild(root, (std::string(kProfilePath) + "/Timing").c_str())
+            ->SetAttribute("sensor_loss_ms", 400);
+    });
+    ready(r, perpendicular(gatr2::kImuSourceBrainVex));
+    const gatr2::BrainState before = r.still(1);
+    const std::array<double, 3> half = {kCpr / 2.0, 0, 0};
+    quietLink(r, 16, half);   // 340 ms between VEX samples, rolling
+    r.translate(half, 10);
+    gatr2::BrainState s = r.still(2);
+    EXPECT_NE(s.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_NEAR(r.pose().x_m, 1.0 + kRevolution, 1e-6);
+    quietLink(r, 20, half);   // 420 ms
+    s = r.still(2);
+    EXPECT_EQ(s.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_GT(s.odometry_epoch, before.odometry_epoch);
+
+    // the encoder sensors' own freshness (Encoders stale_after_ms, 250) still
+    // ends a step: 300 ms without Pico frames loses the placement
+    ASSERT_EQ(r.place(1200, 500, 0).result, gatr2::kResultOk);
+    const gatr2::BrainState placed = r.still(2);
+    ASSERT_NE(placed.robot_flags & gatr2::kRobotLocalized, 0);
+    quietPico(r, 15);
+    s = r.still(2);
+    EXPECT_TRUE(eventNamed(r, "missing or stale: place again"));
+    EXPECT_EQ(s.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_GT(s.odometry_epoch, placed.odometry_epoch);
+}
+
+// The count of dropped intervals starts over with each profile's models; a
+// drop under a new profile still ends continuity.
+TEST(SensorLoss, ADroppedIntervalAfterANewProfileStillCounts) {
+    Rig                    r;
+    gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourceBrainVex);
+    ready(r, p);
+    quietLink(r, 12, {kCpr / 2.0, 0, 0});
+    r.still(2);
+    ASSERT_TRUE(eventNamed(r, "motion lost"));
+    p.wheels[0].travel_scale_ppm = 1001000;   // a calibrated scale: a new profile
+    ASSERT_TRUE(r.applyProfile(p));
+    r.still(3);
+    ASSERT_EQ(r.place(1000, 500, 0).result, gatr2::kResultOk);
+    const gatr2::BrainState before = r.still(2);
+    ASSERT_NE(before.robot_flags & gatr2::kRobotLocalized, 0);
+    quietLink(r, 12, {kCpr / 2.0, 0, 0});
+    const gatr2::BrainState after = r.still(2);
+    EXPECT_EQ(after.robot_flags & gatr2::kRobotLocalized, 0);
+    EXPECT_GT(after.odometry_epoch, before.odometry_epoch);
+}
+
+// The Pico gyro bias calibrates only while the robot stands still; motion
+// meanwhile is never integrated, so a placed robot that moves before the
+// window completes is unplaced. Left still, the placement holds.
+TEST(BrainRecovery, MovingWhileTheGyroBiasCalibratesEndsContinuity) {
+    const gatr2::RobotProfileDoc p = perpendicular(gatr2::kImuSourcePico);
+    {
+        // CONTROL 1 on a placed robot, then it rolls
+        Rig r;
+        ready(r, p);
+        r.still(20);
+        const gatr2::BrainState before = r.still(1);
+        ASSERT_EQ(r.control(gatr2::kControlRecalibrate).result, gatr2::kResultOk);
+        r.translate({kCpr, 0, 0}, 10);
+        EXPECT_TRUE(eventNamed(r, "motion lost: profile_motion:"));
+        EXPECT_TRUE(eventNamed(r, "while the gyro bias calibrated"));
+        EXPECT_EQ(r.still(60).calibration, gatr2::kCalibrationDone);
+        expectLostThenPlacedAgain(r, before);
+    }
+    {
+        // placed during the first calibration after APPLY, then it rolls
+        Rig r;
+        ASSERT_TRUE(r.ok()) << r.build_error;
+        r.hello();
+        r.still(3);
+        ASSERT_TRUE(r.applyProfile(p));
+        ASSERT_EQ(r.place(1000, 500, 0).result, gatr2::kResultOk);
+        const gatr2::BrainState before = r.still(1);
+        EXPECT_NE(before.robot_flags & gatr2::kRobotLocalized, 0);
+        EXPECT_NE(before.calibration, gatr2::kCalibrationDone);
+        r.translate({kCpr, 0, 0}, 10);
+        EXPECT_TRUE(eventNamed(r, "moved while the gyro bias calibrated"));
+        expectLostThenPlacedAgain(r, before);
+    }
+    {
+        // placed during calibration and left still: the pose holds
+        Rig r;
+        ASSERT_TRUE(r.ok()) << r.build_error;
+        r.hello();
+        r.still(3);
+        ASSERT_TRUE(r.applyProfile(p));
+        ASSERT_EQ(r.place(1000, 500, 0).result, gatr2::kResultOk);
+        const gatr2::BrainState before = r.still(1);
+        const gatr2::BrainState after  = r.still(40);
+        EXPECT_EQ(after.calibration, gatr2::kCalibrationDone);
+        EXPECT_NE(after.robot_flags & gatr2::kRobotLocalized, 0);
+        EXPECT_EQ(after.odometry_epoch, before.odometry_epoch);
+        EXPECT_FALSE(eventNamed(r, "sensor lost") || eventNamed(r, "motion lost"));
+        r.translate({kCpr, 0, 0}, 10);   // calibrated: rolling is measured
+        r.still(2);
+        EXPECT_NEAR(r.pose().x_m, 1.0 + kRevolution, 1e-6);
+        EXPECT_NE(r.still(1).robot_flags & gatr2::kRobotLocalized, 0);
+    }
+}
+
 TEST(BrainRecovery, CalibrationFailsAfterItsBoundAndRecalibrateRetries) {
     Rig r([](tinyxml2::XMLElement* root) {
         findChild(root, (std::string(kProfilePath) + "/Calibration").c_str())
@@ -2420,6 +2643,9 @@ TEST(BrainProfileInspection, SensorLossAndStillnessShowInTheSnapshot) {
     EXPECT_TRUE(has(snap, "\"localized\":false"));
     EXPECT_TRUE(has(snap, "\"last_request_age_ms\":400"));
     EXPECT_TRUE(has(snap, "place again"));
+    // the bench model dropped the stretch it could not measure
+    EXPECT_TRUE(has(snap, "\"dropped_intervals\":1,\"dropped_why\":\"VEX IMU stale\"")) << snap;
+    EXPECT_TRUE(has(snap, "\"movements\":0,\"attempts\""));
     r.pi_link->pulled = false;
     quietLink(r, 1);   // the first drain after a reopen answers nothing
     r.still(3);

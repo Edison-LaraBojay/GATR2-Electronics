@@ -105,9 +105,12 @@ counters count decoded protocol bytes, not unrelated console output.
 
 ## Cable pulls and restarts
 
-The VEX IMU samples ride on the Brain link, so a USB outage longer than 250 ms
-stops them: the Pi ends the placement ("sensor lost: brain_vex_imu stale ...:
-place again") and the Brain shows Needs placement. The link itself recovers on
+The VEX IMU samples ride on the Brain link, so a USB outage longer than
+`sensor_loss_ms` (250 ms) stops them: the Pi ends the placement ("sensor lost:
+brain_vex_imu stale ...: place again", or "motion lost: profile_motion: no VEX
+IMU and wheel pair for ... ms" when the outage ends between two checks) and
+the Brain shows Needs placement. A shorter outage loses nothing: the next step
+measures the wheel travel and rotation across it. The link itself recovers on
 its own: the Pi reopens the device once per second and the Brain resumes its
 session. Put the robot at the start pose and place it again. A Brain program
 restart does the same; startup placement handles it at program start. See

@@ -72,14 +72,18 @@ SensorLossMonitor::Result SensorLossMonitor::update(const SensorMap& sensors,
     };
     for (Source& s : sources_) {
         if (s.kind == Kind::kBrainImu) {
-            // an invalid sample is a missing one; its reset moved the epoch
+            // an invalid sample, or a new Brain session, resets the mailbox:
+            // a missing sample and a new epoch, a restart at that moment
             const BrainImuBench& vex = *vex_;
-            if (vex.valid) {
-                if (s.seen && vex.epoch != s.identity) {
-                    edge(s.name + " restarted");
-                }
-                s.seen     = true;
+            if (s.seen && vex.epoch != s.identity) {
+                edge(s.name + (vex.valid ? " restarted" : " restarted (sample invalid or new "
+                                                          "session)"));
+            }
+            if (s.seen || vex.valid) {
                 s.identity = vex.epoch;
+            }
+            if (vex.valid) {
+                s.seen = true;
                 if (vex.received.domain == ClockDomain::kHost && vex.received.ms > s.last.ms) {
                     s.last = vex.received;
                 }

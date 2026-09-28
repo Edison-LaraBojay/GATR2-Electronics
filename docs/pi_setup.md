@@ -167,7 +167,8 @@ unavailable. The Brain USB port is optional and retried once per second.
 
 The journal shows the lifecycle as `event: ...` lines: the Brain session,
 `profile <id> applied (...)` or `refused: <reason>`, calibration results, Pico
-restarts and `sensor lost: ...: place again`.
+restarts, and `sensor lost: ...: place again` or `motion lost: ...: place
+again` (a model had to discard motion it measured).
 
 Useful commands:
 

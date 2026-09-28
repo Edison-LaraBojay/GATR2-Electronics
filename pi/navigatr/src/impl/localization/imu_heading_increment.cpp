@@ -28,7 +28,6 @@ ImuHeadingIncrement::create(const ConfigNode& node, RobotObservationInitializati
     long                        bias_samples = 200;
     StillnessConfig             still;
     GyroBiasCalibration::Config bias;
-    still.window_ms = 0;
     if (!calibration.getInt("bias_samples", 200, bias_samples, err) ||
         !calibration.getInt("max_gap_ms", 250, fn->max_gap_ms_, err) ||
         !calibration.getDouble("still_travel_m", still.still_travel_m, still.still_travel_m,
@@ -38,8 +37,8 @@ ImuHeadingIncrement::create(const ConfigNode& node, RobotObservationInitializati
         return nullptr;
     }
     if (bias_samples < 0 || fn->max_gap_ms_ <= 0 || !(still.still_travel_m > 0.0)) {
-        err = node.path() + ": bias_samples and window_ms cannot be negative; max_gap_ms and "
-                            "still_travel_m must be positive";
+        err = node.path() + ": bias_samples cannot be negative; max_gap_ms and still_travel_m "
+                            "must be positive";
         return nullptr;
     }
     still.min_samples = bias_samples > 0 ? bias_samples : 20;

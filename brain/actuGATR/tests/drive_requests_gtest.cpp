@@ -120,6 +120,56 @@ TEST(DriveRequests, ManualKeepsTheApplicationTimeForStaleness) {
     EXPECT_EQ(k.owner.drive().fault, DriveFault::kStale);
 }
 
+// The operator loop reads the snapshot, then a button requests a test, then
+// the manual rule runs with centered sticks. The test must stay active.
+TEST(DriveRequests, CenteredSticksNeverCancelANewCommand) {
+    Task k;
+    k.step();
+    const DriveSnapshot before = k.requests.snapshot(); // read at the top of the loop
+    ASSERT_FALSE(moving(before));
+
+    const CommandId id = k.requests.goTo(PlanMode::kDirect, {1.5, 1, 0}, Reference::origin(), {});
+    const ManualDemand centered;
+    EXPECT_FALSE(sendManual(centered, true, before)); // stale idle snapshot, same cycle
+    EXPECT_TRUE(moving(k.requests.snapshot()));        // a fresh read shows it waiting
+    EXPECT_FALSE(sendManual(centered, false, k.requests.snapshot()));
+
+    for (int i = 0; i < 20; ++i) {
+        k.step();
+        if (sendManual(centered, false, k.requests.snapshot())) {
+            k.requests.manual(centered, k.t);
+        }
+    }
+    const DriveSnapshot s = k.requests.snapshot();
+    EXPECT_EQ(s.motion.command_id, id);
+    EXPECT_TRUE(moving(s));
+    EXPECT_EQ(s.mode, DriveMode::kNavigate);
+}
+
+TEST(DriveRequests, SticksTakeOverAndIdleSendsZero) {
+    Task         k;
+    ManualDemand push;
+    push.forward = 0.4;
+    k.requests.goTo(PlanMode::kDirect, {1.5, 1, 0}, Reference::origin(), {});
+    k.step();
+    EXPECT_TRUE(sendManual(push, false, k.requests.snapshot())); // over a running command
+    EXPECT_TRUE(sendManual(push, true, k.requests.snapshot()));
+    k.requests.stop();
+    k.step();
+    EXPECT_TRUE(sendManual(ManualDemand{}, false, k.requests.snapshot())); // idle: keep fresh
+}
+
+// Why the rule exists: a zero demand posted after a request in the same
+// cycle replaces it, so the command never starts.
+TEST(DriveRequests, ZeroDemandAfterARequestReplacesIt) {
+    Task            k;
+    const CommandId id = k.requests.goTo(PlanMode::kDirect, {1.5, 1, 0}, Reference::origin(), {});
+    k.requests.manual(ManualDemand{}, k.t);
+    k.step();
+    EXPECT_NE(k.owner.motion().command_id, id);
+    EXPECT_EQ(k.owner.mode(), DriveMode::kManual);
+}
+
 TEST(DriveRequests, AvoidingModeReachesMotion) {
     Task k;
     k.requests.goTo(PlanMode::kAvoiding, {1.5, 1, 0}, Reference::origin(), {});

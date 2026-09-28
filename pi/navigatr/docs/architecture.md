@@ -116,7 +116,8 @@ not the configured sensor id, to detect overlapping contributors.
 
 Every IMU bias path and the stationary status share one `StationaryWindow`
 (`impl/localization/stationary_window.h`): new samples only, restarted by a
-gap, a source restart or movement, qualified by elapsed sample time. The
+gap, a source restart or movement, qualified by elapsed sample time
+(`window_ms`, 2 s unless configured, never zero). The
 first qualified window gives the gyro bias; later ones maintain it in
 bounded steps; a gyro restart invalidates it. While a window stays
 qualified the executor reports zero velocity and the stationary health bit;
@@ -299,6 +300,10 @@ Every cycle the sources the running profile uses are watched
 IMU mailbox when the profile uses one. A used source that is stale longer
 than `sensor_loss_ms`, restarts, or (Pico IMU) reports itself not ready ends
 pose continuity like a new profile does, and the Brain must place again.
+After localization runs, the same happens when an observation function
+reports a new dropped interval (`ObservationReadiness::dropped_intervals`):
+measured motion it had to discard, such as a gap past its own limit or
+movement while its gyro bias calibrated.
 With `<Pico resource_id>` on the CommandCollection, CONTROL 3 and 4 run on the
 Pico through the `PicoControl` contract. Lifecycle events go to a bounded log
 that inspection shows. Details: [Brain robot profiles](brain_profile.md).

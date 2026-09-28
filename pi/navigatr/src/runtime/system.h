@@ -66,7 +66,12 @@
 // stale longer than sensor_loss_ms, restarted, or a used Pico IMU not ready.
 // A loss while the robot is placed ends pose continuity like a new profile:
 // odometry epoch + 1, unplaced, earlier placement requests withdrawn, an
-// event naming the source; on_sensor_loss="warn" only logs it. With
+// event naming the source; on_sensor_loss="warn" only logs it. After
+// localization runs, a rise in an observation function's dropped intervals
+// (measured motion it had to discard: a gap past its own limit, a restart,
+// movement while its bias calibrated) ends continuity the same way, since
+// the pose may miss that motion; a placement from that very cycle is
+// withdrawn with it. With
 // <Pico resource_id=.../> on the brain_link CommandCollection the System
 // runs CONTROL 3 (reinitialize the Pico IMU, then recalibrate) and 4
 // (restart acquisition, done once the new acquisition epoch arrives)
@@ -329,7 +334,8 @@ private:
     uint32_t submitPico(uint8_t op, uint8_t arg, MonotonicTime now, uint8_t& detail);
     void     updatePicoOperation(MonotonicTime now);
     void     watchSensors(const SensorMap& sensors, MonotonicTime now);
-    void     loseSensor(MonotonicTime now, const std::string& why, bool note);
+    void     watchModels(MonotonicTime now);   // after localization
+    void     losePlacement(MonotonicTime now, const std::string& why, bool note);
     void     noteRecovery(MonotonicTime now);
 
     // Boundary work: workers stopped or inline.
@@ -398,6 +404,8 @@ private:
     PicoOperation     pico_op_;
     SensorLossMonitor sensor_loss_;           // the running profile's used sources
     bool              loss_warned_ = false;   // a level loss was already noted
+    bool              sensor_lost_ = false;   // this cycle's watchSensors found a loss
+    uint64_t          models_dropped_ = 0;    // dropped intervals seen so far
     struct RecoverySeen {
         bool     pico_known = false;
         bool     pico_fresh = false;

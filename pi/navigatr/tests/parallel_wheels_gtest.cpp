@@ -378,7 +378,7 @@ std::string wirePathConfig(bool right_inverted) {
                     <Use wheel_id="left_wheel"/>
                     <Use wheel_id="right_wheel"/>
                 </Wheels>
-                <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
+                <HeadingConstraint sensor_id="robot_imu" bias_samples="200" window_ms="990"
                                    max_calibration_travel_m="0.005" max_gap_ms="250"/>
                 <LateralMotion assume="zero"/>
                 <Output observation_id="tracking_motion"/>

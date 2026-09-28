@@ -480,7 +480,7 @@ std::string fusedConfig(bool three_wheel) {
         <Localization>
             <Observation id="tracking_motion" type="tracking_wheel_motion">)" +
            wheels + R"(
-                <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
+                <HeadingConstraint sensor_id="robot_imu" bias_samples="200" window_ms="990"
                                    max_calibration_travel_m="0.005"/>
                 <Output observation_id="tracking_motion"/>
             </Observation>

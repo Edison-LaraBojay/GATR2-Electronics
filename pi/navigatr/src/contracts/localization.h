@@ -64,11 +64,16 @@ struct RobotObservationInput {
 
 // Readiness for publishers and inspection: a model that is still
 // calibrating produces nothing yet and says why. stillness is set by models
-// that run a stationary window.
+// that run a stationary window. dropped_intervals counts, over the
+// function's lifetime, the times it discarded measured motion after it had
+// a baseline: a gap, a restart, a rejected interval, or movement while its
+// bias calibrated. Any rise means the odometry may have missed motion.
 struct ObservationReadiness {
     bool            ready = false;
     std::string     note;
     StillnessStatus stillness;
+    uint64_t        dropped_intervals = 0;
+    std::string     dropped_why;   // the newest one
 };
 
 class RobotObservationFunction

@@ -45,11 +45,14 @@ resource_id="brain_imu"/>` on the brain_link CommandCollection. See
 
 The samples ride on the Brain link. With a VEX profile the Pi ends pose
 continuity when no valid sample arrives for 250 ms (`sensor_loss_ms`), and when
-the mailbox restarts (a new Brain session). So a link outage over 250 ms, a
-Brain program restart or a VEX recalibration each need a new placement; the
-Brain programs place at their start pose at program start and otherwise show
-Needs placement. Stale or missing IMU or wheel data never integrates: the model
-rebaselines and replays nothing from the gap.
+the mailbox restarts (an invalid sample or a new Brain session). So a link
+outage over 250 ms, a Brain program restart or a VEX recalibration each need a
+new placement; the Brain programs place at their start pose at program start
+and otherwise show Needs placement. The bench model's longest step is
+`sensor_loss_ms` too: a shorter gap is measured across, and a longer one (or a
+rotation jump) is dropped, never integrated, which also ends the placement
+("motion lost"). The XML-configured bench profiles below keep the model's own
+200 ms (`<Freshness max_age_ms>`) and have no sensor loss check.
 
 ## XML-configured bench profiles
 

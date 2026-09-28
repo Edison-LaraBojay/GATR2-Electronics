@@ -157,10 +157,11 @@ robot           valid, initialized, placement_origin ("command", "configuration"
                   roll_deg, pitch_deg, yaw_deg, q_wxyz[4]}
 localization    estimator_type, updates, history_size, clock_mapped, publication,
                 all_ready, stationary, continuity_breaks, last_break,
-                functions[] {id, type, ready, note,
+                functions[] {id, type, ready, note, dropped_intervals, dropped_why,
                   stillness {monitored, stationary, calibration (none|collecting|done|
                     waiting for stillness|waiting for data|failed), reason, progress_ms,
-                    window_ms, windows, restarts, attempts, steps, bias_dps|null}}
+                    window_ms, windows, restarts, movements, attempts, steps,
+                    bias_dps|null}}
 trail[]         oldest first, bounded: {host_ms, x_m, y_m, heading_deg, epoch,
                 attitude_valid, roll_deg?, pitch_deg?}   odometry frame
 field_snapshot  {invocation, at_host_ms, age_ms, status, diagnostic}
@@ -278,8 +279,13 @@ Meaning of a few fields:
 - `localization.stationary` is true while some function's stationary window
   qualified and nothing moved since; velocity is then reported as zero and the
   pose is left alone (gated stationary handling, not a ZUPT filter).
-  `continuity_breaks` counts poses ended by a lost sensor, `last_break` names
-  the newest. `stillness.calibration` is the gyro bias calibration of that
+  `continuity_breaks` counts poses ended by a lost sensor or lost motion,
+  `last_break` names the newest. A function's `dropped_intervals` counts the
+  times it discarded measured motion (a gap past its limit, a restart,
+  movement while its bias calibrated), `dropped_why` the newest reason; with
+  a Brain profile each rise while placed ends the placement.
+  `stillness.movements` counts the window restarts caused by movement.
+  `stillness.calibration` is the gyro bias calibration of that
   function; `bias_dps` is null until a bias exists. See
   [Brain robot profiles](brain_profile.md#calibration-and-stationary-handling).
 - `brain_link.state` is exactly the GET_STATE block the Pi would answer now,

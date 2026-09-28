@@ -256,7 +256,7 @@ const char* kRig = R"(
                     <Use wheel_id="right_wheel"/>
                     <Use wheel_id="rear_wheel"/>
                 </Wheels>
-                <HeadingConstraint sensor_id="robot_imu" bias_samples="10"
+                <HeadingConstraint sensor_id="robot_imu" bias_samples="10" window_ms="150"
                                    max_calibration_travel_m="0.005"/>
                 <Output observation_id="tracking_motion"/>
             </Observation>

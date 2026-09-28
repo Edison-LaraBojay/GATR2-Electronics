@@ -17,7 +17,7 @@
 //
 //   <Observation id="imu_heading" type="imu_heading_increment">
 //       <Input sensor_id="robot_imu"/>
-//       <Calibration bias_samples="200" max_gap_ms="250" window_ms="0"
+//       <Calibration bias_samples="200" max_gap_ms="250" window_ms="2000"
 //                    still_travel_m="0.001" still_rate_dps="1" max_rate_dps="5"
 //                    evidence_gap_ms="100" attempt_s="60">
 //           <Wheel sensor_id="encoder_a" radius_m="0.024"/>   stillness evidence
@@ -30,7 +30,10 @@
 //
 // An outage longer than max_gap_ms, a nonpositive interval, or an
 // accumulator discontinuity reseeds instead of integrating; the interval
-// is dropped, never bridged.
+// is dropped, never bridged. In the supported pairing (three wheels,
+// weighted_planar_fusion) no travel goes with it: the wheels measure
+// rotation themselves, and the estimator uses that alone for an interval
+// without a heading.
 
 #pragma once
 #include <memory>

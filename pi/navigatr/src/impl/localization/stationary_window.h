@@ -51,7 +51,8 @@ struct StillnessConfig {
 };
 
 // Reads window_ms, still_rate_dps, max_rate_dps and evidence_gap_ms from
-// node into c, keeping c's values as defaults, and checks them.
+// node into c, keeping c's values as defaults, and checks them. window_ms
+// must be positive: a window is sample time, never a bare sample count.
 bool readStillness(const ConfigNode& node, StillnessConfig& c, std::string& err);
 
 struct StillSample {
@@ -100,6 +101,7 @@ public:
     int64_t            progressMs() const;
     uint64_t           windows() const { return windows_; }
     uint64_t           restarts() const { return restarts_; }
+    uint64_t           movements() const { return movements_; }   // restarts for movement
 
     // The window the latest add qualified, once.
     bool takeQualified(Qualified& out);
@@ -140,6 +142,7 @@ private:
     std::string         reason_        = "no samples yet";
     uint64_t            windows_       = 0;
     uint64_t            restarts_      = 0;
+    uint64_t            movements_     = 0;
     bool                qualified_     = false;
     Qualified           last_;
 };

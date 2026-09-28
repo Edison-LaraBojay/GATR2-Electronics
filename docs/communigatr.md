@@ -938,11 +938,13 @@ Fakes (host only):
 | `vex_imu_recalibration_gtest.cpp` | the VEX calibration starts only after the Pi's Ok; movement, refusals and lost answers start nothing; an IMU that does not start, does not finish or ends invalid; on both transports against the fake Pi |
 | `wheel_calibration_gtest.cpp`, `startup_placement_gtest.cpp`, `link_events_gtest.cpp` | the application helpers |
 
-`pi/navigatr/tests/brain_link_e2e_gtest.cpp` exercises the real Pi runtime
-against the real `Client`, `LinkDriver` and NG1 codec. Its CMake target
-(`brain_link_e2e_tests`, compiling the Brain sources it needs from an explicit
-list) is added to `pi/navigatr/tests/CMakeLists.txt` in Phase C
-integration; until then the Pi test build does not run it.
+`pi/navigatr/tests/brain_link_e2e_gtest.cpp` (target `brain_link_e2e_tests` in
+`pi/navigatr/tests/CMakeLists.txt`, run by the Pi test build) exercises the
+real Pi runtime from `brain_profile_usb.xml` against the real `Client`,
+`LinkDriver`, NG1 codec, actuGATR `Motion` and the planner, with a drivetrain
+sim as the truth: profile upload, placement, direct, avoiding and landmark
+moves on the transferred map, wheel readings, a travel scale change, Brain and
+Pi restarts, and used sensors dropping out.
 
 ## Limitations and unvalidated items
 

@@ -50,6 +50,16 @@ DriveSnapshot DriveRequests::snapshot() const {
     return s;
 }
 
+bool moving(const DriveSnapshot& s) {
+    return s.motion.command_id != 0 && s.motion.state != MotionState::kIdle &&
+           !isTerminal(s.motion.state);
+}
+
+bool sendManual(const ManualDemand& d, bool requested_this_cycle, const DriveSnapshot& s) {
+    const bool sticks = d.forward != 0 || d.strafe != 0 || d.turn != 0;
+    return sticks || (!requested_this_cycle && !moving(s));
+}
+
 void apply(const DriveRequest& request, DriveOwner& owner) {
     switch (request.kind) {
     case DriveRequest::Kind::kNone: break;

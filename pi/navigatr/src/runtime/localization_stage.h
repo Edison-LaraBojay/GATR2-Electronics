@@ -68,11 +68,18 @@ public:
 
     // Ends pose continuity when motion may have gone unmeasured: the odometry
     // epoch moves on (history clears with it) and the robot is unplaced; the
-    // pose shown holds. The caller withdraws earlier placement requests.
-    // Estimation worker stopped, inline, or between cycles on it.
+    // pose shown holds. Published at once. The caller withdraws earlier
+    // placement requests. Estimation worker stopped, inline, or between
+    // cycles on it.
     void               loseContinuity(const std::string& why);
     uint64_t           continuityBreaks() const { return continuity_breaks_; }
     const std::string& lastBreak() const { return last_break_; }
+
+    // Intervals of measured motion the functions discarded, summed over this
+    // executor's life, and the newest ("<function>: <why>"). Updated by each
+    // run; a rise means the odometry may miss motion.
+    uint64_t           droppedIntervals() const { return dropped_intervals_; }
+    const std::string& lastDrop() const { return last_drop_; }
 
     // Readers on any thread.
     std::shared_ptr<RobotStateFeed> feed() const { return feed_; }
@@ -93,7 +100,8 @@ private:
     struct Function {
         ObservationFunctionId                    id;
         std::unique_ptr<RobotObservationFunction> function;
-        std::string                               label;   // diagnostics
+        std::string                               label;         // diagnostics
+        uint64_t                                  dropped = 0;   // its dropped_intervals seen
     };
 
     std::vector<Function>                   functions_;
@@ -113,6 +121,8 @@ private:
     uint64_t                        updates_     = 0;
     uint64_t                        continuity_breaks_ = 0;
     std::string                     last_break_;
+    uint64_t                        dropped_intervals_ = 0;
+    std::string                     last_drop_;
 };
 
 // node is the <Localization> element. Nothing on failure.

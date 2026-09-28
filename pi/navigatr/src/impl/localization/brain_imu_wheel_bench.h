@@ -11,14 +11,19 @@
 //       <Imu resource_id="brain_imu"/>
 //       <Stillness window_ms="2000" samples="20" still_travel_m="0.001"
 //                  still_rate_dps="1" evidence_gap_ms="100"/>        optional
+//       <Freshness max_age_ms="200"/>                                 optional
 //       <Output observation_id="tracking_motion"/>
 //   </Observation>
 //
-// Latest wheels and the latest VEX rotation pair by Pi arrival time. A
-// missing or stale (200 ms) sample holds the pose and rebaselines; an IMU
+// Latest wheels and the latest VEX rotation pair by Pi arrival time. One
+// step spans at most max_age_ms: a sample older than that, or two emitted
+// VEX IMU receipts further apart, holds the pose and rebaselines; an IMU
 // epoch, wheel epoch or discontinuity change, or a rotation jump, rebaselines
-// too. Nothing bridges a gap: with a Brain profile the System ends pose
-// continuity when a used source stays stale or restarts (spec 8.10).
+// too. Nothing bridges a gap. A rebaseline that discards an interval after a
+// baseline existed counts as a dropped interval
+// (ObservationReadiness::dropped_intervals); with a Brain profile the System
+// then ends pose continuity (spec 8.10), and the profile builder sets
+// max_age_ms to the profile's sensor_loss_ms so both limits agree.
 //
 // The VEX IMU arrives calibrated by VEX firmware; the Pi applies no bias.
 // Stationary status comes from a stationary window over the wheels and the
@@ -73,6 +78,7 @@ private:
 
     void observeStillness(const std::array<const StoredSample*, 2>&  stored,
                           const std::array<const EncoderSample*, 2>& samples, MonotonicTime now);
+    void lostMotion(const std::string& why);
 
     ObservationFunctionId id_;
     ObservationId         output_;
@@ -86,6 +92,9 @@ private:
     uint64_t                       imu_sequence_ = 0, imu_epoch_ = 0;
     int32_t                        rotation_ = 0;
     MonotonicTime                  previous_;
+    long                           max_age_ms_ = 200;
+    uint64_t                       dropped_    = 0;   // dropped_intervals; never reset
+    std::string                    dropped_why_;
 
     StationaryWindow window_;
     size_t           rotation_source_ = 0;

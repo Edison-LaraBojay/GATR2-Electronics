@@ -20,7 +20,7 @@ ones, split three ways and applied once each ([Brain robot profiles](brain_profi
 | Footprint | same, `kFootprint` | Measure the robot outline about the origin | PLACEHOLDER |
 | Start pose | same, `kStartPose` | Tape the starting pose on the field | PLACEHOLDER |
 | Stationary window and bias defaults | Pi: `BrainProfile/Calibration`; a profile's calibration window, still rate and still travel override them | Record the robot standing still and compare gyro noise and wheel jitter with `still_rate_dps` (1) and `still_travel_m` (0.001) | defaults, not validated against the real sensors |
-| Sensor loss limit | Pi: `BrainProfile/Timing sensor_loss_ms` (250), `on_sensor_loss` | Watch `event: sensor lost` lines during normal driving; too tight a limit unplaces on ordinary poll gaps | default, not validated against real poll gaps and UART jitter |
+| Sensor loss limit | Pi: `BrainProfile/Timing sensor_loss_ms` (250), `on_sensor_loss` | Watch `event: sensor lost` and `motion lost` lines during normal driving; too tight a limit unplaces on ordinary poll gaps. It is also the VEX bench model's longest step. The other limits (`Calibration max_gap_ms` 250, sensor `stale_after_ms` 250, the Pico link's 250 ms gyro accumulator) still end continuity when shorter, so raising it alone never lets a gap go unmeasured | default, not validated against real poll gaps and UART jitter |
 | Three-wheel fusion noise | Pi: `BrainProfile/Fusion` | as for `weighted_planar_fusion` below | PLACEHOLDER |
 
 Every measurement the runtime still needs, where it goes, how to get it,

@@ -304,7 +304,7 @@ bool parseBrainProfileConfig(const ConfigNode& node, const ResourceStore& resour
     }
     if (calibration.valid() &&
         (!nonNegative(calibration, "bias_samples", out.bias_samples, err) ||
-         !nonNegative(calibration, "window_ms", out.window_ms, err) ||
+         !positive(calibration, "window_ms", out.window_ms, err) ||
          !positive(calibration, "max_gap_ms", out.max_gap_ms, err) ||
          !positive(calibration, "still_travel_m", out.still_travel_m, err) ||
          !positive(calibration, "still_rate_dps", out.still_rate_dps, err) ||
@@ -531,6 +531,9 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
         still->SetAttribute("samples", static_cast<int64_t>(c.bias_samples > 0 ? c.bias_samples
                                                                                 : 20));
         still->SetAttribute("still_travel_m", still_travel_m);
+        // a step never spans more than a used source may be quiet (8.10)
+        add(doc, motion, "Freshness")
+            ->SetAttribute("max_age_ms", static_cast<int64_t>(c.sensor_loss_ms));
         output(motion, motion_id);
     } else {
         motion->SetAttribute("type", "tracking_wheel_motion");

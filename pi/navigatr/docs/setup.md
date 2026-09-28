@@ -613,8 +613,10 @@ SET_POSE from the Brain program.
 With a Brain profile, SET_POSE answers NotReady until a profile is applied, a
 new profile leaves the robot unplaced, and a source the profile uses that
 drops (stale over 250 ms or restarted) ends the placement: the Brain must place
-again. A Brain VEX IMU rides on the Brain link, so with a VEX profile a Brain
-restart or a link outage over 250 ms needs a new placement. See
+again. So does motion a model had to discard (a gap past its limit, or
+movement while the gyro bias calibrates). A Brain VEX IMU rides on the Brain
+link, so with a VEX profile a Brain restart or a link outage over 250 ms needs
+a new placement. See
 [Brain robot profiles](brain_profile.md#sensor-loss-and-recovery).
 
 ### Field documents on the supplied profiles

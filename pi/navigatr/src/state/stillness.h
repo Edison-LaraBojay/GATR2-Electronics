@@ -31,6 +31,7 @@ struct StillnessStatus {
     int64_t  window_ms   = 0;   // what a window needs
     uint64_t windows     = 0;   // qualified windows
     uint64_t restarts    = 0;   // window restarts
+    uint64_t movements   = 0;   // restarts for movement (waiting for stillness)
     uint32_t attempts    = 0;   // calibration starts
     uint32_t steps       = 0;   // bias maintenance steps
     bool     has_bias    = false;
