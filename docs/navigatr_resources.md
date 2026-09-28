@@ -199,7 +199,7 @@ still describe the robot in resources such as `wheel_geometry`.
   record. Several packets drained in one cycle publish once per output with
   the latest value, and the gyro accumulator keeps the rotation of every
   packet. Nobody else touches the UART; channel sensors read the
-  `ResourceMap`. All Pico wire knowledge lives here and in `common/`.
+  `ResourceMap`. All Pico wire knowledge lives here and in `translaGATR/`.
 - Thread safety: cycle-snapshot based, single threaded.
 - Failure behavior: a closed link is Fault on the resource and on every
   output with nothing new; decoded history is retained. Reset clears the

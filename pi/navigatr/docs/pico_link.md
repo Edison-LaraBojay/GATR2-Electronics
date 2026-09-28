@@ -268,7 +268,7 @@ and [section 6](../../../docs/brain_setup.md#6-placement).
 - The Pi TX to Pico RX wire on HAT v2 (Pi UART TX to Pico GP17) has not been
   checked on hardware. Before this work the link was Pico to Pi only.
 - Command receipt, status frame timing and command resends on the real
-  UART; everything here is tested with memory links and the common codec.
+  UART; everything here is tested with memory links and the translaGATR codec.
 - Reopening a real `/dev/ttyAMA0` or RS-485 device. The pseudo terminal
   test in `tests/pico_link_gtest.cpp` runs only on Linux hosts (CI), not on
   the Windows build machine.
@@ -288,7 +288,7 @@ telemetry, sensor and localization path (an XML-configured three-wheel
 pipeline) with no displacement; a pulled and
 replaced cable; command ids, targets, resend timing, lost reports, running
 and failed commands, timeouts, reboots and two commands in flight against a
-fake Pico built from the common codec; thread-safe reads; serial reopening;
+fake Pico built from the translaGATR codec; thread-safe reads; serial reopening;
 diagnostics (never asked when not configured, asked once per boot, again
 after a reboot, `firmware` on UnknownOp, gentle retries when unanswered, no
 effect on sensor outputs, the configured rate bounded, frames an earlier Pi

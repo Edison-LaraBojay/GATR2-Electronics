@@ -1,10 +1,12 @@
 // latency_panel.js
 // Where the time goes between a measurement and the screen, per the
 // inspect/2 latency terms (latency.js), plus the browser's own frame times,
-// message rates per channel, messages the server's per-channel sequence
-// numbers show were replaced before sending, and the server's per-client
-// queue statistics. Each figure names its clock; nothing subtracts a Pi
-// time from a browser time.
+// message rates per channel, gaps in the server's per-channel sequence
+// numbers (one counter shared by all clients, so a gap also counts messages
+// built for other viewers), this page's own replaced counts from the
+// server's per-client statistics, and those statistics for every client.
+// Each figure names its clock; nothing subtracts a Pi time from a browser
+// time.
 
 import { fmt } from './transforms.js';
 import { KeyedTable, setText } from './dom.js';
@@ -17,11 +19,35 @@ function kvText(obj) {
         ? `${k} {${kvText(v)}}` : `${k} ${typeof v === 'number' && !Number.isInteger(v) ? fmt(v, 2) : v}`)).join(', ');
 }
 
+// This page's replaced count for a message type, from its own entry in
+// diag.inspection.clients (binary frames sum the per-camera preview
+// channels); '-' for reliable types, 'n/a' without per-client statistics.
+export function replacedFor(me, type) {
+    const ch = me && me.channels;
+    if (!ch) {
+        return 'n/a';
+    }
+    if (type === 'frame') {
+        let n = 0;
+        let any = false;
+        for (const k of Object.keys(ch)) {
+            if (k.startsWith('preview')) {
+                any = true;
+                n += ch[k].replaced || 0;
+            }
+        }
+        return any ? n : '-';
+    }
+    const c = ch[type];
+    return c && c.replaceable !== false ? (c.replaced || 0) : '-';
+}
+
 export class LatencyPanel {
     constructor(root) {
         this.terms = new KeyedTable(root.querySelector('#lat-terms'), ['term', 'last', 'p50', 'p95', 'max', 'n', 'clock / how']);
         this.channels = new KeyedTable(root.querySelector('#lat-channels'),
-            ['channel', 'msg/s', 'received', 'KB', 'server seq gaps (replaced or skipped)', 'handler p50 / p95 / max ms']);
+            ['channel', 'msg/s', 'received', 'KB', 'seq gaps (replaced, skipped or built for other clients)',
+                'replaced for this page (server)', 'handler p50 / p95 / max ms']);
         this.clients = new KeyedTable(root.querySelector('#lat-clients'),
             ['client', 'queued B', 'in flight B', 'reliable', 'slots', 'diag same, skipped', 'per channel: sent / replaced / refused, last enqueue-to-written ms']);
         this.builds = new KeyedTable(root.querySelector('#lat-builds'), ['document', 'count', 'last us', 'mean us', 'max us', 'last B', 'mean B']);
@@ -51,6 +77,10 @@ export class LatencyPanel {
         row('panels', 'panel update (ms)', m.panelWork, 'browser: visible DOM panels, at most 10 per second');
         this.terms.end();
 
+        const insp = diag && diag.inspection ? diag.inspection : null;
+        const mine = feed.hello ? feed.hello.client_id : undefined;
+        const clientsAll = insp && Array.isArray(insp.clients) ? insp.clients : [];
+        const me = mine !== undefined ? clientsAll.find((c) => c.id === mine) : undefined;
         this.channels.begin();
         const types = [...feed.counts.keys()].sort();
         for (const t of types) {
@@ -61,14 +91,12 @@ export class LatencyPanel {
                 hs = `${fmt(s.p50, 2)} / ${fmt(s.p95, 2)} / ${fmt(s.max, 2)}`;
             }
             this.channels.row(t, [t, fmt(feed.rates.rate(t), 1), feed.counts.get(t), fmt((feed.bytes.get(t) || 0) / 1024, 1),
-                feed.seqGaps.get(t) || 0, hs]);
+                feed.seqGaps.get(t) || 0, replacedFor(me, t), hs]);
         }
         this.channels.end();
 
-        const insp = diag && diag.inspection ? diag.inspection : null;
         this.clients.begin();
-        const clients = insp && Array.isArray(insp.clients) ? insp.clients : [];
-        const mine = feed.hello ? feed.hello.client_id : undefined;
+        const clients = clientsAll;
         for (const c of clients) {
             const ch = c.channels || {};
             const per = Object.keys(ch).sort().map((k) => {

@@ -2,15 +2,18 @@
 // The diagnostics tab: sources, workers, localization function readiness
 // with each function's stationary window and IMU bias calibration,
 // diagnostics function counters and link counters from the newest diag
-// message, plus the preview budget control that sends
-// {"type":"preview",...} to the server. Rows are updated in place by key,
-// at the page's panel rate, and only while the tab is visible.
+// message, plus the preview budget control. The form's budget goes to the
+// page (onPreview), which sends {"type":"preview",...} while the camera
+// panel is in view and hz 0 while it is not. Rows are updated in place by
+// key, at the page's panel rate, and only while the tab is visible.
 
 import { fmt, fmtMs } from './transforms.js';
 import { KeyedTable, setText } from './dom.js';
 
 export class Diagnostics {
-    constructor(root, sendPreview) {
+    // onPreview(msg) -> 'sent', 'deferred' (sent once the camera panel is
+    // in view) or 'offline'.
+    constructor(root, onPreview) {
         this.root = root;
         this.sources = new KeyedTable(root.querySelector('#sources-table'), ['id', 'kind', 'state', 'age', 'seq', 'epoch', 'diagnostic']);
         this.workers = new KeyedTable(root.querySelector('#workers-table'),
@@ -23,17 +26,26 @@ export class Diagnostics {
         this.note = root.querySelector('#preview-note');
         this.form = root.querySelector('#preview-form');
         this.hello = null;
+        this.userPreview = false;   // the person set a budget: a new hello keeps it
         this.form.addEventListener('submit', (e) => {
             e.preventDefault();
-            const msg = {
-                type: 'preview',
-                hz: Number(root.querySelector('#preview-hz').value),
-                quality: Number(root.querySelector('#preview-quality').value),
-                max_width: Number(root.querySelector('#preview-width').value),
-            };
-            const ok = sendPreview(msg);
-            this.note.textContent = ok ? `sent hz ${msg.hz}, quality ${msg.quality}, max width ${msg.max_width}` : 'not connected';
+            const msg = this.formPreview();
+            this.userPreview = true;
+            const r = onPreview(msg);
+            const what = `hz ${msg.hz}, quality ${msg.quality}, max width ${msg.max_width}`;
+            this.note.textContent = r === 'sent' ? `sent ${what}`
+                : (r === 'deferred' ? `kept ${what}: sent while the camera panel is in view` : 'not connected');
         });
+    }
+
+    // The budget the form holds (the server defaults until edited).
+    formPreview() {
+        return {
+            type: 'preview',
+            hz: Number(this.root.querySelector('#preview-hz').value),
+            quality: Number(this.root.querySelector('#preview-quality').value),
+            max_width: Number(this.root.querySelector('#preview-width').value),
+        };
     }
 
     // Live-only controls are off during replay.
@@ -49,6 +61,9 @@ export class Diagnostics {
     setHello(hello) {
         this.hello = hello;
         const i = hello.inspection || {};
+        if (this.userPreview) {
+            return;
+        }
         if (typeof i.preview_hz === 'number') {
             this.root.querySelector('#preview-hz').value = i.preview_hz;
         }

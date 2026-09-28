@@ -11,8 +11,14 @@ It is a test double for the browser: it is not the naviGATR server, and a
 test passing against it says nothing about the Pi runtime. Test-only
 controls under /stub/: kill (drop all sockets), reset (session reset),
 restart (new session id, drop sockets), epoch (new odometry epoch), jump
-(teleport the robot 1 m), pause?ms= (stop publishing states), stats (what
-each client sent us).
+(teleport the robot 1 m), pause?ms= (stop publishing states; keepalive states
+carry a growing age, as the runtime's do), unmeasured?on=1 (valid poses with
+no measurement time: a configured placement; &source=1: measured on the Pico
+clock but not mapped to the Pi clock, age unknown), ready?on=0 (a localization
+function not ready), clock?mapped=0 (diag clock_mapped false),
+capfail?mode=file|bundle|none (the next capture's file write fails, or its
+bundle fails and it leaves only status.last), stats (what each client sent
+us, including its ping ids).
 
     python stub_server.py [--port 8799] [--state-hz 30]
 """
@@ -70,6 +76,7 @@ class Client:
                     'raw': False, 'decoded': False}
         self.alive = True
         self.last_state_sent = 0.0
+        self.ping_ids = collections.deque(maxlen=200)
 
     def enqueue(self, kind, text):
         with self.cv:
@@ -173,6 +180,8 @@ class Recorder:
         self.captures = []
         self.version = 1
         self.counter = 0
+        self.last = None
+        self.fail = 'none'   # next capture: 'file' (write fails) or 'bundle' (build fails)
 
     def note_robot(self, row):
         with self.lock:
@@ -213,6 +222,7 @@ class Recorder:
             if not self.active or self.active['id'] != cid:
                 return False
             self.active = None
+            self.last = {'id': cid, 'outcome': 'cancelled', 'error': ''}
             self.version += 1
             return True
 
@@ -222,7 +232,10 @@ class Recorder:
             if not a:
                 return
             t_us = now_ms() * 1000
-            a['elapsed_s'] = (t_us - a['trigger_pi_host_us']) / 1e6
+            elapsed = (t_us - a['trigger_pi_host_us']) / 1e6
+            if int(elapsed) != int(a['elapsed_s']):
+                self.version += 1   # progress at most once a second, as the runtime
+            a['elapsed_s'] = elapsed
             a['remaining_s'] = max(0.0, a['post_s'] - a['elapsed_s'])
             if t_us < a['end_pi_host_us']:
                 return
@@ -243,14 +256,21 @@ class Recorder:
             data = cf.write_bundle(meta, {'robot_state.csv': (cf.ROBOT_HEADER, robot),
                                           'events.csv': (cf.EVENTS_HEADER, events),
                                           'brain_telemetry.csv': (cf.TELEMETRY_HEADER, tel)})
+            fail, self.fail = self.fail, 'none'
+            self.active = None
+            self.version += 1
+            if fail == 'bundle':
+                # as the runtime: no list entry, only the outcome
+                self.last = {'id': a['id'], 'outcome': 'failed', 'error': 'bundle: stub failure (test)'}
+                return
+            ferr = 'stub: cannot open /nonexistent/capture.zip.part (test)' if fail == 'file' else None
             done = dict(a, state='ready', url=f"/api/capture/{a['id']}.zip", size_bytes=len(data),
                         rows={'robot_state': len(robot), 'event': len(events), 'brain_telemetry': len(tel)},
-                        truncated=False, dropped={})
+                        truncated=False, dropped={}, file=None, file_error=ferr)
             done['zip'] = data
             self.captures.insert(0, done)
             del self.captures[3:]
-            self.active = None
-            self.version += 1
+            self.last = {'id': a['id'], 'outcome': 'ready', 'error': ferr or ''}
 
     def status(self):
         with self.lock:
@@ -258,6 +278,7 @@ class Recorder:
                     'state': 'recording' if self.active else 'idle', 'pi_host_us': int(now_ms() * 1000),
                     'active': dict(self.active) if self.active else None,
                     'captures': [{k: v for k, v in c.items() if k != 'zip'} for c in self.captures],
+                    'last': dict(self.last) if self.last else None,
                     'limits': {'rolling_s': 10, 'max_pre_s': 10, 'max_post_s': 60, 'default_pre_s': 5,
                                'default_post_s': 10, 'max_records': 400000, 'max_mb': 64, 'keep': 3},
                     'auto': {'triggers': []}}
@@ -291,11 +312,15 @@ class Stub:
         self.robot = None
         self.telemetry_doc = None
         self.running = True
+        self.unmeasured = False    # or 'placement' / 'source'
+        self.not_ready = False
+        self.clock_mapped = True
 
     # --- documents ---
 
-    def hello(self):
+    def hello(self, client=None):
         return {'type': 'hello', 'contract': 'navigatr.inspect/2', 'host_ms': int(now_ms()),
+                'client_id': client.id if client else None,
                 'session': {'id': self.session, 'reset_count': self.reset_count},
                 'configuration': {'id': 'stub', 'name': 'viewer stub (synthetic, not a robot)', 'digest': 'stub0001',
                                   'loop_rate_hz': 100},
@@ -317,15 +342,21 @@ class Stub:
         oh = wrap180(math.degrees(a))
         anchor = (1.2, 1.2, 0.0)
         age = 8.0
+        measured = None if self.unmeasured else int(t - age)
+        # 'source': measured on the Pico clock, not mapped to the Pi clock
+        source_stamp = {'clock': 'pico', 'ms': int(t) + 1000} if self.unmeasured == 'source' else None
         return {
-            'valid': True, 'initialized': True, 'placement_origin': 'command', 'placement_session': 1,
+            'valid': True, 'initialized': True,
+            'placement_origin': 'configuration' if self.unmeasured == 'placement' else 'command',
+            'placement_session': 1,
             'placement_sequence': 1, 'odometry_epoch': self.epoch, 'anchor_revision': self.anchor_rev,
             'odom': {'x_m': ox, 'y_m': oy, 'heading_deg': oh},
             'field': {'x_m': ox + anchor[0], 'y_m': oy + anchor[1], 'heading_deg': oh},
             'field_from_odom': {'x_m': anchor[0], 'y_m': anchor[1], 'heading_deg': anchor[2]},
             'vx_m_s': 0.6 * 2 * math.pi / 8.0, 'vy_m_s': 0.0, 'yaw_rate_deg_s': 45.0, 'confidence': 0.9,
-            'has_covariance': False, 'measured_at': {'clock': 'host', 'ms': int(t - age)},
-            'measured_at_host_ms': int(t - age), 'age_ms': int(age),
+            'has_covariance': False,
+            'measured_at': source_stamp or {'clock': 'host' if measured is not None else 'none', 'ms': measured},
+            'measured_at_host_ms': measured, 'age_ms': None if measured is None else int(t - measured),
             'attitude': {'valid': True, 'assumed_level': False, 'status': 'measured', 'source': 'stub',
                          'roll_deg': 3 * math.sin(tt), 'pitch_deg': 2 * math.cos(tt), 'age_ms': 10,
                          'measured_at_host_ms': int(t - 10)},
@@ -333,24 +364,35 @@ class Stub:
 
     def state(self, t):
         self.seq['state'] += 1
+        robot = self.robot
+        if robot and robot.get('measured_at_host_ms') is not None:
+            # the age at build time, as the runtime writes it: a keepalive
+            # repeating an old pose says how old it is
+            robot = dict(robot, age_ms=int(t - robot['measured_at_host_ms']))
         return {'type': 'state', 'seq': self.seq['state'], 'host_ms': int(t), 'host_us': int(t * 1000),
                 'session': {'id': self.session, 'reset_count': self.reset_count}, 'publication': self.publication,
-                'robot': self.robot, 'localization': {'all_ready': True, 'stationary': False, 'continuity_breaks': 0,
-                                                      'last_break': ''}}
+                'robot': robot, 'localization': {'all_ready': not self.not_ready, 'stationary': False,
+                                                 'continuity_breaks': 0, 'last_break': ''}}
 
     def diag(self, t, client):
         self.seq['diag'] += 1
         with self.lock:
-            clients = [{'id': c.id, 'sent': dict(c.sent), 'replaced': dict(c.replaced),
-                        'reliable_bytes': c.reliable_bytes} for c in self.clients]
+            # the runtime's per-client shape (docs/inspection.md)
+            clients = [{'id': c.id, 'queued_bytes': 0, 'in_flight_bytes': 0, 'reliable_backlog': len(c.reliable),
+                        'reliable_bytes': c.reliable_bytes, 'slots_pending': len(c.slots), 'diag_skipped': 0,
+                        'channels': {k: {'replaceable': k != 'reliable', 'sent': c.sent.get(k, 0),
+                                         'replaced': c.replaced.get(k, 0), 'refused': 0}
+                                     for k in REPLACEABLE + ('reliable',)}} for c in self.clients]
         path_pts = [{'x_m': 1.2, 'y_m': 1.2}, {'x_m': 1.8, 'y_m': 1.6}, {'x_m': 2.4, 'y_m': 2.0}, {'x_m': 2.8, 'y_m': 2.6}]
         return {'type': 'diag', 'contract': 'navigatr.inspect/2', 'seq': self.seq['diag'], 'host_ms': int(t),
                 'session': {'id': self.session, 'reset_count': self.reset_count}, 'cycle': int(t / 10), 'running': True,
                 'robot': self.robot,
                 'localization': {'estimator_type': 'stub', 'updates': self.publication, 'history_size': 600,
-                                 'clock_mapped': True, 'publication': self.publication, 'all_ready': True,
+                                 'clock_mapped': self.clock_mapped, 'publication': self.publication,
+                                 'all_ready': not self.not_ready,
                                  'stationary': False, 'continuity_breaks': 0, 'last_break': '',
-                                 'functions': [{'id': 'tracking', 'type': 'stub', 'ready': True, 'note': '',
+                                 'functions': [{'id': 'tracking', 'type': 'stub', 'ready': not self.not_ready,
+                                                'note': 'waiting for stillness' if self.not_ready else '',
                                                 'stillness': {'monitored': True, 'stationary': False, 'calibration': 'done',
                                                               'progress_ms': 1000, 'window_ms': 1000, 'attempts': 1,
                                                               'bias_dps': 0.12 + 0.01 * math.sin(t / 3000)}}]},
@@ -443,7 +485,7 @@ class Stub:
         self.broadcast('event', dict(e, type='event'))
 
     def greet(self, c):
-        c.enqueue('reliable', json.dumps(self.hello()))
+        c.enqueue('reliable', json.dumps(self.hello(c)))
         c.enqueue('reliable', json.dumps(self.history_doc()))
         c.enqueue('reliable', json.dumps(dict(self.recorder.status(), type='capture')))
 
@@ -455,6 +497,7 @@ class Stub:
         kind = msg.get('type')
         c.received[kind] += 1
         if kind == 'ping':
+            c.ping_ids.append(msg.get('id'))
             t = now_ms()
             c.enqueue('reliable', json.dumps({'type': 'pong', 'id': msg.get('id'), 'client_ms': msg.get('client_ms'),
                                               'host_ms': int(t), 'host_us': int(t * 1000)}))
@@ -478,7 +521,8 @@ class Stub:
         with self.lock:
             if c in self.clients:
                 self.clients.remove(c)
-                self.dropped_stats.append({'id': c.id, 'received': dict(c.received), 'sent': dict(c.sent)})
+                self.dropped_stats.append({'id': c.id, 'received': dict(c.received), 'sent': dict(c.sent),
+                                           'ping_ids': list(c.ping_ids)})
 
     dropped_stats = []
 
@@ -490,14 +534,16 @@ class Stub:
 
     def run(self):
         last = {'state': 0.0, 'diag': 0.0, 'telemetry': 0.0, 'instrumentation': 0.0, 'event': now_ms(), 'keep': 0.0}
+        last_capture_version = self.recorder.version
         while self.running:
             t = now_ms()
             if t >= self.pause_until:
                 self.publication += 1
                 self.robot = self.robot_doc(t)
                 r = self.robot
-                self.history.append({'host_ms': r['measured_at_host_ms'], 'x_m': r['odom']['x_m'], 'y_m': r['odom']['y_m'],
-                                     'heading_deg': r['odom']['heading_deg'], 'epoch': self.epoch, 'attitude_valid': True})
+                if r['measured_at_host_ms'] is not None:   # the trail holds measured poses only
+                    self.history.append({'host_ms': r['measured_at_host_ms'], 'x_m': r['odom']['x_m'], 'y_m': r['odom']['y_m'],
+                                         'heading_deg': r['odom']['heading_deg'], 'epoch': self.epoch, 'attitude_valid': True})
                 self.recorder.note_robot({
                     'pi_host_us': int(t * 1000), 'pi_session': self.session, 'reset_count': self.reset_count,
                     'source': 'stub', 'publication': self.publication, 'valid': True, 'placed': True,
@@ -510,6 +556,7 @@ class Stub:
                     'roll_deg': r['attitude']['roll_deg'], 'pitch_deg': r['attitude']['pitch_deg'], 'stationary': False})
                 if t - last['state'] >= 1000.0 / self.args.state_hz:
                     last['state'] = t
+                    last['keep'] = t   # a keepalive only after 1 s without a state
                     self.broadcast('state', self.state(t))
             elif self.robot and t - last['keep'] >= 1000.0:
                 last['keep'] = t
@@ -545,9 +592,11 @@ class Stub:
             if t - last['event'] >= 5000.0:
                 last['event'] = t
                 self.add_event(f'stub event at {t / 1000:.1f} s')
-            v = self.recorder.version
+            # as the runtime: a 'capture' message whenever the status version
+            # moved (an HTTP start or cancel, progress, the end)
             self.recorder.tick()
-            if self.recorder.version != v:
+            if self.recorder.version != last_capture_version:
+                last_capture_version = self.recorder.version
                 self.broadcast('capture', dict(self.recorder.status(), type='capture'))
             time.sleep(0.01)
 
@@ -564,7 +613,7 @@ class Stub:
             with self.lock:
                 clients = list(self.clients)
             for c in clients:
-                c.enqueue('reliable', json.dumps(self.hello()))
+                c.enqueue('reliable', json.dumps(self.hello(c)))
                 c.enqueue('reliable', json.dumps(self.history_doc()))
         elif name == 'restart':
             self.session = os.urandom(8).hex()
@@ -580,10 +629,21 @@ class Stub:
             self.jump += 1.0
         elif name == 'pause':
             self.pause_until = now_ms() + float(q.get('ms', ['1000'])[0])
+        elif name == 'unmeasured':
+            on = q.get('on', ['1'])[0] == '1'
+            self.unmeasured = ('source' if q.get('source', ['0'])[0] == '1' else 'placement') if on else False
+        elif name == 'ready':
+            self.not_ready = q.get('on', ['1'])[0] != '1'
+        elif name == 'clock':
+            self.clock_mapped = q.get('mapped', ['1'])[0] == '1'
+        elif name == 'capfail':
+            with self.recorder.lock:
+                self.recorder.fail = q.get('mode', ['none'])[0]
         elif name == 'stats':
             with self.lock:
                 return {'clients': [{'id': c.id, 'received': dict(c.received), 'sent': dict(c.sent),
-                                     'replaced': dict(c.replaced), 'sub': c.sub} for c in self.clients],
+                                     'replaced': dict(c.replaced), 'sub': c.sub, 'ping_ids': list(c.ping_ids)}
+                                    for c in self.clients],
                         'dropped': self.dropped_stats[-20:], 'session': self.session, 'reset_count': self.reset_count}
         return {'ok': True}
 

@@ -1,12 +1,14 @@
 // capture_panel.js
 // Diagnostic capture on the Pi: start (pre/post window and streams),
-// cancel, status, the list of finished captures, download, and replay.
-// The recording itself runs on the Pi, so what is kept never depends on
-// this browser or its network; closing the page changes nothing. Status
-// arrives as 'capture' messages; the panel also asks GET
-// /api/capture/status when it opens and while a capture runs, so it works
-// when those messages are late. Start and cancel are live-only controls:
-// disabled during replay.
+// cancel, status, the outcome of the last capture (ready, cancelled or
+// failed, and a failed file write), the list of finished captures,
+// download, and replay. The recording itself runs on the Pi, so what is
+// kept never depends on this browser or its network; closing the page
+// changes nothing. Status comes from the feed's 'capture' messages (app.js
+// passes each one in, whichever panel is showing); GET /api/capture/status
+// is asked when the tab opens, after start/cancel, and as a fallback when
+// no message came for a while (an inspect/1 runtime sends none). Start and
+// cancel are live-only controls: disabled during replay.
 
 import { el, setText, setClass, setHidden, KeyedTable } from './dom.js';
 import { fmt } from './transforms.js';
@@ -43,8 +45,9 @@ export class CapturePanel {
         this.cancelBtn = root.querySelector('#cap-cancel');
         this.msg = root.querySelector('#cap-msg');
         this.statusEl = root.querySelector('#cap-status');
+        this.lastEl = root.querySelector('#cap-last');
         this.activeEl = root.querySelector('#cap-active');
-        this.list = new KeyedTable(root.querySelector('#cap-list'), ['capture', 'state', 'trigger', 'window', 'size', 'loss', '']);
+        this.list = new KeyedTable(root.querySelector('#cap-list'), ['capture', 'state', 'trigger', 'window', 'size', 'loss', 'file', '']);
         this.fileInput = root.querySelector('#cap-file');
         this.streamsEl = root.querySelector('#cap-streams');
         this.boxes = new Map();
@@ -61,6 +64,8 @@ export class CapturePanel {
         }
         this.status = null;
         this.statusAt = 0;
+        this.pushedAt = -Infinity;   // last 'capture' message from the feed
+        this.lastKey = null;         // the status.last already announced
         this.live = true;
         this.polling = false;
         this.lastPoll = 0;
@@ -86,11 +91,56 @@ export class CapturePanel {
         this.updateButtons();
     }
 
-    // A 'capture' message or an HTTP status object.
-    setStatus(status, nowMs) {
+    // A 'capture' message (pushed) or an HTTP status object. An answer
+    // older than the status held (by the Pi's pi_host_us) is ignored: a slow
+    // HTTP reply must not undo a newer pushed state.
+    setStatus(status, nowMs, pushed) {
+        const cur = this.status;
+        if (cur && status && typeof cur.pi_host_us === 'number' && typeof status.pi_host_us === 'number' &&
+            status.pi_host_us < cur.pi_host_us) {
+            return;
+        }
         this.status = status;
         this.statusAt = nowMs;
+        if (pushed) {
+            this.pushedAt = nowMs;
+        }
+        this.noteLast(status);
         this.updateButtons();
+    }
+
+    // The Pi's verdict on the most recent capture, as a line (and once in
+    // the message line when it changes): a failed bundle leaves no list row,
+    // so this is the only place that failure shows.
+    lastText(last) {
+        if (!last || typeof last !== 'object' || !last.id) {
+            return null;
+        }
+        const err = last.error ? String(last.error) : '';
+        if (last.outcome === 'failed') {
+            return { text: `capture ${last.id} FAILED${err ? ': ' + err : ''} (nothing kept)`, bad: true };
+        }
+        if (last.outcome === 'cancelled') {
+            return { text: `capture ${last.id} cancelled (discarded)`, bad: false };
+        }
+        if (err) {
+            return { text: `capture ${last.id} ready, but the file write failed: ${err} (kept in memory only)`, bad: true };
+        }
+        return { text: `capture ${last.id} ${last.outcome || 'finished'}`, bad: false };
+    }
+
+    noteLast(status) {
+        const last = status ? status.last : null;
+        const key = last && last.id ? `${last.id}|${last.outcome}|${last.error || ''}` : '';
+        if (key === this.lastKey) {
+            return;
+        }
+        const first = this.lastKey === null;
+        this.lastKey = key;
+        const t = this.lastText(last);
+        if (t && !first) {
+            this.say(t.text, t.bad);
+        }
     }
 
     active() {
@@ -126,11 +176,13 @@ export class CapturePanel {
         }
     }
 
-    // Panel tick while visible: poll while recording or when no status
-    // message came for a while (an older runtime has no 'capture' messages).
+    // Panel tick while visible: the fallback when 'capture' messages do not
+    // come (inspect/1, or none for a while). A recording runtime pushes
+    // progress at 1 Hz, so polling while recording is needed only then too.
     poll(nowMs) {
         const a = this.active();
-        const due = !this.status || (a && nowMs - this.lastPoll > 1000) || nowMs - this.statusAt > 5000;
+        const quiet = nowMs - this.pushedAt > 2500;
+        const due = !this.status || (quiet && ((a && nowMs - this.lastPoll > 1000) || nowMs - this.statusAt > 5000));
         if (due && !this.polling && nowMs - this.lastPoll > 900) {
             this.polling = true;
             this.lastPoll = nowMs;
@@ -218,6 +270,12 @@ export class CapturePanel {
                 this.post.max = String(lim.max_post_s);
             }
         }
+        const lt = this.lastText(s.last);
+        setHidden(this.lastEl, !lt);
+        if (lt) {
+            setText(this.lastEl, 'last: ' + lt.text);
+            setClass(this.lastEl, lt.bad ? 'state-fault' : 'muted');
+        }
         const a = this.active();
         setHidden(this.activeEl, !a);
         if (a) {
@@ -238,7 +296,7 @@ export class CapturePanel {
         }
         this.list.begin();
         if (!(s.captures || []).length) {
-            this.list.row('none', ['none yet', '', '', '', '', '', '']);
+            this.list.row('none', ['none yet', '', '', '', '', '', '', '']);
         }
         for (const c of s.captures || []) {
             const ready = c.ready === true || c.state === 'ready';
@@ -255,11 +313,12 @@ export class CapturePanel {
             } else if (typeof drops === 'number' && drops) {
                 loss.push(`${drops} dropped`);
             }
-            if (c.write_error) {
-                loss.push('file write failed: in memory only');
-            }
+            // file_error is the Pi's name; write_error an older draft's
+            const ferr = c.file_error || c.write_error;
+            const file = ferr ? [`WRITE FAILED: ${ferr}; in memory only`, 'state-fault']
+                : (c.file ? c.file : 'memory only (no capture directory)');
             const tr = this.list.row(c.id, [c.id, c.state || (ready ? 'ready' : ''), c.reason || '',
-                `${fmt(c.pre_s, 1)} + ${fmt(c.post_s, 1)} s`, sizeText(c.bytes ?? c.size_bytes), loss.join(', ') || 'none', ''],
+                `${fmt(c.pre_s, 1)} + ${fmt(c.post_s, 1)} s`, sizeText(c.bytes ?? c.size_bytes), loss.join(', ') || 'none', file, ''],
             { title: JSON.stringify(c) });
             const cell = tr.lastChild;
             if (cell.__ready !== ready) {

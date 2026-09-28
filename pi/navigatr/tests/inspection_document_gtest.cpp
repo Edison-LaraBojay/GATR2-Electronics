@@ -528,13 +528,11 @@ TEST(InspectionDocuments, CameraPreviewWorksWithoutWorldEstimation) {
 namespace
 {
 
-// The balanced {...} value of the first "key": at or after from.
-std::string objectValue(const std::string& json, const std::string& key, std::size_t from = 0) {
-    const std::size_t k = json.find("\"" + key + "\":{", from);
-    if (k == std::string::npos) {
+// The balanced {...} starting at start.
+std::string balancedObject(const std::string& json, std::size_t start) {
+    if (start >= json.size() || json[start] != '{') {
         return {};
     }
-    const std::size_t start  = json.find('{', k);
     int               depth  = 0;
     bool              in_str = false;
     for (std::size_t i = start; i < json.size(); ++i) {
@@ -556,6 +554,16 @@ std::string objectValue(const std::string& json, const std::string& key, std::si
         }
     }
     return {};
+}
+
+// The balanced {...} value of the first "key": at or after from.
+std::string objectValue(const std::string& json, const std::string& key, std::size_t from = 0) {
+    const std::string pattern = "\"" + key + "\":{";
+    const std::size_t k       = json.find(pattern, from);
+    if (k == std::string::npos) {
+        return {};
+    }
+    return balancedObject(json, k + pattern.size() - 1);
 }
 
 std::unique_ptr<System> buildRig(FunctionRegistry& functions) {
@@ -675,6 +683,157 @@ TEST(InspectionDocuments, AttitudeStatusSeparatesMeasuredStaleAssumedAndUnavaila
     EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "stale");
 }
 
+// Each shape AttitudeFold publishes (motion_step.cpp; pinned by
+// BrainImuBench.TelemetryAttitudeIsMeasuredWhileFreshThenStale,
+// BrainProfile.VexProfileShowsTheTelemetryTiltAsAttitude and
+// BrainProfile.PicoImuProfilesCarryNoAttitude) reads as what it is.
+TEST(InspectionDocuments, AttitudeStatusFollowsTheEstimatorsInvalidShapes) {
+    // aged out: level, source and the old measurement time kept
+    Attitude a   = assumedLevelAttitude(0.2);
+    a.source     = "brain_vex_imu";
+    a.measuredAt = hostTime(700);
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "stale");
+    // even a measurement time on another clock is a measurement that aged out
+    a.measuredAt = deviceTime(700);
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "stale");
+
+    // configured, nothing measured yet (or the sample cannot be timed): the
+    // observation id names the source, no measurement time
+    a        = assumedLevelAttitude(0.2);
+    a.source = "vex_attitude";
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "unavailable");
+
+    // no source configured: level by assumption
+    a = assumedLevelAttitude(0.2);
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "assumed_level");
+
+    // no pose yet: neither measured nor assumed
+    a = Attitude{};
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "unavailable");
+    a.source = "vex_attitude";
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "unavailable");
+    a.measuredAt = hostTime(900);
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "stale");
+
+    // the valid branch ignores assumed_level and source
+    a            = Attitude{};
+    a.valid      = true;
+    a.source     = "brain_vex_imu";
+    a.measuredAt = hostTime(900);
+    EXPECT_STREQ(attitudeStatus(a, hostTime(1000)), "measured");
+}
+
+// The rig's estimator with an attitude source that never measures, and with
+// no attitude source at all, in the state message.
+TEST(InspectionDocuments, StateAttitudeStatusIsUnavailableOrAssumedByConfiguration) {
+    const auto statusAfterRunning = [](const std::string& xml, std::string& robot) {
+        FunctionRegistry functions;
+        registerAll(functions);
+        std::string err;
+        auto        system = System::buildFromString(xml.c_str(), functions, err);
+        EXPECT_NE(system, nullptr) << err;
+        if (system == nullptr) {
+            return;
+        }
+        int64_t now = 1;
+        for (int i = 0; i < 60; ++i) {
+            now += 10;
+            system->step(hostTime(now));
+        }
+        uint64_t          publication = 0;
+        const std::string state = stateDocument(*system, 1, hostTime(now), now * 1000, &publication);
+        EXPECT_TRUE(validJson(state)) << state;
+        const std::size_t at = state.find("\"attitude\":{");
+        robot                = at == std::string::npos ? std::string() : state.substr(at, 200);
+    };
+    const std::string measured = "<Attitude mode=\"measured\"";
+    std::string       xml      = kRig;
+    const std::size_t m        = xml.find(measured);
+    ASSERT_NE(m, std::string::npos);
+    xml.replace(m, measured.size(), "<Attitude mode=\"unavailable\"");
+    std::string robot;
+    statusAfterRunning(xml, robot);
+    EXPECT_EQ(robot.rfind("\"attitude\":{\"valid\":false,\"assumed_level\":true,"
+                          "\"status\":\"unavailable\",\"reference\":\"odometry\","
+                          "\"source\":\"attitude\",",
+                          0),
+              0u)
+        << robot;
+
+    const std::string fold = "<Attitude observation_id=\"attitude\" max_age_ms=\"200\"/>";
+    xml                    = kRig;
+    const std::size_t f    = xml.find(fold);
+    ASSERT_NE(f, std::string::npos);
+    xml.erase(f, fold.size());
+    statusAfterRunning(xml, robot);
+    EXPECT_EQ(robot.rfind("\"attitude\":{\"valid\":false,\"assumed_level\":true,"
+                          "\"status\":\"assumed_level\",\"reference\":\"odometry\","
+                          "\"source\":\"\",",
+                          0),
+              0u)
+        << robot;
+}
+
+namespace
+{
+
+// A Pico link that reports a fixed status frame.
+struct StatusOnlyPico : PicoControl {
+    PicoLinkState state;
+    PicoLinkState link() const override { return state; }
+    uint32_t      submit(uint8_t, uint8_t, MonotonicTime, double) override { return 0; }
+    PicoRequestStatus request(uint32_t) const override { return {}; }
+};
+
+} // namespace
+
+TEST(InspectionDocuments, PicoLastCommandNamesEveryPicoOp) {
+    auto pico                          = std::make_shared<StatusOnlyPico>();
+    pico->state.frames_fresh           = true;
+    pico->state.identity               = true;
+    pico->state.status_known           = true;
+    pico->state.last_status            = hostTime(5);
+    pico->state.status.last_request_id = 9;
+    pico->state.status.last_status     = translagatr::kPicoCommandCompleted;
+    FunctionRegistry functions;
+    registerAll(functions);
+    ASSERT_TRUE(functions.add<ResourceMakeFunction>(
+        FunctionKey{"status_only_pico"},
+        [pico](const ConfigNode&, ResourceInitializationContext&, std::string&) {
+            return ResourceInstance::asContract<PicoControl>(pico);
+        }));
+    std::string       xml = kRig;
+    const std::string end = "</Resources>";
+    const std::size_t at  = xml.find(end);
+    ASSERT_NE(at, std::string::npos);
+    xml.insert(at, "<Resource id=\"pico_link\" type=\"status_only_pico\"/>");
+    std::string err;
+    auto        system = System::buildFromString(xml.c_str(), functions, err);
+    ASSERT_NE(system, nullptr) << err;
+
+    const struct {
+        uint8_t     op;
+        const char* name;
+    } ops[] = {{0, "none"},
+               {translagatr::kPicoOpConfigure, "configure"},
+               {translagatr::kPicoOpReinitImu, "reinit_imu"},
+               {translagatr::kPicoOpRestartAcquisition, "restart_acquisition"},
+               {translagatr::kPicoOpDiagnostics, "diagnostics"},
+               {translagatr::kPicoOpDiagnostics + 1, "unknown"}};
+    for (const auto& o : ops) {
+        pico->state.status.last_op = o.op;
+        const std::string diag =
+            diagDocument(*system, InspectionServiceStats{}, InspectionFeedStats{}, 1, hostTime(10));
+        ASSERT_TRUE(validJson(diag));
+        EXPECT_NE(diag.find("\"pico\":{\"resource_id\":\"pico_link\","), std::string::npos)
+            << diag;
+        EXPECT_NE(diag.find(std::string("\"last_command\":{\"request_id\":9,\"op\":\"") + o.name +
+                            "\",\"status\":\"completed\""),
+                  std::string::npos)
+            << static_cast<int>(o.op);
+    }
+}
+
 TEST(InspectionDocuments, TelemetryRecordDecodesThroughTheCodecWithNames) {
     translagatr::BrainRequest req;
     req.op                         = translagatr::kOpTelemetry;
@@ -682,7 +841,7 @@ TEST(InspectionDocuments, TelemetryRecordDecodesThroughTheCodecWithNames) {
     req.request_id                 = 77;
     translagatr::BrainTelemetry& t = req.telemetry;
     t.flags = translagatr::kTelemetryAttitude | translagatr::kTelemetryMotion |
-              translagatr::kTelemetryWheels;
+              translagatr::kTelemetryWheels | translagatr::kTelemetryTarget;
     t.stamp_ms            = 123456;
     t.roll_cdeg           = -250;
     t.pitch_cdeg          = 125;
@@ -740,6 +899,36 @@ TEST(InspectionDocuments, TelemetryRecordDecodesThroughTheCodecWithNames) {
         << doc;
     EXPECT_NE(doc.find("\"drive_fault\":4,\"drive_fault_name\":\"stale\""), std::string::npos);
     EXPECT_NE(doc.find("\"wheels\":{\"rpm\":[123.4,-5.5]}"), std::string::npos) << doc;
+    EXPECT_NE(doc.find("\"flags\":15,"), std::string::npos) << doc;
+
+    // without the target bit target_* is no destination: null, the rest of
+    // motion and the raw flags unchanged; an unknown bit passes through raw
+    const auto flagsAt = [&](uint8_t flags) {
+        uint8_t                   f[translagatr::kMaxFrameLen];
+        translagatr::BrainRequest r = req;
+        r.telemetry.flags           = flags;
+        EXPECT_GT(translagatr::encodeBrainRequest(r, f, sizeof(f)), 0);
+        DiagBrainTelemetry body = rec;
+        std::memcpy(body.body, f + 4 + translagatr::kBrainRequestHeaderLen, body.len);
+        translagatr::BrainTelemetry decoded;
+        EXPECT_TRUE(decodeTelemetryRecord(body, decoded));
+        return telemetryDocument(7, hostTime(2100), record, body, decoded);
+    };
+    const uint8_t     no_target = translagatr::kTelemetryMotion | 0x80;
+    const std::string idle      = flagsAt(no_target);
+    ASSERT_TRUE(validJson(idle)) << idle;
+    EXPECT_NE(idle.find("\"flags\":" + std::to_string(no_target) + ","), std::string::npos)
+        << idle;
+    EXPECT_NE(idle.find("\"segment_count\":3,\"target\":null,\"cmd\":{\"vx_m_s\":0.4,"),
+              std::string::npos)
+        << idle;
+    EXPECT_NE(idle.find("\"state\":2,\"state_name\":\"running\""), std::string::npos);
+    EXPECT_NE(idle.find("\"attitude\":null"), std::string::npos);
+    // the target bit alone carries no motion group
+    const std::string target_only = flagsAt(translagatr::kTelemetryTarget);
+    EXPECT_NE(target_only.find("\"flags\":8,\"attitude\":null,\"motion\":null,\"wheels\":null"),
+              std::string::npos)
+        << target_only;
 
     // groups whose flag is clear are null; a wrong length is not decoded
     rec.body[0] = 0;
@@ -777,4 +966,68 @@ TEST(InspectionDocuments, EventPongAndCaptureMessagesAreFlatAndEcho) {
     ASSERT_TRUE(validJson(capture)) << capture;
     EXPECT_EQ(capture.rfind("{\"type\":\"capture\",\"seq\":3,\"host_ms\":20,", 0), 0u) << capture;
     EXPECT_NE(capture.find("\"available\":"), std::string::npos);
+}
+
+TEST(InspectionDocuments, FrameHeaderCarriesTheDetectionEntryOfExactlyItsFrame) {
+    FunctionRegistry functions;
+    auto             system = buildRig(functions);
+    ASSERT_NE(system, nullptr);
+    int64_t now = 1;
+    for (int i = 0; i < 180; ++i) {
+        now += 10;
+        system->step(hostTime(now));
+    }
+    ASSERT_EQ(system->detectionFrames().size(), 1u);
+    const std::shared_ptr<const DetectionFrameSnapshot> first =
+        system->detectionFrames().begin()->second;
+    const DetectionFrameSnapshot& f = *first;
+
+    // the header's detection is byte for byte the diag's entry for the frame
+    const std::string entries = "\"detection_frames\":[";
+    std::string       diag =
+        diagDocument(*system, InspectionServiceStats{}, InspectionFeedStats{}, 1, hostTime(now));
+    std::size_t at = diag.find(entries);
+    ASSERT_NE(at, std::string::npos);
+    const std::string in_diag = balancedObject(diag, at + entries.size());
+    ASSERT_FALSE(in_diag.empty()) << diag.substr(at, 200);
+    const std::string header =
+        frameHeaderDocument(f, f.width_px / 2, f.height_px / 2, 70, 1.5, hostTime(now), system.get());
+    ASSERT_TRUE(validJson(header)) << header;
+    const std::string detection = objectValue(header, "detection");
+    EXPECT_EQ(detection, in_diag);
+    const std::string identity = "{\"camera\":\"front_camera\",\"frame_id\":\"cam\",\"epoch\":" +
+                                 std::to_string(f.frame_epoch) + ",\"sequence\":" +
+                                 std::to_string(f.frame_sequence) + ",";
+    EXPECT_EQ(detection.rfind(identity, 0), 0u) << detection.substr(0, 200);
+    EXPECT_NE(header.find("\"epoch\":" + std::to_string(f.frame_epoch) + ",\"sequence\":" +
+                          std::to_string(f.frame_sequence) + ","),
+              std::string::npos);
+    EXPECT_NE(detection.find("\"has_observations\":true"), std::string::npos);
+
+    // a newer frame arrives: an encode of the older one still carries the
+    // older frame's entry, never the newest one
+    for (int i = 0; i < 100 && system->detectionFrames().begin()->second->frame_sequence ==
+                                   f.frame_sequence;
+         ++i) {
+        now += 10;
+        system->step(hostTime(now));
+    }
+    const std::shared_ptr<const DetectionFrameSnapshot> newest =
+        system->detectionFrames().begin()->second;
+    ASSERT_NE(newest->frame_sequence, f.frame_sequence);
+    diag = diagDocument(*system, InspectionServiceStats{}, InspectionFeedStats{}, 2, hostTime(now));
+    at   = diag.find(entries);
+    ASSERT_NE(at, std::string::npos);
+    const std::string newest_entry = balancedObject(diag, at + entries.size());
+    const std::string old_header =
+        frameHeaderDocument(f, f.width_px / 2, f.height_px / 2, 70, 1.5, hostTime(now), system.get());
+    const std::string old_detection = objectValue(old_header, "detection");
+    EXPECT_EQ(old_detection.rfind(identity, 0), 0u) << old_detection.substr(0, 200);
+    EXPECT_NE(old_detection, newest_entry);
+    EXPECT_NE(newest_entry.find("\"sequence\":" + std::to_string(newest->frame_sequence)),
+              std::string::npos);
+
+    // without the system there is nothing to bind: no detection key
+    EXPECT_EQ(frameHeaderDocument(f, 320, 240, 70, 1.5, hostTime(now)).find("\"detection\""),
+              std::string::npos);
 }

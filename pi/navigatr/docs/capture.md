@@ -29,13 +29,10 @@ to the Brain or the Pico.
 
 ## Configuration
 
-`<Capture>` is an optional child of `<System>`. Without it, capture is
-enabled with the defaults below.
-
-A `<Configuration>` profile (every shipped config) takes the element only
-once `src/config/composition.cpp` passes it through like `<Inspection>`.
-Until then those profiles run with the defaults, which is enough for manual
-captures. Automatic triggers and directory writes need the element.
+`<Capture>` is an optional child of `<System>` or of a `<Configuration>`
+profile (every shipped config). Without it, capture is enabled with the
+defaults below, which is enough for manual captures. Automatic triggers and
+directory writes need the element.
 
 The defaults:
 
@@ -286,10 +283,12 @@ stream that was not selected has no file.
 **Honest readings.**
 - `robot_state.csv` has one row per localization publication, and
   localization publishes every loop cycle. Between measurements the rows
-  repeat the pose. `new_measurement` is 1 when `source_ms` moved on from the
-  previous row of the segment, and 0 when it did not or there is no
-  measurement time. It is empty for the first measured row, which the
-  capture cannot compare. Filter on it before treating rows as samples.
+  repeat the pose. `new_measurement` is 1 when the estimator took a new
+  measurement for that publication (`DiagRobotState::advanced`, the same
+  flag that lets the state into pose history), and 0 when the row repeats
+  the held pose: a loop cycle without a new measurement, a reset, or a
+  continuity loss. It is never empty. Filter on it before treating rows as
+  samples.
 - `pin_*_level` in `pico_diag.csv` are logic levels read back from the pad:
   1 HIGH, 0 LOW, empty when not sampled.
   - They are not voltages, and a sample can miss fast transitions.
@@ -309,6 +308,12 @@ stream that was not selected has no file.
 - `pico_diag.csv` and `brain_telemetry.csv` keep `payload_hex` next to the
   decoded columns. `decoded` 0 means the translaGATR codec refused the
   payload, and the other columns are then empty.
+- `target_valid` in `brain_telemetry.csv` is TELEMETRY flag bit 3
+  (`translagatr::kTelemetryTarget`). `target_field_x_m`,
+  `target_field_y_m` and `target_field_heading_deg` hold a resolved
+  destination only when it is 1; when it is 0 they are empty, whatever the
+  wire carried. Like the rest of the motion group, `target_valid` is empty
+  when `motion_present` is 0.
 
 The exact header of every file is in the bundle's `README.txt`, generated
 from the same code that writes the rows.

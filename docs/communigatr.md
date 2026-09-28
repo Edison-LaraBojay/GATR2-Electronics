@@ -713,6 +713,13 @@ profile never read it, and nothing on the Brain waits for it.
 | attitude (`kTelemetryAttitude`) | `roll_cdeg`, `pitch_cdeg`, robot frame | `ProsVexImu::attitude()` through `robotAttitudeFromVex` |
 | motion (`kTelemetryMotion`) | command id, state, reason, plan mode, segment, destination, applied chassis command, errors, drive fault | `actugatr::telemetryOf`, see [actuGATR telemetry](actugatr.md#telemetry) |
 | wheels (`kTelemetryWheels`) | `wheel_count`, `wheel_rpm_x10` | motor velocity targets, same place |
+| target (`kTelemetryTarget`, bit 3) | not a group: marks the motion group's `target_*` as a resolved destination | set by `telemetryOf` exactly when `MotionStatus::has_destination` |
+
+Without `kTelemetryTarget` the motion group's `target_x_mm`, `target_y_mm`
+and `target_heading_cdeg` are 0 and mean nothing (idle, waiting for a
+reference); with it, (0, 0, 0) is a real target at the field origin. The bit
+is only meaningful with `kTelemetryMotion`. A Pi that predates the bit keeps
+it in `flags` and ignores it.
 
 `stamp_ms` is the Brain clock (`pros::millis()`) when the telemetry was
 assembled. A group whose flag is clear is zero on the wire and ignored. The
@@ -742,7 +749,7 @@ Rules:
   this rule a slow link sent no telemetry at all while `telemetry_replaced`
   grew.
 - Dropped at once (false, `telemetry_dropped`): no session, flag bits other
-  than the three groups, a wheels group of more than 6 wheels, or the Pi
+  than the four above, a wheels group of more than 6 wheels, or the Pi
   refused TELEMETRY in this session.
 - An older Pi answers UnsupportedOp; a Pi that refuses the body answers
   InvalidArgument. Either sets `telemetryUnsupported()` for the session and
@@ -1081,7 +1088,7 @@ Fakes (host only):
 | `vex_imu_recalibration_gtest.cpp` | the VEX calibration starts only after the Pi's Ok; movement, refusals and lost answers start nothing; an IMU that does not start, does not finish or ends invalid; on both transports against the fake Pi |
 | `wheel_calibration_gtest.cpp`, `startup_placement_gtest.cpp`, `link_events_gtest.cpp` | the application helpers |
 | `attitude_gtest.cpp` | VEX roll and pitch to the robot frame at mounts 0, 90, 180 and 270 and others, combined tilts round trip, the exact gravity rotation against the small angle swap, non-finite input, the centidegree group |
-| `client_telemetry_gtest.cpp` | the fake Pi's TELEMETRY rules; on both transports: values arrive intact, latest wins, one send per period on a grid, state polls keep at least 85% of their rate, an older or refusing Pi stops telemetry for the session and keeps it, a new session tries again, a Pi restart drops the unsent report, a report held through an outage is dropped; on slow links (USB turnaround 11 ms, bus reply after 8 ms) at least 30 sends in 5 s, no wait over 250 ms, never closer than half a period, one exchange at most between two polls, at least 80% of the polls, a waiting transfer and telemetry both served; on the bus log: on the default bus never with the poll due, on a slow bus overdue, and on both only in the first slot after a state reply with the longest poll gap bounded by one TELEMETRY exchange and the gap; a lost report never resent; bodies the codec cannot carry refused |
+| `client_telemetry_gtest.cpp` | the fake Pi's TELEMETRY rules; on both transports: values arrive intact, the target bit arrives as sent (set with a target at the origin, clear without one), latest wins, one send per period on a grid, state polls keep at least 85% of their rate, an older or refusing Pi stops telemetry for the session and keeps it, a new session tries again, a Pi restart drops the unsent report, a report held through an outage is dropped; on slow links (USB turnaround 11 ms, bus reply after 8 ms) at least 30 sends in 5 s, no wait over 250 ms, never closer than half a period, one exchange at most between two polls, at least 80% of the polls, a waiting transfer and telemetry both served; on the bus log: on the default bus never with the poll due, on a slow bus overdue, and on both only in the first slot after a state reply with the longest poll gap bounded by one TELEMETRY exchange and the gap; a lost report never resent; bodies the codec cannot carry and unassigned flag bits refused |
 
 `pi/naviGATR/tests/brain_link_e2e_gtest.cpp` (target `brain_link_e2e_tests` in
 `pi/naviGATR/tests/CMakeLists.txt`, run by the Pi test build) exercises the

@@ -8,13 +8,20 @@
 # data-live-seen, data-snapshots (state messages under inspect/2),
 # data-frames and an empty data-errors in the dumped DOM, plus the inspect/2
 # attributes the viewer reports (data-contract, data-mode, data-diags,
-# data-attitude-status) and a screenshot for a human to look at. A new
-# attribute the page does not report is a warning, a wrong value a failure.
+# data-attitude-status) and a screenshot for a human to look at. While the
+# page is loaded it also polls /api/snapshot: the browser must answer the
+# server's flow-control pings (workers.inspection.flow_control_clients).
+# A new attribute the page does not report is a warning, a wrong value a
+# failure.
 # Builds nothing; point it at a binary you already built. Host check only:
 # it says nothing about the robot hardware.
 #
 #   tools/viewer_smoke.sh [binary] [config] [--port N] [--out DIR]
-#                         [--attitude-badge assumed|valid|stale|any] [--keep]
+#                         [--attitude-badge assumed|valid|stale|unavailable|any] [--keep]
+#
+# Attitude badges: synthetic_field_demo.xml is valid (measured);
+# synthetic_field_demo_no_attitude.xml configures a source that never
+# measures, so unavailable; a pipeline with no estimator <Attitude> is assumed.
 #
 # Defaults: build-viewer/navigatr.exe (or build/navigatr[.exe]),
 # config/demo/synthetic_field_demo.xml, port 8791, out in a temp dir.
@@ -113,8 +120,10 @@ echo "out      $OUTDIR"
 NAV_PID=$!
 BROWSER_PID=""
 WATCHDOG_PID=""
+POLL_PID=""
 
 cleanup() {
+    if [ -n "$POLL_PID" ]; then kill "$POLL_PID" >/dev/null 2>&1; fi
     if [ -n "$WATCHDOG_PID" ]; then kill "$WATCHDOG_PID" >/dev/null 2>&1; fi
     if [ -n "$BROWSER_PID" ]; then kill "$BROWSER_PID" >/dev/null 2>&1; fi
     kill "$NAV_PID" >/dev/null 2>&1
@@ -213,8 +222,23 @@ browser_run() {
 }
 
 : > "$ERR"
+# flow control: how many feed clients answer pings, sampled while the page runs
+FC_LOG="$OUTDIR/flow_control.txt"
+: > "$FC_LOG"
+(
+    while :; do
+        curl -s "http://127.0.0.1:$PORT/api/snapshot" 2>/dev/null             | grep -o '"flow_control_clients":[0-9]*' | head -1
+        sleep 0.5
+    done
+) >> "$FC_LOG" 2>/dev/null &
+POLL_PID=$!
 browser_run "$UD" "$DOM" --dump-dom
 BROWSER_EXIT=$?
+kill "$POLL_PID" >/dev/null 2>&1
+wait "$POLL_PID" 2>/dev/null
+POLL_PID=""
+FC_SEEN="$(grep -c . "$FC_LOG" 2>/dev/null)"
+FC_MAX="$(sed 's/.*://' "$FC_LOG" 2>/dev/null | sort -n | tail -1)"
 browser_run "$UD_SHOT" /dev/null --screenshot="$(winpath "$SHOT")"
 SHOT_EXIT=$?
 [ "$SHOT_EXIT" -eq 0 ] || echo "  ! screenshot run exited $SHOT_EXIT"
@@ -240,6 +264,7 @@ SMOOTHING="$(attr smoothing)"
 echo "browser exit $BROWSER_EXIT"
 echo "status   state=$STATE live-seen=$LIVE_SEEN snapshots=$SNAPS frames=$FRAMES attitude=$ATT webgl=$WEBGL"
 echo "feed     contract=$PAGE_CONTRACT mode=$MODE diags=$DIAGS trail=$TRAIL attitude-status=$ATT_STATUS smoothing=$SMOOTHING"
+echo "flow     flow_control_clients max=${FC_MAX:-none} over ${FC_SEEN:-0} samples"
 [ -n "$ERRORS" ] && echo "errors   $ERRORS"
 [ -f "$SHOT" ] && echo "shot     $SHOT ($(wc -c < "$SHOT") bytes)"
 
@@ -264,6 +289,11 @@ if [ "$CONTRACT" = "navigatr.inspect/2" ]; then
     else
         echo "  ! page does not report data-diags"
     fi
+    if [ "${FC_SEEN:-0}" -gt 0 ]; then
+        [ "$(num "$FC_MAX")" -ge 1 ]             || { echo "  x the browser never answered a flow-control ping (flow_control_clients=$FC_MAX)"; fail=1; }
+    else
+        echo "  ! server reports no flow_control_clients"
+    fi
     if has attitude-status; then
         case "$ATT_STATUS" in
             measured|stale|assumed_level|unavailable) ;;
@@ -287,6 +317,7 @@ case "$ATT_BADGE" in
     assumed) [ "$ATT" = "assumed_level" ] || { echo "  x attitude badge is '$ATT', expected assumed_level"; fail=1; };;
     valid)   [ "$ATT" = "valid" ] || { echo "  x attitude badge is '$ATT', expected valid"; fail=1; };;
     stale)   [ "$ATT" = "stale" ] || { echo "  x attitude badge is '$ATT', expected stale"; fail=1; };;
+    unavailable) [ "$ATT" = "unavailable" ] || { echo "  x attitude badge is '$ATT', expected unavailable"; fail=1; };;
     any) ;;
     *) ;;
 esac

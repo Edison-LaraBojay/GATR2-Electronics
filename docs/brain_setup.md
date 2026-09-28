@@ -75,7 +75,7 @@ pros upload --slot 1 --name operaGATR --after screen
 **Pi (Raspberry Pi OS).** Copy the source from Windows, build and install the service. See [Pi setup](pi_setup.md) for access and the copy step. On the Pi:
 
 ```sh
-cd ~/navigatr/pi/naviGATR
+cd ~/GATR2-Electronics/pi/naviGATR
 cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DNAVIGATR_BUILD_TESTS=OFF -DNAVIGATR_WITH_LIBCAMERA=OFF
 cmake --build build-bench -j2
 sudo bash tools/install_service.sh --user "$USER" --binary build-bench/navigatr --config config/override/brain_profile_usb.xml

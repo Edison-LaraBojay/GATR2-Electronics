@@ -66,7 +66,7 @@ changes that have not been committed and pushed. To copy the current Pi program
 and shared protocol from Windows, run these in the repository's top directory:
 
 ```powershell
-tar.exe -czf "$env:TEMP\navigatr-source.tar.gz" --exclude=build --exclude=build-* --exclude=.pio pi/naviGATR common
+tar.exe -czf "$env:TEMP\navigatr-source.tar.gz" --exclude=build --exclude=build-* --exclude=.pio pi/naviGATR translaGATR
 scp "$env:TEMP\navigatr-source.tar.gz" YOUR_USER@PI_ROUTER_IP:/tmp/navigatr-source.tar.gz
 ```
 

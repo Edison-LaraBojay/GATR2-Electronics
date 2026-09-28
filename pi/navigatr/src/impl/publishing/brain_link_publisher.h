@@ -2,7 +2,7 @@
 // Answers the brain link request the brain_link commands slot processed this
 // cycle, once, through the link's windowed write. No request, no output.
 // The reply is built from this cycle's robot state, command state and
-// health. Everything wire shaped is owned here and in common/: fixed point
+// health. Everything wire shaped is owned here and in translaGATR/: fixed point
 // mm and centidegrees and the reply bodies. Health bits come only from
 // configured references; an unreferenced bit stays clear.
 //

@@ -67,6 +67,7 @@ struct DiagRobotState {
     bool     attitude_valid    = false;
     bool     attitude_assumed_level = false;
     bool     stationary        = false;
+    bool     advanced          = false; // this publication carries a new measurement
 };
 
 struct DiagPicoSensor {

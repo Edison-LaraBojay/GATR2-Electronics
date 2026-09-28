@@ -5,7 +5,7 @@
 // once per cycle and publishes each configured channel as a named output
 // in the ResourceMap, so every channel sensor reads from the same decoded
 // packet and nobody re-drains the UART. All Pico wire knowledge lives here
-// and in common/, nowhere else in navigatr.
+// and in translaGATR/, nowhere else in navigatr.
 //
 //   <Resource id="pico_telemetry" type="pico_telemetry">
 //       <Serial resource_id="pico_uart"/>

@@ -22,7 +22,7 @@ constexpr int      kFailuresBeforeBackoff = 3;
 constexpr int      kPollsBeforeTransfer   = 4; // due polls a waiting transfer yields to
 constexpr int      kBudgetFrameBytes      = 85; // v3 largest request plus largest reply
 constexpr uint8_t  kTelemetryFlags = translagatr::kTelemetryAttitude | translagatr::kTelemetryMotion |
-                                    translagatr::kTelemetryWheels;
+                                    translagatr::kTelemetryWheels | translagatr::kTelemetryTarget;
 
 // Anchor revisions only grow within one pi_instance; serial order handles wrap.
 bool anchorReached(uint32_t reported, uint32_t wanted) {

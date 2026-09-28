@@ -9,7 +9,11 @@
 // the entry's intrinsics (transforms.js) and only when the tag has a pose.
 //
 // Messages only store; the canvas, badges and tag list are redrawn by
-// render() at the page's panel rate while the panel is visible.
+// render() at the page's panel rate while the panel is visible. A JPEG is
+// decoded only for the selected camera while the panel is visible; others
+// keep just their newest undecoded frame, decoded when they are shown. The
+// page also asks the server for no previews while the panel is out of view
+// (app.js).
 
 import { transformPoint, projectEngineering, fmt, fmtMs } from './transforms.js';
 import { BadgeSet, KeyedTable, setText, setClass } from './dom.js';
@@ -87,6 +91,8 @@ export class CameraPanel {
         this.cameras = [];
         this.current = null;
         this.images = new Map();     // camera -> {header, bitmap, serial}
+        this.pending = new Map();    // camera -> {header, jpeg, serial}: newest frame not decoded
+        this.visible = true;
         this.entries = new Map();    // camera -> Map(identity -> {entry, cycle})
         this.latest = new Map();     // camera -> newest detection entry
         this.selected = null;        // tag index in the drawn entry
@@ -102,6 +108,7 @@ export class CameraPanel {
         this.select.addEventListener('change', () => {
             this.current = this.select.value;
             this.selected = null;
+            this.decodePending();
             this.redraw();
         });
         this.canvas.addEventListener('click', (e) => this.onClick(e));
@@ -128,10 +135,31 @@ export class CameraPanel {
             }
         }
         this.images.clear();
+        this.pending.clear();
         this.entries.clear();
         this.latest.clear();
         this.selected = null;
         this.dirty = true;
+    }
+
+    // The page's visibility verdict for this panel; becoming visible decodes
+    // the newest frame kept for the selected camera.
+    setVisible(on) {
+        if (on === this.visible) {
+            return;
+        }
+        this.visible = on;
+        if (on) {
+            this.decodePending();
+        }
+    }
+
+    decodePending() {
+        const p = this.current ? this.pending.get(this.current) : null;
+        if (p) {
+            this.pending.delete(this.current);
+            this.decode(p.header, p.jpeg, p.serial, p.at);
+        }
     }
 
     addCameras(ids) {
@@ -194,6 +222,17 @@ export class CameraPanel {
             this.keepEntry(header.detection, header.host_ms);
         }
         const serial = ++this.serial;
+        if (!this.visible || header.camera !== this.current) {
+            // not shown: keep the bytes, decode only if it is shown later
+            this.pending.set(header.camera, { header, jpeg, serial, at: performance.now() });
+            return;
+        }
+        this.pending.delete(header.camera);
+        this.decode(header, jpeg, serial, performance.now());
+    }
+
+    // receivedAt: the browser arrival time of the frame, not of the decode
+    decode(header, jpeg, serial, receivedAt) {
         const generation = this.generation;
         const blob = new Blob([jpeg], { type: header.format || 'image/jpeg' });
         const store = (bitmap) => {
@@ -207,7 +246,7 @@ export class CameraPanel {
             if (prev && prev.bitmap && prev.bitmap.close) {
                 prev.bitmap.close();
             }
-            this.images.set(header.camera, { header, bitmap, serial, receivedAt: performance.now() });
+            this.images.set(header.camera, { header, bitmap, serial, receivedAt });
             if (header.camera === this.current) {
                 this.dirty = true;
             }

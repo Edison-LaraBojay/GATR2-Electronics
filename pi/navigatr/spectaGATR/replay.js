@@ -40,6 +40,8 @@ const COL = {
     confidence: ['confidence'],
     age: ['source_age_ms'],
     measuredHost: ['measured_pi_host_ms', 'measured_host_ms'],
+    sourceClock: ['source_clock'],
+    sourceMs: ['source_ms'],
 };
 
 // Enum names for recorded telemetry, as the live server names them
@@ -172,6 +174,7 @@ export class ReplayModel {
             vx: col('vx'), vy: col('vy'), wz: col('wz'), roll: col('roll'), pitch: col('pitch'),
             attValid: col('attValid'), attLevel: col('attLevel'), confidence: col('confidence'),
             measuredHost: col('measuredHost'), age: col('age'),
+            sourceMs: col('sourceMs'), sourceClock: tb.str(pick(tb, 'sourceClock')),
             attStatus: tb.str(pick(tb, 'attStatus')),
         };
         if (!(r.fx && r.fy && r.fh) && !(r.ox && r.oy && r.oh)) {
@@ -453,7 +456,13 @@ export class ReplayModel {
             valid: poseValid, initialized: placed && hasField, field: field || { x_m: NaN, y_m: NaN, heading_deg: NaN }, odom,
             odometry_epoch: v(r.epoch), anchor_revision: v(r.anchor), placement_sequence: v(r.placement),
             vx_m_s: v(r.vx), vy_m_s: v(r.vy), yaw_rate_deg_s: v(r.wz), confidence: v(r.confidence),
+            // empty in a row = no measurement time; a bundle without the
+            // columns says nothing about it (age_known false)
+            age_known: !!(r.age || r.measuredHost),
             age_ms: Number.isFinite(v(r.age)) ? v(r.age) : (Number.isFinite(v(r.measuredHost)) ? r.t[k] - v(r.measuredHost) : NaN),
+            // the source-clock stamp, as the live measured_at: set with an
+            // empty Pi time means measured, clock not mapped
+            measured_at: { clock: r.sourceClock ? r.sourceClock[i] : null, ms: Number.isFinite(v(r.sourceMs)) ? v(r.sourceMs) : null },
             attitude: { status, valid: status === 'measured', assumed_level: status === 'assumed_level', roll_deg: v(r.roll), pitch_deg: v(r.pitch), source: 'recorded' },
             placement_origin: 'recorded', session: r.sessions ? r.sessions[i] : '',
         };

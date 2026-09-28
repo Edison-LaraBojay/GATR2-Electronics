@@ -85,6 +85,7 @@ constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
 constexpr int          kSendFlags     = 0;
 
 void closeSocket(SocketHandle s) { closesocket(s); }
+void shutdownSend(SocketHandle s) { shutdown(s, SD_SEND); }
 bool wouldBlock() {
     const int e = WSAGetLastError();
     return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS;
@@ -127,6 +128,7 @@ constexpr int kSendFlags = 0;
 #endif
 
 void closeSocket(SocketHandle s) { ::close(s); }
+void shutdownSend(SocketHandle s) { ::shutdown(s, SHUT_WR); }
 bool wouldBlock() { return errno == EAGAIN || errno == EWOULDBLOCK; }
 bool setNonBlocking(SocketHandle s) {
     const int flags = fcntl(s, F_GETFL, 0);
@@ -475,6 +477,7 @@ struct HttpServer::Impl {
 
         bool        awaiting_handler  = false;  // request dispatched, response pending
         bool        close_after_flush = false;
+        bool        half_closed       = false;   // our side is done, waiting for the peer's EOF
         bool        dead              = false;
         bool        refused           = false;  // over max_clients: answers 503 and goes
         std::string close_reason;
@@ -1202,6 +1205,9 @@ void HttpServer::Impl::readClient(Client& c, std::vector<Event>& events, Clock::
     for (;;) {
         const auto n = ::recv(c.sock, buf, sizeof(buf), 0);
         if (n > 0) {
+            if (c.close_after_flush) {
+                continue;   // closing: only the peer's EOF matters now
+            }
             c.in.append(buf, static_cast<std::size_t>(n));
             if (c.in.size() > kMaxRequestHead + kMaxRequestBody + kMaxClientMessage) {
                 kill(c, "protocol");   // nobody legitimate sends this much to a feed
@@ -1342,9 +1348,17 @@ void HttpServer::Impl::run() {
                     kill(c, "peer");
                     continue;
                 }
-                if (c.queued() == 0 && c.close_after_flush) {
-                    kill(c, "closed");
-                    continue;
+                if (c.queued() == 0 && c.close_after_flush && !c.half_closed) {
+                    // lingering close: bytes the peer still sends (a pong
+                    // already on its way) would make an immediate close a
+                    // reset, and a reset can discard what was sent last.
+                    // Wait for its EOF, bounded by the grace.
+                    shutdownSend(c.sock);
+                    c.half_closed = true;
+                    if (!c.has_close_deadline) {
+                        c.has_close_deadline = true;
+                        c.close_deadline     = now + std::chrono::milliseconds(kCloseGraceMs);
+                    }
                 }
                 if (c.has_close_deadline && now >= c.close_deadline) {
                     kill(c, "closed");

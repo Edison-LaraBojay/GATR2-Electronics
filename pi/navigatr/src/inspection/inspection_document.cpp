@@ -297,6 +297,7 @@ const char* picoOpName(uint8_t op) {
     case translagatr::kPicoOpConfigure: return "configure";
     case translagatr::kPicoOpReinitImu: return "reinit_imu";
     case translagatr::kPicoOpRestartAcquisition: return "restart_acquisition";
+    case translagatr::kPicoOpDiagnostics: return "diagnostics";
     default: return "unknown";
     }
 }
@@ -1758,6 +1759,14 @@ const char* attitudeStatus(const Attitude& a, MonotonicTime now) {
                            now.ms - a.measuredAt.ms <= kAttitudeFreshMs;
         return fresh ? "measured" : "stale";
     }
+    // the estimator keeps the old measurement time when a tilt ages out
+    if (a.measuredAt.isSet()) {
+        return "stale";
+    }
+    // a source is configured but nothing was measured or could be timed
+    if (!a.source.empty()) {
+        return "unavailable";
+    }
     return a.assumed_level ? "assumed_level" : "unavailable";
 }
 
@@ -1956,11 +1965,16 @@ std::string telemetryDocument(uint64_t seq, MonotonicTime now, const DiagRecord&
         w.field("segment", static_cast<int64_t>(t.segment));
         w.field("segment_count", static_cast<int64_t>(t.segment_count));
         w.key("target");
-        w.beginObject();
-        w.field("x_m", t.target_x_mm / 1000.0);
-        w.field("y_m", t.target_y_mm / 1000.0);
-        w.field("heading_deg", t.target_heading_cdeg / 100.0);
-        w.endObject();
+        // without the target bit the Brain has no resolved destination
+        if ((t.flags & kTelemetryTarget) != 0) {
+            w.beginObject();
+            w.field("x_m", t.target_x_mm / 1000.0);
+            w.field("y_m", t.target_y_mm / 1000.0);
+            w.field("heading_deg", t.target_heading_cdeg / 100.0);
+            w.endObject();
+        } else {
+            w.null();
+        }
         w.key("cmd");
         w.beginObject();
         w.field("vx_m_s", t.cmd_vx_mm_s / 1000.0);

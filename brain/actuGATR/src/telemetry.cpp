@@ -61,7 +61,9 @@ translagatr::BrainTelemetry telemetryOf(const DriveSnapshot& snapshot) {
     t.plan_mode     = static_cast<uint8_t>(m.mode);
     t.segment       = u8(m.segment);
     t.segment_count = u8(m.segment_count);
+    // The bit tells a destination at the field origin from none at all.
     if (m.has_destination) {
+        t.flags |= translagatr::kTelemetryTarget;
         t.target_x_mm         = i32(m.destination.x * 1000.0);
         t.target_y_mm         = i32(m.destination.y * 1000.0);
         t.target_heading_cdeg = angle(m.destination.heading);

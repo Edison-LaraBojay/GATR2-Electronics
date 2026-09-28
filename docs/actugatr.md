@@ -172,11 +172,12 @@ Configs and kinematics:
 
 | Field | From | Wire unit |
 |---|---|---|
+| `flags` | `kTelemetryMotion` always; `kTelemetryTarget` (bit 3) exactly when `motion.has_destination`; `kTelemetryWheels` when the drive has wheel groups | bits, see [communiGATR telemetry](communigatr.md#telemetry) |
 | `command_id` | `motion.command_id` | 0 = none |
 | `motion_state`, `motion_reason` | `motion.state`, `motion.reason` | tables below |
 | `plan_mode` | `motion.mode` | 0 direct, 1 avoiding |
 | `segment`, `segment_count` | `motion` | count, at most 255 |
-| `target_x_mm`, `target_y_mm`, `target_heading_cdeg` | `motion.destination`, field frame, latest resolution | mm; centidegrees in (-18000, 18000]. All 0 when the command has no resolved destination (idle, or waiting for a reference) |
+| `target_x_mm`, `target_y_mm`, `target_heading_cdeg` | `motion.destination`, field frame, latest resolution | mm; centidegrees in (-18000, 18000]. Valid only with `kTelemetryTarget`, so a destination at the field origin reads (0, 0, 0) with the bit set. Without a resolved destination (idle, waiting for a reference, or ended before resolving) the bit is clear and all three are 0. Once resolved it stays set after the command ends, until the next command |
 | `cmd_vx_mm_s`, `cmd_vy_mm_s`, `cmd_omega_cdeg_s` | `drive.command`: the body command the drive applied, after desaturation (the manual demand in manual mode) | mm/s, centidegrees/s CCW |
 | `cross_track_mm`, `distance_error_mm` | `motion` | mm |
 | `heading_error_cdeg` | `motion.heading_error`, destination minus robot | centidegrees in (-18000, 18000] |
@@ -268,7 +269,7 @@ cmake --build build-brain -j8
 ctest --test-dir build-brain --output-on-failure
 ```
 
-- `actugatr_tests` cover kinematics signs and units, coupled limits, drive stops, followers closed loop through a drivetrain sim, Motion semantics, drive ownership, port checks, and the TELEMETRY groups (units, rounding, wrapping, saturation, missing destination, motor targets, the enum values above).
+- `actugatr_tests` cover kinematics signs and units, coupled limits, drive stops, followers closed loop through a drivetrain sim, Motion semantics, drive ownership, port checks, and the TELEMETRY groups (units, rounding, wrapping, saturation, the target bit with a missing destination and one at the origin, motor targets, the enum values above). A Motion test checks the target bit through a real command: clear while the reference is unresolved, set from the first plan through completion, clear for the next command.
 - `actugatr_integration_tests` run Motion with the real planner, a tank and a mecanum sim. They check the true rectangular footprint against every obstacle at every simulated step, through turns, corners and a replan after a field correction.
 
 ## Limits

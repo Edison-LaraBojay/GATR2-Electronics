@@ -49,6 +49,11 @@ EPOCH_S = 7.0              # a new odometry epoch (segment) from here on
 RADIUS_M = 0.5
 OMEGA = 2 * math.pi / 6.0  # rad/s
 ANCHOR = (1.0, 1.2, 30.0)  # field_from_odom while placed (x, y, heading deg)
+# synthetic(variant): a span with no robot_state rows ('hole'), or rows that
+# repeat the pose of its first row with a growing source_age_ms ('frozen',
+# the runtime's rows between measurements); both must replay as stale
+STALE_FROM_S = 4.0
+STALE_TO_S = 6.9
 
 
 def wrap180(d):
@@ -116,10 +121,11 @@ def write_bundle(metadata, tables, readme='gatr2.capture/1 test bundle (not prod
     return buf.getvalue()
 
 
-def synthetic():
+def synthetic(variant=None):
     n = int(DURATION_S * RATE_HZ)
     robot = []
     pico = []
+    frozen = None
     unwrapped = 0.0
     prev_h = None
     for k in range(n):
@@ -147,6 +153,15 @@ def synthetic():
             'yaw_rate_deg_s': math.degrees(OMEGA), 'confidence': 0.9,
             'attitude_status': 'measured', 'roll_deg': 2.0 * math.sin(t), 'pitch_deg': -1.0, 'stationary': False,
         })
+        if variant and STALE_FROM_S <= t < STALE_TO_S:
+            if variant == 'hole':
+                robot.pop()
+            elif variant == 'frozen':
+                if frozen is None:
+                    frozen = dict(robot[-1])
+                row = dict(frozen, pi_host_us=us, publication=k + 1)
+                row['source_age_ms'] = us / 1000.0 - frozen['measured_pi_host_ms']
+                robot[-1] = row
         pico.append({
             'pi_host_us': us - 3000, 'pi_session': SESSION, 'reset_count': 0, 'source': 'pico',
             'source_clock': 'pico', 'source_ms': 1000 + int(t * 1000), 'frame_version': 2, 'boot_id': 17,

@@ -16,7 +16,8 @@
 // data-cycle, data-errors, data-readiness, data-attitude (valid,
 // assumed_level, stale or unavailable), data-attitude-status (the inspect/2
 // status), data-contract, data-mode (live or replay), data-trail (trail
-// points) and data-live-seen; window.__navigatr exposes counters, the
+// points), data-pose (fresh, stale, unmeasured or invalid), data-replay-pose
+// (the same for the replayed row) and data-live-seen; window.__navigatr exposes counters, the
 // newest documents, the error list and metrics(). ?perf adds
 // performance.mark/measure entries per message and per frame.
 
@@ -25,7 +26,7 @@ import { CameraPanel } from './camera_panel.js';
 import { Diagnostics } from './diagnostics.js';
 import { LinkPanel, readinessOf } from './link_panel.js';
 import { Feed } from './feed.js';
-import { PoseSmoother, STALE_MS as POSE_STALE_MS } from './smoothing.js';
+import { PoseSmoother, poseFreshness, measuredOnSourceClock } from './smoothing.js';
 import { SeriesStore } from './series.js';
 import { LiveCollector, GraphPanel } from './graphs.js';
 import { InstrumentationPanel } from './instrumentation_panel.js';
@@ -186,7 +187,11 @@ function piNow(nowMs) {
     return s && typeof s.host_ms === 'number' ? s.host_ms + (nowMs - feed.stateArrival) : NaN;
 }
 
-const diagnostics = new Diagnostics(document.getElementById('tab-diag'), (msg) => feed.send(msg));
+const diagnostics = new Diagnostics(document.getElementById('tab-diag'), (msg) => {
+    previewUser = msg;
+    previewUserVersion += 1;
+    return applyPreview(true);
+});
 const linkPanel = new LinkPanel(document.getElementById('link'));
 const graphPanel = new GraphPanel(document.getElementById('tab-graphs'), { onSeek: (t) => replay && replay.clock.seek(t) });
 graphPanel.setSource(liveStore, 'live');
@@ -294,7 +299,53 @@ if (typeof IntersectionObserver !== 'undefined') {
     }
 }
 
+// Camera previews cost the Pi an encode and the link a JPEG each: while the
+// camera panel is out of view (or the page hidden) the page asks for hz 0,
+// and back in view for the budget in the Diagnostics form (the server
+// defaults unless someone set one). A new connection starts at the server
+// default, so it is re-applied per connection. Replay keeps previews: the
+// live camera panel stays on screen, marked LIVE.
+const PREVIEW_OFF = { type: 'preview', hz: 0 };
+let previewUser = null;          // the budget last submitted in the form
+let previewUserVersion = 0;
+const previewApplied = { conn: -1, want: true, version: 0 };
+
+// submitted: called from the form, which sends even with no camera.
+function applyPreview(submitted) {
+    const hello = feed.hello;
+    if (!hello || !feed.open()) {
+        return 'offline';
+    }
+    if (!(hello.camera_sensors || []).length) {
+        // nothing to pause; a submitted budget goes out as it always did
+        return !submitted || feed.send(previewUser) ? 'sent' : 'offline';
+    }
+    const want = !document.hidden && sideVisible.get('camera') !== false;
+    cameraPanel.setVisible(want);
+    const a = previewApplied;
+    const newConn = a.conn !== feed.connectionEpoch;
+    if (!newConn && a.want === want && a.version === previewUserVersion) {
+        return want ? 'sent' : 'deferred';
+    }
+    let msg = null;
+    if (!want) {
+        msg = PREVIEW_OFF;
+    } else if (previewUser) {
+        msg = previewUser;
+    } else if (!newConn) {
+        msg = diagnostics.formPreview();
+    }
+    if (msg && !feed.send(msg)) {
+        return 'offline';
+    }
+    a.conn = feed.connectionEpoch;
+    a.want = want;
+    a.version = previewUserVersion;
+    return want ? 'sent' : 'deferred';
+}
+
 document.addEventListener('visibilitychange', () => {
+    applyPreview();
     updateSubscription();
     // back from a hidden tab: refill the trail the paused frames missed
     if (!document.hidden && mode === 'live') {
@@ -307,24 +358,22 @@ document.addEventListener('visibilitychange', () => {
 let mode = 'live';
 let sessionDirty = false;
 let panelsDue = true;
-const seen = { hello: 0, state: 0, diag: 0, telemetry: -1, history: 0, connection: 0, epochRequested: null };
+const seen = { hello: 0, state: 0, diag: 0, telemetry: -1, history: 0, connection: 0, epochRequested: null, capture: 0 };
 const ident = { session: '', reset: 0, epoch: 0, anchor: 0, placement: 0, placed: false, valid: false, connection: 0 };
 let renderArrival = 0;
 let lastStale = null;
 let telFresh = false;
 let telPathKey = '';
 
+// '' fresh, 'stale' or 'unmeasured' (smoothing.js poseFreshness): no
+// state for a while, a pose too old, or a valid pose the runtime never
+// measured (age_ms null: a configured placement before the first reading).
 function poseStale(now) {
     const s = feed.state;
     if (!s || !s.robot) {
-        return true;
+        return 'stale';
     }
-    const since = now - feed.lastStateArrival;
-    if (since > POSE_STALE_MS) {
-        return true;
-    }
-    const age = s.robot.age_ms;
-    return typeof age === 'number' && age + since > POSE_STALE_MS;
+    return poseFreshness(s.robot.age_ms, now - feed.lastStateArrival);
 }
 
 function applyFeed(now) {
@@ -535,6 +584,8 @@ function exitReplay() {
     diagnostics.setLiveControls(true);
     capturePanel.setLive(true);
     replayBar.hidden = true;
+    statusEl.dataset.replayPose = '';
+    state.replayRobot = null;
     setText(document.getElementById('replay-info'), '');
     // re-apply the newest live documents and refill the trail
     seen.state = -1;
@@ -624,6 +675,8 @@ function drawReplayMarks() {
     }
 }
 
+// The replayed state at the playhead, whether or not the 3D view exists:
+// the readout, graphs and scrub bar work without WebGL too.
 function replayFrame(now) {
     const r = replay;
     r.clock.tick(now);
@@ -634,12 +687,19 @@ function replayFrame(now) {
     const mdl = r.model;
     const t = r.clock.t;
     const robot = mdl.robotAt(t);
+    const gl = scene.available;
     if (robot) {
-        scene.applyRobotState(robot, false);
+        // the live rule on the recording's own clock: time from the row to
+        // the playhead stands in for time since the last state
+        robot.since_ms = t - robot.t;
+        robot.stale = robot.valid ? poseFreshness(robot.age_known === false ? 0 : robot.age_ms, robot.since_ms) : '';
+        scene.applyRobotState(robot, robot.stale);
         if (robot.valid) {
             scene.placeRobot(robot.field);
         }
-        if (r.clock.jumped || robot.segment !== r.lastSegment || robot.index < r.lastIndex) {
+        if (!gl) {
+            // no trail to keep
+        } else if (r.clock.jumped || robot.segment !== r.lastSegment || robot.index < r.lastIndex) {
             scene.clearTrail();
             for (const [x, y, tt] of mdl.trailPoints(robot.index, TRAIL_MAX).points) {
                 scene.trailPush(x, y, tt);
@@ -693,6 +753,16 @@ function graphEvents() {
 
 function panels(now) {
     const diag = feed.diag;
+    // every 'capture' message reaches the panel, shown or not, so its
+    // buttons are right when it opens (another viewer or an auto trigger
+    // may have started one)
+    if (feed.captureVersion !== seen.capture) {
+        seen.capture = feed.captureVersion;
+        if (feed.capture) {
+            capturePanel.setStatus(feed.capture, now, true);
+        }
+    }
+    applyPreview();
     renderStatus(now);
     if (!document.hidden) {
         const linkEl = linkPanel.root;
@@ -834,12 +904,27 @@ function renderStatus(now) {
     }
     statusEl.dataset.placement = r.valid && r.initialized ? 'placed' : 'unplaced';
     const stale = poseStale(now);
-    if (r.valid && stale) {
+    statusEl.dataset.pose = !r.valid ? 'invalid' : (stale || 'fresh');
+    if (r.valid && stale === 'unmeasured' && measuredOnSourceClock(r)) {
+        badges.badge('pose-unmeasured', `pose age unknown: measured on the ${r.measured_at.clock} clock, not mapped to the Pi clock`, 'warn',
+            'the runtime has a measurement but cannot say when it was taken on the Pi clock, so its freshness is unknown');
+    } else if (r.valid && stale === 'unmeasured') {
+        badges.badge('pose-unmeasured', `pose not measured yet (${r.placement_origin || 'no'} placement, no sensor reading)`, 'warn',
+            'the runtime reports a valid pose with no measurement time: it is where the robot was placed, not a tracked position');
+    } else if (r.valid && stale) {
         badges.badge('pose-stale', `pose stale: ${fmtMs(age(r.age_ms))} old, last state ${fmtMs(since)} ago`, 'bad');
     }
-    const loc = s.localization || (diag ? diag.localization : null);
-    if (loc && loc.clock_mapped === false) {
-        badges.badge('clock-unmapped', 'clock unmapped', 'warn');
+    // state.localization (inspect/2) has no clock_mapped; the diag has it
+    const sl = s.localization;
+    const dl = diag ? diag.localization : null;
+    const clockMapped = sl && typeof sl.clock_mapped === 'boolean' ? sl.clock_mapped : (dl ? dl.clock_mapped : undefined);
+    if (clockMapped === false) {
+        badges.badge('clock-unmapped', 'clock unmapped', 'warn', 'the runtime has not mapped the source clock to the Pi clock yet');
+    }
+    const loc = sl || dl;
+    if (loc && loc.all_ready === false) {
+        badges.badge('loc-not-ready', `localization not ready${notReadyText(dl)}`, 'warn',
+            'a localization function is not ready (for example waiting for stillness to calibrate); see the Diagnostics tab');
     }
     const att = r.attitude || {};
     const ast = attitudeStatus(att);
@@ -886,12 +971,27 @@ function renderStatus(now) {
     setText(ro.x, fmt(f.x_m, 3));
     setText(ro.y, fmt(f.y_m, 3));
     setText(ro.h, fmt(f.heading_deg, 1));
-    setText(ro.rest, `${DOT}pose age ${fmtMs(age(r.age_ms))}${DOT}${cycle !== '' ? 'cycle ' + cycle + DOT : ''}session ${String((feed.session || {}).id || '').slice(0, 8)}`);
+    const ageText = stale !== 'unmeasured' ? `pose age ${fmtMs(age(r.age_ms))}`
+        : (measuredOnSourceClock(r) ? 'pose age unknown (clock not mapped)' : 'pose not measured yet');
+    setText(ro.rest, `${DOT}${ageText}${DOT}${cycle !== '' ? 'cycle ' + cycle + DOT : ''}session ${String((feed.session || {}).id || '').slice(0, 8)}`);
 }
 
+// ': id (note), ...' of the localization functions the diag says are not ready.
+function notReadyText(dl) {
+    const fns = dl && Array.isArray(dl.functions) ? dl.functions.filter((f) => !f.ready) : [];
+    if (!fns.length) {
+        return '';
+    }
+    const parts = fns.slice(0, 3).map((f) => (f.note ? `${f.id} (${f.note})` : String(f.id)));
+    return ': ' + parts.join(', ') + (fns.length > 3 ? ', ...' : '');
+}
+
+// The replayed row says when it was recorded and how old its pose was; the
+// playhead can sit well after it (a hole in the rows), and repeated rows can
+// carry a growing age (no new measurement): both show as stale.
 function renderReplayReadout() {
     const r = state.replayRobot;
-    const t = replay ? replay.clock.t : NaN;
+    statusEl.dataset.replayPose = r ? (!r.valid ? 'invalid' : (r.stale || 'fresh')) : 'none';
     if (!r) {
         setText(ro.label, 'REPLAY: no robot state at this time');
         setText(ro.x, '');
@@ -905,7 +1005,19 @@ function renderReplayReadout() {
     setText(ro.x, fmt(f.x_m, 3));
     setText(ro.y, fmt(f.y_m, 3));
     setText(ro.h, fmt(f.heading_deg, 1));
-    setText(ro.rest, `${DOT}recorded at Pi ${fmt(t / 1000, 3)} s${DOT}segment ${r.segment + 1}${r.valid ? '' : DOT + 'NOT VALID'}`);
+    const measured = measuredOnSourceClock(r);
+    const ageText = r.age_known === false ? 'pose age not recorded'
+        : (Number.isFinite(r.age_ms) ? `pose age ${fmtMs(r.age_ms)} at the row`
+            : (measured ? 'pose age unknown (clock not mapped)' : 'pose not measured'));
+    setText(ro.rest, `${DOT}row at Pi ${fmt(r.t / 1000, 3)} s, ${ageText}, ${fmtMs(r.since_ms)} before the playhead` +
+        `${DOT}segment ${r.segment + 1}${r.valid ? '' : DOT + 'NOT VALID'}`);
+    if (r.valid && r.stale === 'unmeasured') {
+        badges.badge('replay-pose', measured ? 'pose age unknown in recording (clock not mapped)'
+            : 'pose not measured in recording (placement only)', 'warn');
+    } else if (r.valid && r.stale) {
+        badges.badge('replay-pose', `pose stale in recording: ${Number.isFinite(r.age_ms) ? fmtMs(r.age_ms) + ' old at its row, ' : ''}` +
+            `row ${fmtMs(r.since_ms)} before the playhead`, 'bad');
+    }
 }
 
 // --- the frame loop ---
@@ -941,11 +1053,7 @@ function frame(ts) {
     feed.tick(t0);
     applyFeed(t0);
     if (mode === 'replay' && replay) {
-        if (scene.available) {
-            replayFrame(t0);
-        } else {
-            replay.clock.tick(t0);
-        }
+        replayFrame(t0);
     } else {
         liveRobot(t0);
     }
@@ -1008,11 +1116,17 @@ state.metrics = () => {
     out.sessionEpoch = feed.sessionEpoch;
     out.mode = mode;
     out.graphSeries = liveStore.series.size;
+    out.robotLabel = scene.robotLabelText || '';
+    out.clockPings = { sent: feed.clock.sent, received: feed.clock.received, next_id: feed.clock.nextId };
     return out;
 };
 state.replayState = () => (replay ? {
     t: replay.clock.t, start: replay.model.startT, end: replay.model.endT, playing: replay.clock.playing,
-    robot: state.replayRobot ? { x: state.replayRobot.field.x_m, y: state.replayRobot.field.y_m, segment: state.replayRobot.segment } : null,
+    robot: state.replayRobot ? {
+        x: state.replayRobot.field.x_m, y: state.replayRobot.field.y_m, segment: state.replayRobot.segment,
+        row_t: state.replayRobot.t, age_ms: state.replayRobot.age_ms, since_ms: state.replayRobot.since_ms,
+        stale: state.replayRobot.stale, valid: state.replayRobot.valid,
+    } : null,
     events: replay.model.events.length, warnings: replay.model.warnings, columns: replay.model.columns.length,
 } : null);
 state.seek = (t) => replay && replay.clock.seek(t);

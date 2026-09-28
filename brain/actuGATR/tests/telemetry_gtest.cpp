@@ -1,7 +1,7 @@
 // telemetry_gtest.cpp
 // TELEMETRY motion and wheels groups from drive snapshots: units, rounding,
-// wrapping, saturation, missing destination, and the enum values the wire
-// carries.
+// wrapping, saturation, the target bit (missing destination, destination at
+// the origin), and the enum values the wire carries.
 
 #include "actugatr/telemetry.h"
 
@@ -64,7 +64,8 @@ TEST(Telemetry, UnitsRoundingAndWrapping) {
     s.drive.motor_rpm[1]  = -700.0;
 
     const translagatr::BrainTelemetry t = telemetryOf(s);
-    EXPECT_EQ(t.flags, translagatr::kTelemetryMotion | translagatr::kTelemetryWheels);
+    EXPECT_EQ(t.flags, translagatr::kTelemetryMotion | translagatr::kTelemetryWheels |
+                           translagatr::kTelemetryTarget);
     EXPECT_EQ(t.command_id, 42u);
     EXPECT_EQ(t.motion_state, 2);
     EXPECT_EQ(t.plan_mode, 1);
@@ -100,6 +101,7 @@ TEST(Telemetry, SaturatesAndZeroesNonFinite) {
     s.drive.motor_rpm[3]     = std::numeric_limits<double>::quiet_NaN();
 
     const translagatr::BrainTelemetry t = telemetryOf(s);
+    EXPECT_NE(t.flags & translagatr::kTelemetryTarget, 0);
     EXPECT_EQ(t.target_x_mm, 5000000);
     EXPECT_EQ(t.target_y_mm, -5000000);
     EXPECT_EQ(t.target_heading_cdeg, 0);
@@ -114,7 +116,7 @@ TEST(Telemetry, SaturatesAndZeroesNonFinite) {
 }
 
 // Waiting for a reference, idle, or ended before resolving: no destination.
-TEST(Telemetry, NoDestinationLeavesTargetZero) {
+TEST(Telemetry, NoDestinationClearsTheTargetBitAndLeavesTargetZero) {
     DriveSnapshot s;
     s.motion.command_id      = 9;
     s.motion.state           = MotionState::kWaiting;
@@ -122,10 +124,26 @@ TEST(Telemetry, NoDestinationLeavesTargetZero) {
     s.motion.destination     = {1.0, 2.0, 1.0};
     s.motion.has_destination = false;
     const translagatr::BrainTelemetry t = telemetryOf(s);
+    EXPECT_EQ(t.flags, translagatr::kTelemetryMotion);
     EXPECT_EQ(t.target_x_mm, 0);
     EXPECT_EQ(t.target_y_mm, 0);
     EXPECT_EQ(t.target_heading_cdeg, 0);
     EXPECT_EQ(t.motion_reason, static_cast<uint8_t>(MotionReason::kReferenceUnavailable));
+}
+
+// The case the bit exists for: an all-zero target that is real. It stays
+// set after the command ends (latest resolution).
+TEST(Telemetry, DestinationAtTheOriginSetsTheTargetBit) {
+    DriveSnapshot s;
+    s.motion.command_id      = 4;
+    s.motion.state           = MotionState::kCompleted;
+    s.motion.has_destination = true;
+    s.motion.destination     = {0.0, 0.0, 0.0};
+    const translagatr::BrainTelemetry t = telemetryOf(s);
+    EXPECT_EQ(t.flags, translagatr::kTelemetryMotion | translagatr::kTelemetryTarget);
+    EXPECT_EQ(t.target_x_mm, 0);
+    EXPECT_EQ(t.target_y_mm, 0);
+    EXPECT_EQ(t.target_heading_cdeg, 0);
 }
 
 // The wheels group carries what the drive sent to the motors.

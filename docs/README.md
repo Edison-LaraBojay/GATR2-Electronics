@@ -19,8 +19,18 @@
   field estimates, target resolution, and the actual Brain output.
 - [Resources](navigatr_resources.md) and [sensors](navigatr_sensors.md): registered
   implementations and their configuration contracts.
-- [Inspection](../pi/naviGATR/docs/inspection.md): browser field viewer, camera
-  previews, and inspection protocol.
+- [Inspection](../pi/naviGATR/docs/inspection.md): the spectaGATR browser
+  viewer, the `navigatr.inspect/2` feed (state, diag, telemetry,
+  instrumentation), latency terms, live graphs and replay.
+- [Capture and export](../pi/naviGATR/docs/capture.md): bounded Pi-side
+  recording with manual and automatic triggers, the ZIP of CSVs and its
+  metadata.
+- [Camera preview](../pi/naviGATR/docs/camera_preview.md): live camera
+  pictures on the Brain-profile USB setup without field correction.
+- [Pico link](../pi/naviGATR/docs/pico_link.md): Pico identity, status,
+  commands, the optional diagnostic frame and the link instrumentation.
+- [Viewer perf harness](../pi/naviGATR/tools/perf/README.md): the inspection
+  and browser latency baseline and how to rerun it.
 
 ## Brain
 
@@ -55,6 +65,9 @@
 - [Attitude firmware follow-up](../pi/naviGATR/docs/attitude_firmware_followup.md):
   the work needed to provide live roll and pitch.
 - [RS-485 bench test](../bench/rs485_link/README.md): independent transmit bring-up.
+
+[Component names](naming.md) lists every -GATR name, what it does and why
+it fits, and the renames with migration steps.
 
 [Contribution conventions](contributing/README.md) describe the repository layout
 and how to add board families and revisions. Host tests and synthetic demos verify

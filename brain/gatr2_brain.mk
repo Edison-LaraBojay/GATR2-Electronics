@@ -1,6 +1,6 @@
 # gatr2_brain.mk
 # GATR2 Brain libraries for a PROS project. Compiles investiGATR,
-# communiGATR, actuGATR and the common link codec in place from this
+# communiGATR, actuGATR and the translaGATR link codec in place from this
 # repository into $(BINDIR)/gatr2/. Include it twice from the project
 # Makefile, before common.mk (sources, objects, include paths) and after it
 # (compile rules):

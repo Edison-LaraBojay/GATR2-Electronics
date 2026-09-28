@@ -5,7 +5,9 @@
 // capture_fixture.py) and its closed-form expectations are fetched from the
 // URL in ?fixture= when given.
 
-import { PoseSmoother, SMOOTH_MAX_MS, SNAP_DIST_M } from '../../spectaGATR/smoothing.js';
+import { PoseSmoother, SMOOTH_MAX_MS, SNAP_DIST_M, poseFreshness, measuredOnSourceClock } from '../../spectaGATR/smoothing.js';
+import { CapturePanel } from '../../spectaGATR/capture_panel.js';
+import { replacedFor } from '../../spectaGATR/latency_panel.js';
 import { SeriesStore, Decimator, valueAt, lowerBound, FLAG_BREAK } from '../../spectaGATR/series.js';
 import { crc32, readZip, parseCsvRows, CsvTable, unitOf } from '../../spectaGATR/bundle.js';
 import { ClockSync, Stat } from '../../spectaGATR/latency.js';
@@ -112,6 +114,20 @@ await test('smoothing: off draws exact values', () => {
     s.push(pose(0, 0, 0), ident(), 0, false);
     s.push(pose(0.05, 0, 0), ident(), 33, false);
     near(s.sample(34, false).x_m, 0.05, 1e-12, 'exact');
+});
+
+await test('pose verdict: unknown age is never fresh; pauses and old poses are stale', () => {
+    check(poseFreshness(10, 0) === '', 'fresh');
+    check(poseFreshness(10, 260) === 'stale', 'no state for 260 ms');
+    check(poseFreshness(200, 60) === 'stale', 'age plus time since the state');
+    check(poseFreshness(null, 10) === 'unmeasured', 'age_ms null (configured placement) is not fresh');
+    check(poseFreshness(undefined, 10) === 'unmeasured', 'no age at all');
+    check(poseFreshness(NaN, 10) === 'unmeasured', 'NaN age');
+    check(poseFreshness(null, 300) === 'stale', 'a pause is stale whatever the age');
+    // which unknown-age case: the runtime writes measured_at {clock, ms}
+    check(measuredOnSourceClock({ measured_at: { clock: 'pico', ms: 1234 } }), 'measured, clock not mapped');
+    check(!measuredOnSourceClock({ measured_at: { clock: 'none', ms: null } }) && !measuredOnSourceClock({}) &&
+        !measuredOnSourceClock(null), 'never measured');
 });
 
 await test('smoothing: heading blends the short way across +-180', () => {
@@ -318,6 +334,22 @@ await test('scene: telemetry overlays only for a running command, fresh, never a
     check(!scene.dest.visible && !scene.followTarget.visible, 'no telemetry: hidden');
 });
 
+await test('scene: unmeasured and replay-stale poses have their own faded look', () => {
+    const r = { valid: true, initialized: true, field: { x_m: 1, y_m: 1, heading_deg: 0 },
+        attitude: { status: 'assumed_level' } };
+    scene.applyRobotState(r, 'unmeasured');
+    check(scene.robotLabelText === 'robot (pose not measured yet)' && scene.robotMaterial.opacity < 0.3,
+        `unmeasured: ${scene.robotLabelText}`);
+    scene.applyRobotState(Object.assign({}, r, { measured_at: { clock: 'pico', ms: 99 } }), 'unmeasured');
+    check(scene.robotLabelText === 'robot (pose age unknown)', `measured, clock not mapped: ${scene.robotLabelText}`);
+    scene.applyRobotState(r, '');
+    check(scene.robotLabelText === 'robot (level assumed)' && scene.robotMaterial.opacity > 0.5, 'fresh again');
+    scene.setMode('replay');
+    scene.applyRobotState(r, 'stale');
+    check(scene.robotLabelText === 'robot (pose stale in recording)', `replay: ${scene.robotLabelText}`);
+    scene.setMode('live');
+});
+
 // --- bundle ---
 
 function zipStore(files) {
@@ -431,6 +463,57 @@ await test('latency: offset from the minimum-RTT ping', () => {
     check(s.n === 10 && s.max === 100 && s.p50 === 95, `window stats ${JSON.stringify(s)}`);
 });
 
+await test('latency: ping ids never repeat across a reset; a pong uses its own send time', () => {
+    const c = new ClockSync();
+    const a = c.ping(0);
+    c.reset();
+    const b = c.ping(500);
+    check(a.id !== b.id, `ids ${a.id} and ${b.id}`);
+    // the first ping's pong arrives after the reset and the second ping
+    const s = c.pong({ id: a.id, client_ms: 0, host_ms: 1000, host_us: 1000000 }, 2000);
+    check(s && s.rtt === 2000, `rtt from the first ping's own send time: ${s && s.rtt}`);
+    near(s.offset, 0, 1e-9, 'offset from the matching send time');
+    const d = c.ping(3000);
+    check(c.pong({ id: d.id, client_ms: 2999, host_ms: 4000 }, 3100) === null, 'a pending time that disagrees with the echo is dropped');
+});
+
+await test('feed: one clock reset per connection; the first hello keeps the open ping', () => {
+    const f = new Feed({});
+    f.onOpen();   // no socket here: sendPing is a no-op, so ping by hand as onOpen would
+    clearInterval(f.pingTimer);
+    const t0 = performance.now() - 20;
+    const p = f.clock.ping(t0);
+    f.onMessage(JSON.stringify({ type: 'hello', contract: 'navigatr.inspect/2', session: { id: 'A', reset_count: 0 } }));
+    check(f.clock.pending.has(p.id) && f.clock.sent === 1, 'the hello of a new process did not reset the clock again');
+    f.onMessage(JSON.stringify({ type: 'pong', id: p.id, client_ms: t0, host_ms: 5000, host_us: 5000000 }));
+    check(f.clock.received === 1 && f.clock.best && f.clock.best.rtt >= 20, `pong used: ${JSON.stringify(f.clock.best)}`);
+    f.onOpen();
+    clearInterval(f.pingTimer);
+    check(f.clock.best === null && f.clock.nextId > p.id, 'a new connection resets once, ids keep counting');
+    f.onMessage(JSON.stringify({ type: 'hello', contract: 'navigatr.inspect/2', session: { id: 'B', reset_count: 0 } }));
+    check(f.sessionIdEpoch === 2 && f.clock.sent === 0, 'new process noted without a second reset');
+});
+
+await test('latency panel: this page\'s replaced counts come from its own client entry', () => {
+    const me = { channels: { state: { replaceable: true, replaced: 3 }, 'preview:cam0': { replaced: 2 },
+        'preview:cam1': { replaced: 1 }, reliable: { replaceable: false, replaced: 0 } } };
+    check(replacedFor(me, 'state') === 3, 'state');
+    check(replacedFor(me, 'frame') === 3, 'previews summed over cameras');
+    check(replacedFor(me, 'pong') === '-' && replacedFor(me, 'reliable') === '-', 'reliable types are never replaced');
+    check(replacedFor(undefined, 'state') === 'n/a', 'no per-client statistics');
+});
+
+await test('capture panel: the Pi\'s last outcome is said, failures loudly', () => {
+    const say = (last) => CapturePanel.prototype.lastText.call(null, last);
+    const f = say({ id: 'x-1', outcome: 'failed', error: 'bundle: out of memory' });
+    check(f.bad && /FAILED: bundle: out of memory/.test(f.text), f.text);
+    const w = say({ id: 'x-2', outcome: 'ready', error: 'not a directory: /x' });
+    check(w.bad && /file write failed: not a directory/.test(w.text) && /memory only/.test(w.text), w.text);
+    check(!say({ id: 'x-3', outcome: 'cancelled', error: '' }).bad, 'cancelled');
+    check(!say({ id: 'x-4', outcome: 'ready', error: '' }).bad, 'ready');
+    check(say(null) === null, 'no capture yet');
+});
+
 // --- dom ---
 
 await test('dom: keyed rows are reused, reordered and removed in place', () => {
@@ -504,6 +587,16 @@ await test('graphs: one sample per publication, breaks, invalid and unmeasured v
     check(Number.isNaN(x.v[c.slot(3)]) && valueAt(x, 395).valid === false, 'invalid pose is missing and marked');
 });
 
+await test('graphs: telemetry samples sit at the Pi arrival of the report', () => {
+    const st = new SeriesStore();
+    const col = new LiveCollector(st);
+    col.onTelemetry({ host_ms: 1000, received_host_ms: 950, age_ms: 50, motion: { cmd: { vx_m_s: 1, vy_m_s: 0, omega_deg_s: 0 } } });
+    col.onTelemetry({ host_ms: 1100, age_ms: 30, motion: null });   // no received_host_ms: build time minus age
+    const c = st.channels.get('telemetry');
+    check(c.oldest() === 950 && c.newest() === 1070, `times ${c.oldest()}, ${c.newest()}`);
+    check(valueAt(st.series.get('tel.cmd_vx'), 960).v === 1, 'value at arrival');
+});
+
 // --- replay against the fixture bundle ---
 
 const params = new URLSearchParams(location.search);
@@ -561,6 +654,30 @@ if (fixtureUrl) {
         c.tick(300);
         check(!c.playing, 'stops at the end');
     });
+    // the page's replay rule (app.js replayFrame): poseFreshness of the row's
+    // age plus the time from the row to the playhead
+    const verdictAt = (m, t) => {
+        const r = m.robotAt(t);
+        return r ? poseFreshness(r.age_known === false ? 0 : r.age_ms, t - r.t) : null;
+    };
+    for (const variant of ['hole', 'frozen']) {
+        const url = params.get(variant);
+        if (!url) {
+            continue;
+        }
+        await test(`replay: a ${variant} span replays as stale, not as the current pose`, async () => {
+            const m = await ReplayModel.fromZip(await (await fetch(url)).arrayBuffer(), variant);
+            const t = expected.stale_probe_ms;
+            const r = m.robotAt(t);
+            check(verdictAt(m, t) === 'stale', `verdict at the probe: ${verdictAt(m, t)} (row ${r.t}, age ${r.age_ms})`);
+            if (variant === 'hole') {
+                check(t - r.t > 2000, `the row is ${t - r.t} ms before the playhead`);
+            } else {
+                check(r.age_ms > 2000 && t - r.t < 50, `row age ${r.age_ms} ms, ${t - r.t} ms before the playhead`);
+            }
+            check(verdictAt(m, expected.fresh_probe_ms) === '', 'fresh outside the span');
+        });
+    }
 }
 
 window.__unit.done = true;

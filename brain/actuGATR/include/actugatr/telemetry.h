@@ -5,10 +5,11 @@
 // control.
 //
 // motion: command id, state, reason, plan mode, segment and count, the
-// field destination (zero when the command has none resolved), the chassis
-// command the drive applied (after desaturation), cross track, distance and
-// heading errors, drive fault. wheels: motor velocity targets per wheel
-// group, positive driving forward.
+// field destination with kTelemetryTarget (bit clear and target zero while
+// the command has none resolved), the chassis command the drive applied
+// (after desaturation), cross track, distance and heading errors, drive
+// fault. wheels: motor velocity targets per wheel group, positive driving
+// forward.
 
 #pragma once
 #include "actugatr/drive_requests.h"

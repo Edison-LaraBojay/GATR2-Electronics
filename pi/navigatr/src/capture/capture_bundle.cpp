@@ -225,7 +225,7 @@ std::string brainTelemetryHeader() {
     std::string h =
         "pi_host_us,pi_session,reset_count,source,brain_session,decoded,source_clock,source_ms,"
         "flags,attitude_present,roll_deg,pitch_deg,motion_present,command_id,motion_state,"
-        "motion_reason,plan_mode,path_segment,path_segment_count,target_field_x_m,"
+        "motion_reason,plan_mode,path_segment,path_segment_count,target_valid,target_field_x_m,"
         "target_field_y_m,target_field_heading_deg,cmd_body_vx_m_s,cmd_body_vy_m_s,"
         "cmd_omega_deg_s,cross_track_m,distance_error_m,heading_error_deg,drive_fault,"
         "wheels_present,wheel_count";
@@ -466,9 +466,6 @@ struct HeadingUnwrap {
     bool        odom_set = false, field_set = false;
     double      odom_wrapped = 0, odom_unwrapped = 0;
     double      field_wrapped = 0, field_unwrapped = 0;
-    bool        measured_set = false; // a row of this segment had a measurement time
-    DiagClock   measured_clock = DiagClock::kNone;
-    int64_t     measured_ms    = 0;
 };
 
 class Writer
@@ -711,22 +708,9 @@ private:
         } else {
             row_.s(s.attitude_assumed_level ? "assumed_level" : "unavailable").none().none();
         }
-        row_.b(s.stationary);
-        // localization publishes every cycle; this says whether the row
-        // carries a newer measurement than the previous row of its segment
-        // (empty for the first measured row: the capture cannot tell)
-        if (s.measured_clock == DiagClock::kNone) {
-            row_.b(false);
-        } else if (!unwrap_.measured_set) {
-            row_.none();
-        } else {
-            row_.b(s.measured_clock != unwrap_.measured_clock || s.measured_ms != unwrap_.measured_ms);
-        }
-        if (s.measured_clock != DiagClock::kNone) {
-            unwrap_.measured_set   = true;
-            unwrap_.measured_clock = s.measured_clock;
-            unwrap_.measured_ms    = s.measured_ms;
-        }
+        // localization publishes every cycle; the estimator's own flag says
+        // which rows carry a new measurement and which repeat the held pose
+        row_.b(s.stationary).b(s.advanced);
         commit(r.kind, r.host_us);
     }
 
@@ -909,16 +893,22 @@ private:
             }
             row_.b(motion);
             if (motion) {
+                // target_* holds a destination only with its own flag bit
+                const bool target = (v.flags & translagatr::kTelemetryTarget) != 0;
                 row_.u(v.command_id).u(v.motion_state).u(v.motion_reason).u(v.plan_mode);
-                row_.u(v.segment).u(v.segment_count);
-                row_.f(v.target_x_mm / 1000.0, 3).f(v.target_y_mm / 1000.0, 3);
-                row_.f(v.target_heading_cdeg / 100.0, 2);
+                row_.u(v.segment).u(v.segment_count).b(target);
+                if (target) {
+                    row_.f(v.target_x_mm / 1000.0, 3).f(v.target_y_mm / 1000.0, 3);
+                    row_.f(v.target_heading_cdeg / 100.0, 2);
+                } else {
+                    row_.none().none().none();
+                }
                 row_.f(v.cmd_vx_mm_s / 1000.0, 3).f(v.cmd_vy_mm_s / 1000.0, 3);
                 row_.f(v.cmd_omega_cdeg_s / 100.0, 2);
                 row_.f(v.cross_track_mm / 1000.0, 3).f(v.distance_error_mm / 1000.0, 3);
                 row_.f(v.heading_error_cdeg / 100.0, 2).u(v.drive_fault);
             } else {
-                for (int c = 0; c < 16; ++c) {
+                for (int c = 0; c < 17; ++c) {
                     row_.none();
                 }
             }
@@ -936,7 +926,7 @@ private:
                 }
             }
         } else {
-            for (int c = 0; c < 25 + translagatr::kTelemetryWheelsMax; ++c) {
+            for (int c = 0; c < 26 + translagatr::kTelemetryWheelsMax; ++c) {
                 row_.none();
             }
         }
@@ -1236,9 +1226,9 @@ std::string readme(const CaptureBundleInput& in) {
       << "  is pi_host_us/1000 minus measured_pi_host_ms (both Pi clock). odom_v* are\n"
       << "  in the odometry frame. confidence is a producer score, not a covariance.\n"
       << "  Localization publishes every loop cycle, so rows repeat the pose between\n"
-      << "  measurements: new_measurement is 1 when source_ms moved on from the\n"
-      << "  previous row of the segment, 0 when it did not (or there is none), empty\n"
-      << "  for the first measured row, which the capture cannot compare.\n  "
+      << "  measurements: new_measurement is 1 when the estimator took a new\n"
+      << "  measurement for this publication, 0 when the row repeats the held pose\n"
+      << "  (loop cycle without one, reset, continuity loss).\n  "
       << kRobotStateHeader << "\n\n"
       << "pico_sensor.csv: every decoded Pico sensor frame. enc*_counts are raw\n"
       << "  counts, empty when the frame did not carry that port. enc*_delta_counts is\n"
@@ -1268,6 +1258,8 @@ std::string readme(const CaptureBundleInput& in) {
       << kBrainRequestsHeader << "\n\n"
       << "brain_telemetry.csv: every Brain TELEMETRY report (display and recording\n"
       << "  only; localization never reads it). Groups whose *_present is 0 are empty.\n"
+      << "  target_valid is flags bit 3: target_field_* hold a resolved destination\n"
+      << "  only when it is 1 and are empty when it is 0.\n"
       << "  motion_state, motion_reason, plan_mode and drive_fault are the actuGATR and\n"
       << "  investiGATR enum values (docs/actugatr.md). cmd_body_* is the commanded\n"
       << "  chassis velocity in the body frame; wheel*_rpm are motor velocity targets.\n  "

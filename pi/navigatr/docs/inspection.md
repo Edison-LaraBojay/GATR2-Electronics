@@ -21,7 +21,8 @@ Add to a `<System>` document or a `<Configuration>` profile:
 <Inspection enabled="true" bind="127.0.0.1" port="8765"
             state_hz="30" diag_hz="4" preview_hz="5" preview_quality="70"
             preview_max_width="640" max_clients="4" client_buffer_kb="1024"
-            reliable_kb="256" send_buffer_kb="0" stall_close_ms="10000">
+            reliable_kb="256" send_buffer_kb="16" ack_window_kb="64"
+            stall_close_ms="10000">
     <RobotBody length_m="0.45" width_m="0.45" height_m="0.30"
                origin_x_m="0" origin_y_m="0"/>
 </Inspection>
@@ -35,8 +36,9 @@ Add to a `<System>` document or a `<Configuration>` profile:
 | `preview_quality`, `preview_max_width` | 70, 640 | 1..100, >= 32 | JPEG budget |
 | `max_clients` | 4 | 1..64 | WebSocket feed clients; an upgrade over it gets 503. Plain HTTP requests (page, modules, API) have their own bound of 32 concurrent connections |
 | `client_buffer_kb` | 1024 | >= 64 | all unsent bytes of one client; a replaceable message that does not fit is refused |
-| `reliable_kb` | 256 | >= 16 | reliable backlog of one client; overflowing it closes that client |
-| `send_buffer_kb` | 0 | 0..16384 | `SO_SNDBUF` per client; 0 keeps the OS default (Linux autotunes). A small value bounds how much already-written data can wait in the kernel, at the cost of preview throughput |
+| `reliable_kb` | 256 | >= 128 | reliable backlog of one client; overflowing it closes that client. One message larger than it (a big `hello` or `history`) still goes when nothing waits |
+| `send_buffer_kb` | 16 | 0..16384 | feed sockets only: `SO_SNDBUF`, and `TCP_NOTSENT_LOWAT` where the OS has it (Linux); 0 keeps the OS default. Bounds how much already-written data can wait in the Pi kernel. Throughput to one viewer is then at most about this much per round trip (16 KiB at 5 ms is about 3 MB/s). Plain HTTP (capture downloads) keeps the OS default |
+| `ack_window_kb` | 64 | 0, 16..16384 | flow control by WebSocket ping/pong, see [Delivery](#delivery); at most this much written data unconfirmed per client. 0 turns it off: no pings, only the kernel bound |
 | `stall_close_ms` | 10000 | >= 100 | a client with queued data and no progress for this long is closed |
 | `snapshot_hz` | 20 | (0, 200] | the inspect/1 push rate. Still parsed so older profiles load; the inspect/2 feed does not use it |
 
@@ -94,7 +96,7 @@ microseconds, taken when the message was built.
 | `capture` | reliable | right after `history` on connect, and whenever the capture status changes | [`capture`](#capture) |
 | `state` | replaceable | when the localization publication advanced, at most the client's `state_hz`; plus a 1 s keepalive | [`state`](#state) |
 | `telemetry` | replaceable | each new Brain TELEMETRY report, at most 20 Hz, to clients subscribed (default on) | [`telemetry`](#telemetry) |
-| `diag` | replaceable | at most `diag_hz`, to clients subscribed (default on); skipped for a client when nothing but the transport counters changed since the last one it got, but sent at least every 2 s | [`diag`](#diag) |
+| `diag` | replaceable | at most `diag_hz`, to clients subscribed (default on), while its content changes; when only varying values changed (clocks, ages, counters, the robot, see [`diag`](#diag)) once a second | [`diag`](#diag) |
 | `instrumentation` | replaceable | at most 4 Hz, only to clients subscribed (default off) | [`instrumentation`](#instrumentation) |
 | `event` | reliable | each new runtime event, in order | [`event`](#event) |
 | `pong` | reliable | once per `ping`, answered on the server thread at once | [`pong`](#pong) |
@@ -130,11 +132,12 @@ Each client has:
   modified, replaced or dropped once started, so a partially written frame
   always completes intact;
 - a reliable FIFO for `hello`, `history`, `capture`, `event` and `pong`,
-  bounded by `reliable_kb`. Overflowing it drops the client's unsent
-  messages, queues a WebSocket close (code 1013, "reliable backlog
-  overflow") and closes the connection within 1 s. The viewer reconnects and
-  recovers the full state from `hello`, `history` and the next `state` and
-  `diag`;
+  bounded by `reliable_kb`. The bound applies to the backlog: a message
+  larger than it is still accepted when nothing waits in the FIFO.
+  Overflowing it drops the client's unsent messages, queues a WebSocket
+  close (code 1013, "reliable backlog overflow") and closes the connection
+  within 1 s. The viewer reconnects and recovers the full state from
+  `hello`, `history` and the next `state` and `diag`;
 - one slot per replaceable channel (`state`, `telemetry`, `diag`,
   `instrumentation`, and `preview:<camera>` per camera). A newer message
   replaces the unsent one, so a slow client receives the newest state, not a
@@ -142,12 +145,57 @@ Each client has:
   `client_buffer_kb` is refused and the older unsent one of its channel goes
   too.
 
-When nothing is in flight the next frame is the reliable head, then `state`,
-`telemetry`, `diag`, `instrumentation`, previews (round robin across
-cameras). Enqueueing never waits for a socket: it tries at most a bounded
+When nothing is in flight the next frame is a pending ping (below), then
+the reliable head, then `state`, `telemetry`, `diag`, `instrumentation`,
+previews (round robin across cameras), each only when flow control lets it
+go. Enqueueing never waits for a socket: it tries at most a bounded
 non-blocking write, and the server thread writes the rest. A client with
-queued data and no progress for `stall_close_ms` is closed. Previews are
-encoded once per (frame identity, width, quality) and shared.
+queued data and no progress (bytes written or a pong received) for
+`stall_close_ms` is closed. Previews are encoded once per (frame identity,
+width, quality) and shared.
+
+**Flow control.** Latest-wins only helps while a message is still in the
+server's hands: once written, a frame can wait in the Pi kernel, the
+network, an SSH tunnel (the default access path) or the browser, and a
+state written too early is a stale state delivered late. The server
+therefore sends a WebSocket ping after each frame, carrying the number of
+bytes written before it (8 bytes, big-endian). Browsers answer pings in
+their network stack without page code; the pong proves the client read
+everything before that position. The server sends one probe ping after
+the handshake; a client that answers it is under flow control from then
+on (`diag.inspection.clients[].flow_control`):
+
+- nothing new starts while `ack_window_kb` of written data is unconfirmed
+  (a close frame still goes);
+- a replaceable message starts only while at most 16 KiB is unconfirmed,
+  and at most two messages of one replaceable channel are unconfirmed, so
+  the slot keeps replacing old states instead of the network queueing them;
+- a large replaceable message (4 KiB or more: `diag`, previews, large
+  `instrumentation`) starts only while at most 8 KiB is unconfirmed, one at
+  a time, and not before 3 times the previous one's delivery time (write
+  start to its pong) has passed since that pong, at most 4 s. Large
+  messages then take at most about a quarter of a slow link, and a `state`
+  waits behind at most one of them. On a fast link the gap is a few
+  milliseconds and changes nothing. `pace_gap_ms` shows the current gap.
+
+Only pongs echoing a position the server pinged count; unsolicited pongs
+are ignored. A client that never answers the probe (a tool without ping
+support) keeps the kernel bound only (`send_buffer_kb`), with large
+messages paced by when the kernel took them. A pong confirms that the
+browser's network stack read the bytes, not that the page handled them;
+browsers bound how far their network stack reads ahead of the page, so a
+page far behind also delays pongs (expected browser behavior, not measured
+here).
+
+What remains on a link slower than the feed: a `state` can wait behind one
+large message already in flight (a 20 KB `diag` takes 330 ms at 60 KB/s),
+and on a link slower than the states alone every delivered state is up to
+16 KiB of transmit time old. Host measurement (Windows loopback, synthetic
+rig, one reader draining 60 KB/s, 8 s from the first message): state age
+at receipt p50 1 to 16 ms, p95 about 185 ms, max about 270 ms; with flow
+control off (`ack_window_kb="0"`) p50 330 to 400 ms, p95 490 to 700 ms. A
+reader pausing 3 s then got 2 stale states before a fresh one, against 84
+with flow control off. Host numbers, not Pi or WiFi measurements.
 
 Order a client sees:
 
@@ -158,9 +206,15 @@ Order a client sees:
   client's unsent replaceable messages, then queues `hello` and `history`
   of the new session before any newer `state`. A frame already in flight
   (from the old session) still completes first. A `state` or `diag` built
-  across the reset can carry the new `session` and arrive just before the
-  new `hello`; a client drops any message whose `session` differs from its
-  newest `hello`.
+  right after the reset can carry the new `session` and arrive just before
+  the new `hello`; clients adopt the session from any message that carries
+  one (the viewer does), and the `hello` and `history` that follow carry
+  the same session. A message never labels data of an older session with
+  a newer `session`: each document reads the reset count before its data
+  and checks it after, rebuilding when a reset landed between. The reverse
+  can happen once per reset: the state labeled with the old count may
+  already be the power-on state of the new one, which is invalid
+  (`robot.valid` false) and carries the next `odometry_epoch`.
 - **Drops and coalescing** are visible: `diag.inspection.clients[].channels`
   counts replaced, refused and dropped messages per channel, and `state`
   carries `seq` and `publication`, so gaps show.
@@ -188,6 +242,7 @@ Latency terms (never subtract a Pi timestamp from a browser timestamp):
 | Publish to receive | estimated from ping/pong: over the last 20 pings take the minimum-RTT sample; offset = `pong.host_ms - (t_send + t_recv)/2`; report +-RTT/2 | estimate |
 | Receive to render | `performance.now()` at message arrival to the frame that drew it | browser only |
 | Queue wait on the Pi | `diag.inspection.clients[].channels.<name>.last_latency_ms`: enqueue to last byte written | Pi, steady clock |
+| Delivery, round trip | `channels.<name>.last_acked_ms`: enqueue to the pong covering the message (includes the pong's way back); `ack_rtt_ms`: newest ping to its pong, data queued ahead included; `ack_rtt_min_ms` the smallest seen | Pi, steady clock; flow control clients only |
 
 `session.id` is a random identity of the process instance; `session.reset_count`
 counts in-process `reset()` calls. A change in either (or in
@@ -199,7 +254,9 @@ that identity.
 Robot state, localization status, publication number, and bounded trail come
 from one `RobotStateFeed::snapshot()` call per document, so they describe the
 same localization publication even if estimation or a reset runs
-concurrently. Field-worker publications have their own invocation and
+concurrently. The document's `session.reset_count` is read before that
+snapshot and checked after it (see Session reset above), so it never labels
+an older session's data. Field-worker publications have their own invocation and
 timestamps; they need not be contemporaneous with the latest robot pose.
 
 ## `hello`
@@ -276,9 +333,16 @@ allows, and at least once a second (keepalive) even when nothing advanced.
 | Status | Meaning |
 |---|---|
 | `measured` | `attitude.valid` and its host-clock age is at most 250 ms (`features.attitude_fresh_ms`) |
-| `stale` | `attitude.valid` but older, or its age is unknown (no host time) |
-| `assumed_level` | no measurement; drawn level and labeled as an assumption |
-| `unavailable` | no measurement and no assumption |
+| `stale` | `attitude.valid` but older or of unknown age (no host time); or not valid with a measurement time kept (`measured_at_host_ms`): a measurement exists but aged out of the estimator's `<Attitude max_age_ms>` (drawn level) |
+| `unavailable` | not valid, no measurement time, `source` names a configured attitude source: it has measured nothing yet, or its sample cannot be timed (drawn level) |
+| `assumed_level` | not valid, `assumed_level`, empty `source`: no attitude source is configured; drawn level and labeled as an assumption |
+| `unavailable` | otherwise: no measurement and no assumption (no pose yet) |
+
+Checked in that order. Pico IMU Brain profiles and pipelines without an
+estimator `<Attitude>` read `assumed_level`; Brain VEX profiles (TELEMETRY
+attitude) read `unavailable` until the first report, then `measured`, then
+`stale` 250 ms after the last one. `robot.attitude.assumed_level` stays the
+raw flag: true whenever the tilt drawn is level by assumption.
 
 The robot stays on the floor plane: attitude is tilt only, never height.
 
@@ -310,16 +374,19 @@ inspection      {contract, state_hz, diag_hz,
                   closed|server_stop), host_ms}          newest last, at most 8
                 clients[] {id, connected_ms, queued_bytes, in_flight_bytes,
                   reliable_backlog, reliable_bytes, slots_pending, diag_skipped,
+                  flow_control, unacked_bytes, ack_rtt_ms|null, ack_rtt_min_ms|null,
+                  pace_gap_ms,
                   subscription {state_hz, diag, instrumentation, raw, decoded,
                     telemetry, preview_hz},
                   channels {<name>: {replaceable, queued, sent, replaced, refused,
-                    dropped, bytes, last_latency_ms|null}}}}
+                    dropped, bytes, last_latency_ms|null, last_acked_ms|null}}}}
 hub             {posted {<stream>: n}, dropped {<stream>: n}, queued, capacity, drained}
 ```
 
 Channel names: `state`, `telemetry`, `diag`, `instrumentation`,
 `preview:<camera>`, and the reliable `hello`, `history`, `capture`, `event`,
-`pong`, `ws_pong` (WebSocket protocol pongs), `close`. `queued` counts
+`pong`, `ws_pong` (WebSocket protocol pongs answering a client's ping),
+`ws_ping` (the server's flow-control pings), `close`. `queued` counts
 messages accepted into the queue, `sent` frames fully written, `replaced`
 unsent messages a newer one replaced, `refused` messages over the client
 budget, `dropped` unsent messages cleared (unsubscribe, session reset,
@@ -327,9 +394,23 @@ overflow). `last_latency_ms` is the enqueue-to-written time of the newest
 frame of that channel. `hub` is the DiagnosticsHub: records posted and
 dropped (ring full) per stream since start.
 
-The skip test hashes the document without `seq`, `host_ms`,
-`workers.inspection` and `inspection`. Anything else that changes (an age, a
-counter, a pose) makes the next diag go.
+The skip compares a hash of the content that is not varying. Varying,
+left out: `seq`, `host_ms`, every host time, age and source stamp, `cycle`,
+the `robot` block (`state` carries it), `localization.updates`,
+`history_size` and `publication`, each function's `dropped_intervals` and
+stillness progress counters (`progress_ms`, `windows`, `restarts`,
+`movements`, `attempts`, `steps`), `field_snapshot.invocation`, object and
+source sequence numbers, detection frame sequence, field invocation,
+processing time and the robot pose and tilt at exposure,
+`brain_link.state.estimate_id`, the wheel readings' counts, travel and age,
+`pico.uptime_ms`, worker timing, cycle, dropped and pending counts, run and
+traffic counts in `diagnostics`, hub posted, queued and drained, and the
+`inspection` blocks. Everything else is content: readiness, notes and
+reasons, calibration states and biases, epochs and anchors, events, error
+and fault counts, overruns, detections, profiles. A content change goes at
+the next `diag_hz` tick; varying values alone refresh once a second, so a
+panel's ages and counters are at most about a second old (a client can
+advance ages by its own elapsed time since the diag arrived).
 
 ## `event`
 
@@ -354,18 +435,22 @@ received_host_ms, age_ms      Pi arrival of the report and its age at host_ms
 session                       Brain link session of the report
 stamp_ms                      Brain clock when the values were taken (not comparable
                               with host_ms)
-flags
+flags                         the raw flag byte, unknown bits included
 attitude  null or {roll_deg, pitch_deg}              robot frame, Brain VEX IMU
 motion    null or {command_id, state, state_name, reason, reason_name, mode, mode_name,
-            segment, segment_count, target {x_m, y_m, heading_deg} (field frame),
+            segment, segment_count, target null or {x_m, y_m, heading_deg} (field frame),
             cmd {vx_m_s, vy_m_s, omega_deg_s} (body frame), cross_track_m,
             distance_error_m, heading_error_deg, drive_fault, drive_fault_name}
 wheels    null or {rpm[]}                            motor velocity targets
 ```
 
-A group is null when its flag bit is clear. Names are snake_case forms of
-actuGATR `MotionState`, `MotionReason`, `DriveFault` and investiGATR
-`PlanMode`; an unknown value is sent as its number with name `unknown`.
+A group is null when its flag bit is clear (bit 0 attitude, 1 motion, 2
+wheels). `motion.target` is null unless bit 3 (`kTelemetryTarget`) is also
+set: without it the Brain has no resolved destination (idle, waiting for a
+reference, or ended before resolving; see actuGATR). With it, (0, 0, 0) is a
+real destination at the field origin. Names are snake_case forms of actuGATR
+`MotionState`, `MotionReason`, `DriveFault` and investiGATR `PlanMode`; an
+unknown value is sent as its number with name `unknown`.
 Nothing on the Pi acts on telemetry.
 
 ## `instrumentation`
@@ -504,7 +589,8 @@ pico            null or {resource_id, frames_fresh, identity, boot_id, acq_epoch
                 imu_epoch, reboots, restarts, imu_restarts, last_frame_age_ms|null,
                 status_known, last_status_age_ms|null, firmware|null, uptime_ms|null,
                 imu null or {enabled, state, reason, attempts},
-                last_command null or {request_id, op, status, detail}}
+                last_command null or {request_id, op (none|configure|reinit_imu|
+                  restart_acquisition|diagnostics|unknown), status, detail}}
 events[]        oldest first, the newest 32: {sequence, host_ms|null, text}
 sources[]       {kind (resource|sensor), id, state (no_data_yet|valid|unavailable|fault),
                 diagnostic, payload, has_sample, measured_at {clock, ms},
@@ -524,7 +610,7 @@ workers         estimation {running, cycles, rate_hz, last_cycle_ms, mean_cycle_
                   events_queued, captures_queued, pongs_queued, telemetry_queued,
                   instrumentation_queued, messages_replaced, messages_refused,
                   closed_stalled, closed_reliable_overflow, closed_protocol,
-                  closed_peer}
+                  closed_peer, flow_control_clients}
                   inspect/2: snapshots_sent = states_queued, snapshots_skipped =
                   states replaced unsent or refused, snapshot_rate_hz = states
                   queued per second, frames_* = previews
@@ -542,7 +628,8 @@ Meaning of a few fields:
   `measured_at_host_ms` is null until the estimator has a device-to-host
   mapping, and then `age_ms` says how old the pose is.
 - `robot.attitude.valid` false with `assumed_level` true is the level
-  fallback: the viewer draws it level and labels it assumed. Attitude has its
+  fallback: the viewer draws it level and labels it by `status` (stale,
+  unavailable or assumed_level, see [state](#state)). Attitude has its
   own measurement timestamp and age. Its history is separate from pose history,
   so a new wheel pose cannot make retained tilt fresh.
 - `field_objects[].source` `field_map` is the nominal placement, never an
@@ -617,6 +704,7 @@ Meaning of a few fields:
   before the driver enable, nothing sent), `late_release` (driver enable
   released after the frame deadline plus post guard; can accompany a sent
   reply), `tx_errors` (any other write failure).
+
 ## `frame`
 
 Header preceding one JPEG in a binary WebSocket message:

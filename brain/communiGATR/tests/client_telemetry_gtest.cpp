@@ -1,9 +1,9 @@
 // client_telemetry_gtest.cpp
 // TELEMETRY: the fake Pi's rules, and the client on both transports:
-// latest wins, one send per period on a grid, on a fast link never the turn
-// of a due state poll, on a slow link late but never starved, a lost report
-// never resent, and an older or refusing Pi stops it for the session without
-// dropping the session.
+// the target bit carried, latest wins, one send per period on a grid, on a
+// fast link never the turn of a due state poll, on a slow link late but never
+// starved, a lost report never resent, and an older or refusing Pi stops it
+// for the session without dropping the session.
 
 #include "communigatr/client.h"
 
@@ -23,7 +23,7 @@ constexpr Seconds kLimit = 3.0;
 translagatr::BrainTelemetry sample(int i) {
     translagatr::BrainTelemetry t;
     t.flags = translagatr::kTelemetryAttitude | translagatr::kTelemetryMotion |
-              translagatr::kTelemetryWheels;
+              translagatr::kTelemetryWheels | translagatr::kTelemetryTarget;
     t.stamp_ms            = 1000u + static_cast<uint32_t>(i);
     t.roll_cdeg           = static_cast<int16_t>(-150 + i);
     t.pitch_cdeg          = static_cast<int16_t>(220 - i);
@@ -209,6 +209,31 @@ TEST_P(Telemetry, ArrivesIntactAndLatestWins) {
     EXPECT_EQ(client.stats().unexpected, 0u);
     EXPECT_EQ(client.stats().timeouts, 0u);
     EXPECT_FALSE(client.telemetryUnsupported());
+}
+
+// kTelemetryTarget reaches the Pi as sent: set with a target at the field
+// origin, clear with no destination.
+TEST_P(Telemetry, TheTargetBitArrivesAsSent) {
+    Client& client = rig.client();
+    open();
+
+    translagatr::BrainTelemetry t; // target_* all 0
+    t.flags        = translagatr::kTelemetryMotion | translagatr::kTelemetryTarget;
+    t.stamp_ms     = 500;
+    t.command_id   = 11;
+    t.motion_state = 4; // completed
+    EXPECT_TRUE(client.reportTelemetry(t));
+    ASSERT_TRUE(rig.runUntil([&] { return rig.pi.telemetryKept() == 1; }, kLimit));
+    expectSame(rig.pi.telemetry(), t);
+
+    t.flags        = translagatr::kTelemetryMotion;
+    t.stamp_ms     = 600;
+    t.command_id   = 12;
+    t.motion_state = 1; // waiting
+    EXPECT_TRUE(client.reportTelemetry(t));
+    ASSERT_TRUE(rig.runUntil([&] { return rig.pi.telemetryKept() == 2; }, kLimit));
+    expectSame(rig.pi.telemetry(), t);
+    EXPECT_EQ(client.stats().telemetry_dropped, 0u);
 }
 
 // Reports every step go out once per period; one report per period, as the
@@ -647,7 +672,9 @@ TEST(TelemetryClient, BodiesTheCodecCannotCarryAreRefused) {
     t       = sample(1);
     t.flags = static_cast<uint8_t>(t.flags | 0x80u);
     EXPECT_FALSE(client.reportTelemetry(t));
-    EXPECT_EQ(client.stats().telemetry_dropped, 2u);
+    t.flags = static_cast<uint8_t>(sample(1).flags | (1u << 4)); // first unassigned bit
+    EXPECT_FALSE(client.reportTelemetry(t));
+    EXPECT_EQ(client.stats().telemetry_dropped, 3u);
 
     ASSERT_TRUE(rig.runUntil([&] { return rig.pi.telemetryKept() == 1; }, kLimit));
     EXPECT_EQ(rig.pi.telemetry().flags, translagatr::kTelemetryAttitude);

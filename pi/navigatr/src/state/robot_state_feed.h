@@ -92,9 +92,11 @@ public:
     // before publishing starts; null (the default) posts nothing.
     void setDiagnostics(std::shared_ptr<DiagnosticsHub> hub);
 
-    // Writer side.
+    // Writer side. advanced: the estimator took a new measurement this
+    // cycle; only then does the state enter history, and the capture row
+    // says so (other publications repeat the held pose).
     void publish(const RobotState& state, const LocalizationStatus& status,
-                 bool append_history, uint64_t publication);
+                 bool advanced, uint64_t publication);
     void resetHistory();
 
     // Reader side.

@@ -135,12 +135,12 @@ translagatr::BrainRequest requestOf(const std::vector<uint8_t>& frame) {
 
 // The V5 USB console: every Brain frame becomes an NG1 line (communiGATR
 // codec) that the Pi's pros_usb_link reads, and every Pi line is decoded
-// back to frame bytes for the client, kLineUs each way. Unplugged, lines in
+// back to frame bytes for the client, line_us each way (kLineUs by default). Unplugged, lines in
 // flight and new ones are lost; the Brain port still accepts writes.
 class UsbWire : public cg::BytePort
 {
 public:
-    explicit UsbWire(const int64_t& now_us) : now_us_(now_us) {}
+    UsbWire(const int64_t& now_us, int64_t line_us) : now_us_(now_us), line_us_(line_us) {}
 
     int read(uint8_t* buf, int max) override {
         while (!to_brain_.empty() && to_brain_.front().first <= now_us_) {
@@ -166,7 +166,7 @@ public:
         const std::size_t n = cg::encodeUsbLine(data, static_cast<std::size_t>(len), line, sizeof(line));
         EXPECT_GT(n, 0u);
         for (std::size_t i = 0; i < n; ++i) {
-            to_pi_.emplace_back(now_us_ + kLineUs, static_cast<uint8_t>(line[i]));
+            to_pi_.emplace_back(now_us_ + line_us_, static_cast<uint8_t>(line[i]));
         }
         return true;
     }
@@ -190,7 +190,7 @@ public:
             return;
         }
         for (uint8_t c : chars) {
-            to_brain_.emplace_back(now_us_ + kLineUs, c);
+            to_brain_.emplace_back(now_us_ + line_us_, c);
         }
     }
 
@@ -219,6 +219,7 @@ private:
     using Timed = std::deque<std::pair<int64_t, uint8_t>>;
 
     const int64_t&      now_us_;
+    int64_t             line_us_ = kLineUs;
     bool                plugged_ = true;
     Timed               to_pi_;
     Timed               to_brain_;
@@ -259,7 +260,8 @@ enum class Restart { kProcess, kReset };
 // device replaced by memory links.
 struct Rig {
     int64_t              now_us = 0;
-    UsbWire              wire{now_us};
+    int64_t              line_us = kLineUs;
+    UsbWire              wire{now_us, line_us};
     nv::FunctionRegistry functions;
     std::string          xml;
     std::string          error;
@@ -280,7 +282,8 @@ struct Rig {
     std::unique_ptr<Brain> brain; // null while powered off
     cg::RobotProfile       profile = benchProfile();
 
-    explicit Rig(const ig::Pose& start = kStart) {
+    explicit Rig(const ig::Pose& start = kStart, int64_t line_delay_us = kLineUs)
+        : line_us(line_delay_us) {
         nv::registerAll(functions);
         EXPECT_TRUE(functions.add<nv::ResourceMakeFunction>(
             nv::FunctionKey{"test_usb"},
@@ -786,4 +789,50 @@ TEST(BrainLinkEndToEnd, UsedSensorDropInvalidatesThePoseEvenWhenStill) {
             rig.runUntil([&] { return b.readiness(rig.now()) == cg::Readiness::kReady; }, 1.0));
         expectPiNearTruth(rig, 1e-3, 1e-3);
     }
+}
+
+// TELEMETRY on a line slow enough that the state poll is due in every slot:
+// reports go half a period late, and none starves.
+TEST(BrainLinkEndToEnd, TelemetryKeepsFlowingOnASlowerLine) {
+    Rig rig(kStart, 3000);
+    ASSERT_TRUE(rig.ok()) << rig.error;
+    Brain&            b     = rig.ready();
+    const std::size_t from  = rig.wire.ops.size();
+    const uint32_t    lost  = b.client.stats().timeouts; // the reopened line drops one at start
+    const int64_t     begin = rig.now_us;
+    const int64_t     end   = begin + 10000000;
+    int64_t           next  = begin;
+    int64_t           last  = begin;
+    int64_t           worst = 0;
+    std::size_t       seen  = from;
+    int               made  = 0;
+    while (rig.now_us < end) {
+        if (rig.now_us >= next) {
+            translagatr::BrainTelemetry t;
+            t.flags     = translagatr::kTelemetryAttitude;
+            t.stamp_ms  = static_cast<uint32_t>(rig.now_us / 1000);
+            t.roll_cdeg = static_cast<int16_t>(made++ % 100);
+            b.client.reportTelemetry(t);
+            next += 100000;
+        }
+        rig.tick();
+        for (; seen < rig.wire.ops.size(); ++seen) {
+            if (rig.wire.ops[seen] == translagatr::kOpTelemetry) {
+                worst = std::max(worst, rig.now_us - last);
+                last  = rig.now_us;
+            }
+        }
+    }
+    worst = std::max(worst, end - last);
+    int between = 0;
+    int most    = 0;
+    for (std::size_t k = from; k < rig.wire.ops.size(); ++k) {
+        between = rig.wire.ops[k] == translagatr::kOpGetState ? 0 : between + 1;
+        most    = std::max(most, between);
+    }
+    EXPECT_GE(rig.wire.count(translagatr::kOpTelemetry, from), 50);
+    EXPECT_LE(worst, 250000);
+    EXPECT_LE(most, 1);
+    EXPECT_GT(b.client.stats().telemetry_overdue, 0u);
+    EXPECT_EQ(b.client.stats().timeouts, lost);
 }

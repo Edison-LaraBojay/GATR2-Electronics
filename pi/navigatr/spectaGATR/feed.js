@@ -79,6 +79,7 @@ export class Feed {
         this.frames = 0;
 
         this.clock = new ClockSync();
+        this.clockConnection = -1;  // connectionEpoch of the last clock reset
         this.rates = new Rates();
         this.counts = new Map();    // type -> messages received
         this.bytes = new Map();     // type -> bytes received
@@ -108,14 +109,7 @@ export class Feed {
         }
         this.ws = ws;
         ws.binaryType = 'arraybuffer';
-        ws.onopen = () => {
-            this.reconnectAttempts = 0;
-            this.connectionEpoch += 1;
-            this.clock.reset();
-            this.sendPing();
-            clearInterval(this.pingTimer);
-            this.pingTimer = setInterval(() => this.sendPing(), PING_MS);
-        };
+        ws.onopen = () => this.onOpen();
         ws.onmessage = (ev) => this.onMessage(ev.data);
         ws.onclose = () => {
             if (this.ws === ws) {
@@ -129,6 +123,18 @@ export class Feed {
         ws.onerror = () => {
             // the close event that follows carries the state change
         };
+    }
+
+    // A socket opened: one connection is one Pi process, so the clock is
+    // reset here once and not again by the hello that follows.
+    onOpen() {
+        this.reconnectAttempts = 0;
+        this.connectionEpoch += 1;
+        this.clock.reset();
+        this.clockConnection = this.connectionEpoch;
+        this.sendPing();
+        clearInterval(this.pingTimer);
+        this.pingTimer = setInterval(() => this.sendPing(), PING_MS);
     }
 
     scheduleReconnect() {
@@ -286,8 +292,13 @@ export class Feed {
         const newProcess = !this.session || this.session.id !== session.id;
         if (newProcess) {
             this.sessionIdEpoch += 1;
-            this.clock.reset();   // a new Pi process: its clock restarted
-            this.sendPing();
+            // a new Pi process has a new clock; onOpen already reset for
+            // this connection, and a second reset would drop its first ping
+            if (this.clockConnection !== this.connectionEpoch) {
+                this.clock.reset();
+                this.clockConnection = this.connectionEpoch;
+                this.sendPing();
+            }
         }
         this.session = { id: session.id, reset_count: session.reset_count };
         this.sessionEpoch += 1;

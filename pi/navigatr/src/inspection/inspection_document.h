@@ -47,7 +47,9 @@ constexpr std::size_t kHistoryMaxEntries  = 300;
 // Measured attitude older than this is reported stale.
 constexpr int64_t kAttitudeFreshMs = 250;
 
-// measured, stale, assumed_level or unavailable.
+// measured (valid, host age <= kAttitudeFreshMs), stale (valid but older or
+// untimed, or a kept measurement time), unavailable (a named source with
+// nothing timed), assumed_level (no source configured), else unavailable.
 const char* attitudeStatus(const Attitude& a, MonotonicTime now);
 
 // The capture service reports itself available.
@@ -91,6 +93,8 @@ std::string pongDocument(const std::string& id_token, const std::string& client_
 // body is not a valid TELEMETRY body.
 bool decodeTelemetryRecord(const DiagBrainTelemetry& rec, translagatr::BrainTelemetry& out);
 
+// A group is null when its flag bit is clear; motion.target also needs
+// kTelemetryTarget. flags is sent raw, unknown bits included.
 std::string telemetryDocument(uint64_t seq, MonotonicTime now, const DiagRecord& record,
                               const DiagBrainTelemetry& rec,
                               const translagatr::BrainTelemetry& telemetry);
@@ -100,6 +104,7 @@ std::string instrumentationDocument(const System& system, uint64_t seq, Monotoni
 
 std::string captureDocument(const CaptureService& capture, uint64_t seq, MonotonicTime now);
 
+// With system: "detection" is the detection_frames entry of exactly frame.
 std::string frameHeaderDocument(const DetectionFrameSnapshot& frame, int preview_width_px,
                                 int preview_height_px, long quality, double encode_ms,
                                 MonotonicTime now, const System* system = nullptr);

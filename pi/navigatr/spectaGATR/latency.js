@@ -15,6 +15,9 @@ export const PING_KEEP = 20;
 
 export class ClockSync {
     constructor() {
+        // ids keep counting across resets: a pong still in flight from
+        // before a reset can never match a newer ping's send time
+        this.nextId = 1;
         this.reset();
     }
 
@@ -22,7 +25,6 @@ export class ClockSync {
         this.samples = [];   // {rtt, offset, at}
         this.best = null;
         this.pending = new Map();
-        this.nextId = 1;
         this.sent = 0;
         this.received = 0;
     }
@@ -38,10 +40,17 @@ export class ClockSync {
         return { type: 'ping', id, client_ms: nowMs };
     }
 
-    // A pong {id, client_ms, host_ms, host_us} received at nowMs.
+    // A pong {id, client_ms, host_ms, host_us} received at nowMs. The
+    // server echoes client_ms verbatim, so the send time is the ping's own;
+    // a pending entry that disagrees belongs to another ping: dropped.
     pong(msg, nowMs) {
-        const sentAt = this.pending.has(msg.id) ? this.pending.get(msg.id) : msg.client_ms;
+        const pending = this.pending.get(msg.id);
         this.pending.delete(msg.id);
+        const echoed = typeof msg.client_ms === 'number' ? msg.client_ms : undefined;
+        if (echoed !== undefined && pending !== undefined && Math.abs(pending - echoed) > 1e-6) {
+            return null;
+        }
+        const sentAt = echoed !== undefined ? echoed : pending;
         if (typeof sentAt !== 'number') {
             return null;
         }

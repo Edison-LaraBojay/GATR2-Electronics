@@ -9,9 +9,11 @@ namespace navigatr
 namespace
 {
 
-DiagRobotState diagRecordOf(const RobotState& state, bool stationary, uint64_t publication) {
+DiagRobotState diagRecordOf(const RobotState& state, bool stationary, bool advanced,
+                            uint64_t publication) {
     DiagRobotState d;
     d.publication = publication;
+    d.advanced    = advanced;
     if (state.measuredAt.isSet()) {
         d.measured_ms    = state.measuredAt.ms;
         d.measured_clock = state.measuredAt.domain == ClockDomain::kHost ? DiagClock::kPiHost
@@ -56,7 +58,7 @@ void RobotStateFeed::setDiagnostics(std::shared_ptr<DiagnosticsHub> hub) {
 }
 
 void RobotStateFeed::publish(const RobotState& state, const LocalizationStatus& status,
-                             bool append_history, uint64_t publication) {
+                             bool advanced, uint64_t publication) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         // Epoch changes invalidate both histories even if the estimator has no
@@ -65,7 +67,7 @@ void RobotStateFeed::publish(const RobotState& state, const LocalizationStatus& 
         latest_      = state;
         status_      = status;
         publication_ = publication;
-        if (append_history && state.valid && state.measuredAtHost.isSet()) {
+        if (advanced && state.valid && state.measuredAtHost.isSet()) {
             PoseHistoryEntry entry;
             entry.at             = state.measuredAtHost;
             entry.odom_pose      = state.odom_pose;
@@ -81,7 +83,7 @@ void RobotStateFeed::publish(const RobotState& state, const LocalizationStatus& 
         DiagRecord record;
         record.kind    = DiagKind::kRobotState;
         record.source  = hub_source_;
-        record.payload = diagRecordOf(state, status.stationary(), publication);
+        record.payload = diagRecordOf(state, status.stationary(), advanced, publication);
         hub_->post(std::move(record));
     }
 }

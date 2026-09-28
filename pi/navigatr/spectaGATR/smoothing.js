@@ -8,14 +8,39 @@
 //
 // It snaps with no blend on any identity change (session, reset, odometry
 // epoch, anchor revision, placement, validity, a new connection), on a jump
-// over SNAP_DIST_M or SNAP_HEADING_DEG, and whenever the pose is stale: the
-// newest received pose is then drawn exactly and the caller shows the stale
-// state. Readouts, graphs, the trail and exports never read from here.
+// over SNAP_DIST_M or SNAP_HEADING_DEG, and whenever the pose is stale or
+// not measured (poseFreshness): the newest received pose is then drawn
+// exactly and the caller shows that state. Readouts, graphs, the trail and
+// exports never read from here.
 
 export const SMOOTH_MAX_MS = 100;
 export const SNAP_DIST_M = 0.2;
 export const SNAP_HEADING_DEG = 15;
 export const STALE_MS = 250;
+
+// The page's verdict on a valid pose, shared by live and replay: 'stale'
+// when no new state came for STALE_MS (sinceMs) or the pose was already
+// older than that, 'unmeasured' when the runtime gave no Pi-clock
+// measurement time (see measuredOnSourceClock for which case), else ''.
+// Unknown age is never taken as fresh.
+export function poseFreshness(ageMs, sinceMs) {
+    if (!(sinceMs <= STALE_MS)) {
+        return 'stale';
+    }
+    if (typeof ageMs !== 'number' || !Number.isFinite(ageMs)) {
+        return 'unmeasured';
+    }
+    return ageMs + Math.max(0, sinceMs) > STALE_MS ? 'stale' : '';
+}
+
+// Which 'unmeasured' case a pose is: true when it has a measurement on its
+// source clock that is not mapped to the Pi clock yet (or was just reset),
+// so its age is unknown; false when it has no measurement at all (a
+// configured placement before the first sensor reading).
+export function measuredOnSourceClock(robot) {
+    const m = robot ? robot.measured_at : null;
+    return !!m && typeof m === 'object' && typeof m.ms === 'number';
+}
 
 function wrap180(d) {
     let x = ((((d + 180) % 360) + 360) % 360) - 180;

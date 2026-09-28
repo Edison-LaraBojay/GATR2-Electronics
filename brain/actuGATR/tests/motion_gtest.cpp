@@ -1,8 +1,8 @@
 // motion_gtest.cpp
 // Motion: references applied once, direct vs avoiding, waiting and failure
 // reasons, cancellation, identity, deadlines through replans, field
-// corrections and path reports. Uses the host test planner; the real planner
-// runs in the integration tests.
+// corrections, path reports and the TELEMETRY target bit. Uses the host test
+// planner; the real planner runs in the integration tests.
 
 #include "actugatr/motion.h"
 
@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "actugatr/drive.h"
+#include "actugatr/telemetry.h"
 #include "sim/drive_sim.h"
 #include "sim/simulated_state.h"
 #include "sim/straight_planner.h"
@@ -247,6 +248,48 @@ TEST(Motion, NominalReferenceWaitsForAnObservationUnlessAllowed) {
     options.require_observed_reference = false;
     allowed.motion.goToDirect({-0.5, 0, 0}, Reference::object(5, kMapId), options);
     EXPECT_EQ(allowed.run(10.0), MotionState::kCompleted);
+}
+
+// The viewer draws target_* only with kTelemetryTarget: clear while the
+// reference is unresolved, set from the first plan on, clear again for a new
+// command.
+TEST(Motion, TelemetryTargetBitFollowsTheResolvedDestination) {
+    const uint8_t kTarget   = translagatr::kTelemetryTarget;
+    auto          telemetry = [](const Loop& l) {
+        DriveSnapshot s;
+        s.motion = l.motion.status();
+        return telemetryOf(s);
+    };
+    Loop l;
+    l.state.setField(field({landmark(5, {2.0, 1.0, 0}, EstimateSource::kNominal)}));
+    l.motion.goToDirect({-0.5, 0, 0}, Reference::object(5, kMapId));
+    for (int i = 0; i < 20; ++i) {
+        l.step();
+    }
+    ASSERT_EQ(l.motion.status().state, MotionState::kWaiting);
+    translagatr::BrainTelemetry t = telemetry(l);
+    EXPECT_EQ(t.flags & kTarget, 0);
+    EXPECT_EQ(t.target_x_mm, 0);
+    EXPECT_EQ(t.target_y_mm, 0);
+
+    l.state.setField(field({landmark(5, {2.02, 1.0, 0}, EstimateSource::kObserved)}));
+    for (int i = 0; i < 20 && !l.motion.status().has_destination; ++i) {
+        l.step();
+    }
+    ASSERT_TRUE(l.motion.status().has_destination) << toString(l.motion.status().reason);
+    t = telemetry(l);
+    EXPECT_EQ(t.flags & kTarget, kTarget);
+    EXPECT_EQ(t.target_x_mm, 1520);
+    EXPECT_EQ(t.target_y_mm, 1000);
+    EXPECT_EQ(t.target_heading_cdeg, 0);
+
+    ASSERT_EQ(l.run(10.0), MotionState::kCompleted);
+    EXPECT_EQ(telemetry(l).flags & kTarget, kTarget);
+
+    l.motion.goToDirect({1.0, 1.0, 0}); // not yet updated, so not resolved
+    t = telemetry(l);
+    EXPECT_EQ(t.flags & kTarget, 0);
+    EXPECT_EQ(t.target_x_mm, 0);
 }
 
 TEST(Motion, AvoidingNeedsAFieldAndNeverFallsBackToDirect) {

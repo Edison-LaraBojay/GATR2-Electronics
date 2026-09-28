@@ -160,7 +160,10 @@ struct Table {
     const std::string& at(std::size_t row, const std::string& name) const {
         static const std::string kNone = "<missing column>";
         const int c = col(name);
-        return c < 0 || row >= rows.size() ? kNone : rows[row][static_cast<std::size_t>(c)];
+        // a short row (a writer bug) fails its own check, never aborts the run
+        return c < 0 || row >= rows.size() || static_cast<std::size_t>(c) >= rows[row].size()
+                   ? kNone
+                   : rows[row][static_cast<std::size_t>(c)];
     }
     double num(std::size_t row, const std::string& name) const {
         const std::string& s = at(row, name);
@@ -314,6 +317,7 @@ struct Rig {
         s.valid             = true;
         s.initialized       = true;
         s.attitude_assumed_level = true;
+        s.advanced          = true;
         return s;
     }
 
@@ -996,11 +1000,15 @@ TEST(CaptureBundle, CsvEscapingAndMissingValues) {
     invalid.initialized    = false;
     invalid.measured_clock = DiagClock::kNone;
     invalid.measured_host_ms = -1;
+    invalid.advanced         = false;
     rig.post(DiagKind::kRobotState, invalid, rig.now + 1, rig.robot_src);
     DiagRobotState unplaced = rig.robot(2, 0.5, 10);
     unplaced.initialized    = false;
     rig.post(DiagKind::kRobotState, unplaced, rig.now + 2, rig.robot_src);
-    rig.post(DiagKind::kRobotState, unplaced, rig.now + 3, rig.robot_src); // repeated pose
+    DiagRobotState repeated = unplaced; // the held pose published again
+    repeated.publication    = 3;
+    repeated.advanced       = false;
+    rig.post(DiagKind::kRobotState, repeated, rig.now + 3, rig.robot_src);
     DiagPicoSensor partial;
     partial.version = 1;
     partial.mask    = translagatr::kSensorEnc0 | translagatr::kSensorEnc2;
@@ -1014,6 +1022,11 @@ TEST(CaptureBundle, CsvEscapingAndMissingValues) {
     garbage.len        = 3;
     garbage.payload[0] = 0xDE;
     rig.post(DiagKind::kPicoDiag, garbage, rig.now + 5, rig.pico_src);
+    DiagBrainTelemetry refused;
+    refused.session = 77;
+    refused.len     = 3;
+    refused.body[0] = 0xDE;
+    rig.post(DiagKind::kBrainTelemetry, refused, rig.now + 5, rig.brain_src);
     DiagBrainRequest silent;
     silent.op          = translagatr::kOpPathReport;
     silent.request_len = 20;
@@ -1040,13 +1053,14 @@ TEST(CaptureBundle, CsvEscapingAndMissingValues) {
         EXPECT_EQ(t.at(0, col), "") << col; // missing, never zero
     }
     EXPECT_EQ(t.at(0, "valid"), "0");
-    EXPECT_EQ(t.at(0, "new_measurement"), "0"); // no measurement time at all
+    EXPECT_EQ(t.at(0, "new_measurement"), "0"); // not advanced: never empty
     EXPECT_EQ(t.at(0, "attitude_status"), "assumed_level");
     EXPECT_EQ(t.at(1, "odom_x_m"), "0.500000");
     EXPECT_EQ(t.at(1, "field_x_m"), ""); // valid but not placed
     EXPECT_EQ(t.at(1, "placed"), "0");
-    EXPECT_EQ(t.at(1, "new_measurement"), ""); // the first measured row: nothing to compare
+    EXPECT_EQ(t.at(1, "new_measurement"), "1"); // the first measured row is known too
     EXPECT_EQ(t.at(2, "new_measurement"), "0"); // the same measurement published again
+    EXPECT_EQ(t.at(2, "odom_x_m"), "0.500000");  // the held pose is still written
 
     const Table p = table(z, "pico_sensor.csv");
     ASSERT_EQ(p.rows.size(), 1u);
@@ -1067,6 +1081,14 @@ TEST(CaptureBundle, CsvEscapingAndMissingValues) {
     EXPECT_EQ(d.at(0, "decoded"), "0");
     EXPECT_EQ(d.at(0, "pin_pi_rx_level"), "");
     EXPECT_EQ(d.at(0, "payload_hex"), "DE0000");
+
+    const Table bt = table(z, "brain_telemetry.csv");
+    ASSERT_EQ(bt.rows.size(), 1u);
+    EXPECT_EQ(bt.at(0, "decoded"), "0");
+    EXPECT_EQ(bt.at(0, "target_valid"), "");
+    EXPECT_EQ(bt.at(0, "wheel5_rpm"), "");
+    EXPECT_EQ(bt.at(0, "payload_hex"), "DE0000");
+    EXPECT_EQ(bt.rows[0].size(), bt.header.size()); // the filler matches the header
 
     const Table q = table(z, "brain_requests.csv");
     ASSERT_EQ(q.rows.size(), 1u);
@@ -1181,6 +1203,7 @@ TEST(CaptureBundle, ReplayConsistency) {
         s.roll_rad           = 0.01f * i;
         s.pitch_rad          = -0.02f * i;
         s.stationary         = i == 5;
+        s.advanced           = i % 3 != 1; // source_ms moves every row; the flag decides
         states.push_back(s);
         rig.post(DiagKind::kRobotState, s, t0 + i * 10000, rig.robot_src);
     }
@@ -1259,7 +1282,7 @@ TEST(CaptureBundle, ReplayConsistency) {
     tr.request_id = 13;
     translagatr::BrainTelemetry& tel = tr.telemetry;
     tel.flags              = translagatr::kTelemetryAttitude | translagatr::kTelemetryMotion |
-                translagatr::kTelemetryWheels;
+                translagatr::kTelemetryWheels | translagatr::kTelemetryTarget;
     tel.stamp_ms           = 4600;
     tel.roll_cdeg          = 150;
     tel.pitch_cdeg         = -275;
@@ -1289,6 +1312,23 @@ TEST(CaptureBundle, ReplayConsistency) {
     whole.len     = static_cast<uint8_t>(tlen);
     std::memcpy(whole.body, tframe, tlen);
     rig.post(DiagKind::kBrainTelemetry, whole, t0 + 8, rig.brain_src);
+    const uint8_t variants[2] = {
+        // target bit clear: the wire still carries target_* (the codec keeps it)
+        static_cast<uint8_t>(tel.flags & ~translagatr::kTelemetryTarget),
+        // motion bit clear: the whole group, target_valid included, is absent
+        static_cast<uint8_t>(translagatr::kTelemetryAttitude | translagatr::kTelemetryTarget)};
+    for (int k = 0; k < 2; ++k) {
+        translagatr::BrainRequest other = tr;
+        other.telemetry.flags           = variants[k];
+        uint8_t        oframe[translagatr::kMaxFrameLen];
+        const uint16_t olen = translagatr::encodeBrainRequest(other, oframe, sizeof(oframe));
+        ASSERT_GT(olen, 0u);
+        DiagBrainTelemetry ob;
+        ob.session = 77;
+        ob.len     = static_cast<uint8_t>(olen);
+        std::memcpy(ob.body, oframe, olen);
+        rig.post(DiagKind::kBrainTelemetry, ob, t0 + 11 + k, rig.brain_src);
+    }
 
     DiagPath path;
     path.session    = 77;
@@ -1341,7 +1381,7 @@ TEST(CaptureBundle, ReplayConsistency) {
         EXPECT_NEAR(r.num(i, "yaw_rate_deg_s"), s.yaw_rate_rad_s * 180.0 / kTestPi, 1e-4);
         EXPECT_NEAR(r.num(i, "confidence"), s.confidence, 1e-4);
         EXPECT_EQ(r.at(i, "stationary"), s.stationary ? "1" : "0");
-        EXPECT_EQ(r.at(i, "new_measurement"), i == 0 ? "" : "1"); // source_ms moves every row
+        EXPECT_EQ(r.at(i, "new_measurement"), s.advanced ? "1" : "0") << i;
         if (s.attitude_valid) {
             EXPECT_EQ(r.at(i, "attitude_status"), "measured");
             EXPECT_NEAR(r.num(i, "roll_deg"), s.roll_rad * 180.0 / kTestPi, 1e-4);
@@ -1405,7 +1445,7 @@ TEST(CaptureBundle, ReplayConsistency) {
     EXPECT_EQ(q.at(0, "duplicate"), "1");
 
     const Table b = table(z, "brain_telemetry.csv");
-    ASSERT_EQ(b.rows.size(), 2u);
+    ASSERT_EQ(b.rows.size(), 4u);
     for (std::size_t i = 0; i < 2; ++i) {
         EXPECT_EQ(b.at(i, "decoded"), "1") << i;
         EXPECT_EQ(b.at(i, "source_ms"), "4600");
@@ -1413,7 +1453,9 @@ TEST(CaptureBundle, ReplayConsistency) {
         EXPECT_EQ(b.at(i, "pitch_deg"), "-2.75");
         EXPECT_EQ(b.at(i, "command_id"), "42");
         EXPECT_EQ(b.at(i, "path_segment_count"), "3");
+        EXPECT_EQ(b.at(i, "target_valid"), "1");
         EXPECT_EQ(b.at(i, "target_field_x_m"), "1.500");
+        EXPECT_EQ(b.at(i, "target_field_y_m"), "-0.250");
         EXPECT_EQ(b.at(i, "target_field_heading_deg"), "90.00");
         EXPECT_EQ(b.at(i, "cmd_body_vx_m_s"), "0.400");
         EXPECT_EQ(b.at(i, "cmd_omega_deg_s"), "-15.00");
@@ -1422,6 +1464,27 @@ TEST(CaptureBundle, ReplayConsistency) {
         EXPECT_EQ(b.at(i, "wheel0_rpm"), "123.4");
         EXPECT_EQ(b.at(i, "wheel1_rpm"), "-5.6");
         EXPECT_EQ(b.at(i, "wheel2_rpm"), "");
+    }
+    // target bit clear: no destination shown, the rest of the motion group is
+    EXPECT_EQ(b.at(2, "motion_present"), "1");
+    EXPECT_EQ(b.at(2, "target_valid"), "0");
+    for (const char* col : {"target_field_x_m", "target_field_y_m", "target_field_heading_deg"}) {
+        EXPECT_EQ(b.at(2, col), "") << col;
+    }
+    EXPECT_EQ(b.at(2, "command_id"), "42");
+    EXPECT_EQ(b.at(2, "cmd_body_vx_m_s"), "0.400");
+    EXPECT_EQ(b.at(2, "wheel0_rpm"), "123.4");
+    // no motion group: target_valid is missing like the group, whatever bit 3 says
+    EXPECT_EQ(b.at(3, "motion_present"), "0");
+    EXPECT_EQ(b.at(3, "target_valid"), "");
+    EXPECT_EQ(b.at(3, "target_field_x_m"), "");
+    EXPECT_EQ(b.at(3, "cmd_body_vx_m_s"), "");
+    EXPECT_EQ(b.at(3, "roll_deg"), "1.50");
+    EXPECT_EQ(b.at(3, "wheels_present"), "0");
+    EXPECT_EQ(b.at(3, "flags"), std::to_string(translagatr::kTelemetryAttitude |
+                                               translagatr::kTelemetryTarget));
+    for (std::size_t i = 0; i < b.rows.size(); ++i) { // one field per header column
+        EXPECT_EQ(b.rows[i].size(), b.header.size()) << i;
     }
 
     const Table pa = table(z, "paths.csv");
@@ -1643,6 +1706,18 @@ TEST(CaptureTap, RobotStateFeedPostsOnlyWhileWanted) {
     EXPECT_TRUE(d.initialized);
     EXPECT_FALSE(d.attitude_valid);
     EXPECT_TRUE(d.attitude_assumed_level);
+    EXPECT_TRUE(d.advanced);
+
+    // the held pose published again: no new measurement, no history entry
+    const std::size_t history = feed.historySize();
+    s.measuredAtHost          = hostTime(565);
+    feed.publish(s, LocalizationStatus{}, false, 11);
+    out.clear();
+    ASSERT_EQ(hub->drain(out), 1u);
+    const DiagRobotState& held = std::get<DiagRobotState>(out[0].payload);
+    EXPECT_EQ(held.publication, 11u);
+    EXPECT_FALSE(held.advanced);
+    EXPECT_EQ(feed.historySize(), history);
 }
 
 TEST(CaptureSystem, ResetIsASegmentBoundaryAndEventsAreRecorded) {
@@ -2029,6 +2104,8 @@ TEST(CaptureSystem, SyntheticRigRunRecordsPlacedStates) {
         }
         // a pose held before any measurement has no measurement time: missing, not zero
         EXPECT_EQ(t.at(i, "source_clock").empty(), t.at(i, "source_ms").empty());
+        const std::string& fresh = t.at(i, "new_measurement"); // the estimator's flag: never empty
+        EXPECT_TRUE(fresh == "0" || fresh == "1") << i << " " << fresh;
         const int64_t pub = std::stoll(t.at(i, "publication"));
         EXPECT_GT(pub, last_pub); // every publication in order, none twice
         last_pub = pub;

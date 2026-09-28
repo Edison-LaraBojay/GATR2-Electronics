@@ -31,6 +31,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import { DEG, rotationOf, fmt, fmtMs, attitudeStatus, enumName } from './transforms.js';
+import { measuredOnSourceClock } from './smoothing.js';
 
 export { attitudeStatus, enumName };
 
@@ -783,9 +784,20 @@ export class FieldScene {
         this.needsRender = true;
     }
 
+    // Label words for the page's pose verdict (smoothing.js poseFreshness);
+    // true is taken as 'stale'.
+    staleWords(stale) {
+        if (stale === 'unmeasured') {
+            const words = measuredOnSourceClock(this.robotState) ? 'pose age unknown' : 'pose not measured yet';
+            return this.mode === 'replay' ? words + ' in recording' : words;
+        }
+        return this.mode === 'replay' ? 'pose stale in recording' : 'pose stale';
+    }
+
     // The newest exact state of the robot (not the smoothed pose): what the
-    // label, colour, tilt and tooltip say. stale is the page's staleness
-    // verdict (no state for a while, or the pose itself too old).
+    // label, colour, tilt and tooltip say. stale is the page's verdict: ''
+    // or false when fresh, else 'stale' (no state for a while, or the pose
+    // itself too old) or 'unmeasured' (no measurement time); both fade it.
     applyRobotState(robot, stale) {
         if (!this.available) {
             return;
@@ -819,7 +831,7 @@ export class FieldScene {
         }
         let text;
         if (stale) {
-            text = 'robot (pose stale)';
+            text = `robot (${this.staleWords(stale)})`;
         } else if (!placed) {
             text = 'robot (not placed, odometry)';
         } else if (tilt) {
@@ -876,7 +888,7 @@ export class FieldScene {
             `\nx ${fmt(f.x_m)} m  y ${fmt(f.y_m)} m  heading ${fmt(f.heading_deg, 1)} deg (exact, not smoothed)\n` +
             `pose age ${fmtMs(robot.age_ms)} at publish  confidence ${fmt(robot.confidence, 2)}\n${attText}\n` +
             `outline: ${this.robotBody.source || 'RobotBody'}, ${fmt(this.robotBody.length_m, 3)} x ${fmt(this.robotBody.width_m, 3)} m` +
-            (this.robotStale ? '\nSTALE: no fresh pose' : '');
+            (this.robotStale ? `\n${this.staleWords(this.robotStale).toUpperCase()}` : '');
     }
 
     // --- trail: a ring of odometry-frame points ---

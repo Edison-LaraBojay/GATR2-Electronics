@@ -8,9 +8,11 @@
 // is interpolated, filled or smoothed: a value is what a message said.
 //
 // Clock: every live series is on the Pi host clock (ms). Robot series are
-// placed at their measurement time (measured_at_host_ms); telemetry,
-// diag and instrumentation series at the time the Pi built the message.
-// Replay series are at the capture's pi_host_us.
+// placed at their measurement time (measured_at_host_ms); telemetry at the
+// Pi's arrival of the Brain report (received_host_ms, the same instant a
+// capture's pi_host_us records); diag and instrumentation series at the
+// time the Pi built the message. Replay series are at the capture's
+// pi_host_us.
 
 import { Decimator, drawDecimated, valueAt } from './series.js';
 import { el, setText, setHidden, setTitle } from './dom.js';
@@ -56,9 +58,9 @@ const META = {
     'robot.yaw_rate': { label: 'yaw rate actual', unit: 'deg/s', source: 'state robot.yaw_rate_deg_s' },
     'robot.roll': { label: 'roll (Pi attitude)', unit: 'deg', source: 'state robot.attitude, measured only' },
     'robot.pitch': { label: 'pitch (Pi attitude)', unit: 'deg', source: 'state robot.attitude, measured only' },
-    'tel.cmd_vx': { label: 'vx commanded', unit: 'm/s', source: 'Brain telemetry cmd (body)' },
-    'tel.cmd_vy': { label: 'vy commanded', unit: 'm/s', source: 'Brain telemetry cmd (body)' },
-    'tel.cmd_omega': { label: 'omega commanded', unit: 'deg/s', source: 'Brain telemetry cmd' },
+    'tel.cmd_vx': { label: 'vx commanded', unit: 'm/s', source: 'Brain telemetry cmd (body), at Pi arrival' },
+    'tel.cmd_vy': { label: 'vy commanded', unit: 'm/s', source: 'Brain telemetry cmd (body), at Pi arrival' },
+    'tel.cmd_omega': { label: 'omega commanded', unit: 'deg/s', source: 'Brain telemetry cmd, at Pi arrival' },
     'tel.roll': { label: 'roll (Brain VEX)', unit: 'deg', source: 'Brain telemetry attitude' },
     'tel.pitch': { label: 'pitch (Brain VEX)', unit: 'deg', source: 'Brain telemetry attitude' },
     'tel.cross_track': { label: 'cross-track', unit: 'm', source: 'Brain telemetry' },
@@ -204,7 +206,10 @@ export class LiveCollector {
     }
 
     onTelemetry(msg) {
-        const i = this.tel.begin(msg.host_ms);
+        // at Pi arrival: the message's build time is later by its queue wait
+        const t = typeof msg.received_host_ms === 'number' ? msg.received_host_ms
+            : msg.host_ms - (typeof msg.age_ms === 'number' ? msg.age_ms : 0);
+        const i = this.tel.begin(t);
         if (i < 0) {
             return;
         }

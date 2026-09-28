@@ -44,7 +44,10 @@ integration still needs the checks recorded in the deployment documents.
 | [Architecture](docs/architecture.md) | Captured resource/sensor functions, ResourceMap and SensorMap result contracts, all runtime paths, nested stage I/O, workers, and pose history. |
 | [Coordinates](docs/coordinates.md) | Field and robot axes, heading, camera mounting, attitude, and measurement-time transforms. |
 | [Landmarks](docs/landmarks.md) | Nominal and observed field state, association, target resolution, and Brain output. |
-| [Inspection](docs/inspection.md) | The versioned inspection contract, the service, and the browser viewer. |
+| [Inspection](docs/inspection.md) | The `navigatr.inspect/2` feed, flow control and latency terms, the service, and the spectaGATR browser viewer. |
+| [Capture](docs/capture.md) | Bounded Pi-side diagnostic recording, triggers, the ZIP/CSV bundle and its metadata. |
+| [Camera preview](docs/camera_preview.md) | The camera shown on the Brain-profile USB setup with no field correction. |
+| [Perf harness](tools/perf/README.md) | Inspection and viewer latency measurements: baseline, rerun, compare. |
 | [Localization fusion](docs/localization_fusion.md) | Noise units, the weighted step, covariance propagation, and what the fusion estimator does not model. |
 | [Field assets](docs/field_assets.md) | Official Override CAD source, revision, units, axis conversion, planning data (boundary, wire ids, collision boxes), and what the field file was checked against. |
 | [Calibration inventory](docs/calibration_inventory.md) | Every remaining measurement, where it goes, and what it gates. |
@@ -108,9 +111,16 @@ Implemented and covered by host tests:
   measured tilt; association by full pose against every mount sharing an id.
 - Two-worker scheduling with a bounded latest-frame handoff, per-worker rate
   and drop counters, orderly shutdown.
-- Inspection contract `navigatr.inspect/1`, the service, and the bundled
-  three.js viewer (field, robot, trail, nominal vs estimated landmarks, camera
-  image with identity-bound overlays, status badges, diagnostics).
+- Inspection feed `navigatr.inspect/2` (latest-state delivery with ping/pong
+  flow control, separate state and diag messages; the full `inspect/1`
+  snapshot stays at `GET /api/snapshot`), the service, and the spectaGATR
+  three.js viewer (field, robot and attitude, trail, nominal vs estimated
+  landmarks, camera image with identity-bound overlays, status badges,
+  diagnostics, latency panel, live graphs, transport instrumentation,
+  capture controls and ZIP replay).
+- Diagnostics: a bounded `DiagnosticsHub` fed by the runtime's producers,
+  always-on link counters, and a Pi-side capture service with triggers that
+  writes a store-only ZIP of CSVs.
 - A synthetic rig resource that drives the real pipeline without hardware:
   encoder counts, gyro with bias, attitude (measured or unavailable), rendered
   camera frames of the configured field, a displaced landmark.
@@ -142,11 +152,13 @@ Implemented and host tested, not run on hardware:
 
 Deferred, deliberately:
 
-- Live tilt: the Pico firmware sends gyro Z alongside encoders; the protocol has
-  optional accel XY fields, but the firmware does not populate them. No
-  attitude report exists, so live runs show attitude unavailable and the
-  association uses the assumed-level policy. The attitude path is exercised by
-  the synthetic rig.
+- Live tilt from the Pico: the firmware sends gyro Z alongside encoders; the
+  protocol has optional accel XY fields, but the firmware does not populate
+  them, so Pico IMU profiles show attitude `assumed_level`. Brain VEX IMU
+  profiles get roll and pitch from Brain TELEMETRY for display and recording
+  (`measured`, then `stale` 250 ms after the last report); VEX sign
+  conventions are not yet checked on hardware. The estimator attitude path is
+  exercised by the synthetic rig.
 - Manual exposure and gain control for the camera (auto exposure is used).
 - Measured calibration values for the GATR2 robot: the robot templates stay
   `.xml.in` until measured (see the calibration inventory).
@@ -260,4 +272,7 @@ http://127.0.0.1:8765/
 ```
 
 The browser smoke test (`tools/viewer_smoke.sh`) starts the demo, loads the
-page headless, and checks that snapshots and a detection frame arrived.
+page headless, and checks that states and a detection frame arrived. The
+full browser suite is `py -3 tools/viewer/viewer_tests.py all --binary
+build/navigatr.exe` (headless Chrome or Edge; unit, live, no-WebGL,
+reconnect, replay, record, slow client, capture failure).
