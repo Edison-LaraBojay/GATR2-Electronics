@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "math/angles.h"
 #include "resources/resource_store.h"
@@ -29,6 +30,58 @@ uint16_t clampAgeMs(int64_t ms) {
 
 bool hostSet(MonotonicTime t) { return t.domain == ClockDomain::kHost; }
 
+bool knownChildren(const ConfigNode& node, std::string& err) {
+    for (ConfigNode c = node.child(); c.valid(); c = c.next()) {
+        const std::string name = c.name();
+        if (name == "Serial" || name == "Health" || name == "Field") {
+            continue;
+        }
+        if (name == "FieldObject") {
+            err = c.path() + ": FieldObject was removed with brain link v4; the Brain reads "
+                             "every landmark from the field documents";
+        } else {
+            err = node.path() + " has unknown element " + name;
+        }
+        return false;
+    }
+    return true;
+}
+
+bool makeFieldDocuments(const ConfigNode& publishing, const ResourceStore& resources,
+                        std::unique_ptr<FieldDocuments>& out, std::string& err) {
+    if (!publishing.atMostOne("Field", err)) {
+        return false;
+    }
+    const ConfigNode node = publishing.child("Field");
+    if (!node.valid()) {
+        return true;
+    }
+    std::string id;
+    long        period_ms = 200;
+    if (!node.onlyAttributes({"resource_id", "estimate_period_ms"}, err) ||
+        !node.onlyChildren({}, err) || !node.requireAttr("resource_id", id, err) ||
+        !node.getInt("estimate_period_ms", 200, period_ms, err)) {
+        return false;
+    }
+    if (period_ms <= 0) {
+        err = node.path() + ": estimate_period_ms must be positive";
+        return false;
+    }
+    std::string inner;
+    const auto  map = resources.require<const FieldMap>(ResourceId{id}, inner);
+    if (map == nullptr) {
+        err = node.path() + ": " + inner;
+        return false;
+    }
+    FieldMapDocument doc;
+    if (!buildFieldMapDocument(*map, doc, inner)) {
+        err = node.path() + ": field " + id + ": " + inner;
+        return false;
+    }
+    out = std::make_unique<FieldDocuments>(std::move(doc), period_ms);
+    return true;
+}
+
 } // namespace
 
 std::unique_ptr<Publishing> BrainLinkPublisher::create(const ConfigNode& node,
@@ -46,6 +99,9 @@ std::unique_ptr<Publishing> BrainLinkPublisher::create(const ConfigNode& node,
                             "same Serial resource (" + link_id.value + ")";
         return nullptr;
     }
+    if (!knownChildren(node, err)) {
+        return nullptr;
+    }
     if (context.resources == nullptr || context.sensors == nullptr) {
         err = node.path() + ": no resources available";
         return nullptr;
@@ -57,9 +113,14 @@ std::unique_ptr<Publishing> BrainLinkPublisher::create(const ConfigNode& node,
         return nullptr;
     }
     publisher->diagnostics_id_ = link_id.value;
-    publisher->world_noop_     = context.world_estimation_noop;
+    publisher->profile_host_   = context.brain_profile;
 
     const ConfigNode health = node.child("Health");
+    if (health.valid() && publisher->profile_host_ != nullptr &&
+        (!health.onlyChildren({}, err) || !health.onlyAttributes({"fresh_ms"}, err))) {
+        err += "; with a Brain profile the health references follow the profile";
+        return nullptr;
+    }
     if (health.valid()) {
         if (!health.getInt("fresh_ms", 150, publisher->fresh_ms_, err)) {
             return nullptr;
@@ -107,44 +168,18 @@ std::unique_ptr<Publishing> BrainLinkPublisher::create(const ConfigNode& node,
             }
         }
     }
-
-    bool ok = true;
-    node.forEach("FieldObject", [&](const ConfigNode& w) {
-        if (!ok) {
-            return;
-        }
-        WireObject wire;
-        wire.object = FieldObjectId{w.attr("object_id")};
-        long id     = -1;
-        if (wire.object.empty() || !w.getInt("wire_id", -1, id, err)) {
-            if (err.empty()) {
-                err = w.path() + ": FieldObject needs object_id and wire_id";
-            }
-            ok = false;
-            return;
-        }
-        if (id < 1 || id > 255) {
-            err = w.path() + ": wire_id must be 1..255";
-            ok  = false;
-            return;
-        }
-        wire.wire_id = static_cast<uint8_t>(id);
-        for (const WireObject& seen : publisher->wire_objects_) {
-            if (seen.wire_id == wire.wire_id || seen.object == wire.object) {
-                err = w.path() + ": duplicate FieldObject mapping";
-                ok  = false;
-                return;
-            }
-        }
-        publisher->wire_objects_.push_back(wire);
-    });
-    if (!ok) {
+    if (!makeFieldDocuments(node, *context.resources, publisher->documents_, err)) {
         return nullptr;
     }
     return publisher;
 }
 
-void BrainLinkPublisher::reset() { bias_cal_seen_ = false; }
+void BrainLinkPublisher::reset() {
+    bias_cal_seen_ = false;
+    if (documents_ != nullptr) {
+        documents_->reset();
+    }
+}
 
 bool BrainLinkPublisher::sensorFresh(const SensorMap& results, const SensorId& id,
                                      MonotonicTime now) const {
@@ -156,26 +191,20 @@ bool BrainLinkPublisher::sensorFresh(const SensorMap& results, const SensorId& i
     return (now - it->second.latest->receivedAt) <= fresh_ms_;
 }
 
-const BrainLinkPublisher::WireObject* BrainLinkPublisher::findWire(uint8_t wire_id) const {
-    for (const WireObject& wire : wire_objects_) {
-        if (wire.wire_id == wire_id) {
-            return &wire;
-        }
+uint8_t BrainLinkPublisher::calibration(const PublishingInput& in,
+                                        const ProfileBinding* profile) const {
+    const std::string& function =
+        profile_host_ != nullptr
+            ? (profile != nullptr ? profile->bias_function : std::string())
+            : bias_cal_function_;
+    if (function.empty()) {
+        return gatr2::kCalibrationNone;
     }
-    return nullptr;
-}
-
-uint8_t BrainLinkPublisher::selectResult(const BrainReplyContext& ctx) const {
-    if ((ctx.select_flags & gatr2::kSelectFlagSelected) == 0) {
-        return gatr2::kResultOk;   // a release always succeeds
+    const ObservationFunctionStatus* f = in.localization.find(function);
+    if (f == nullptr) {
+        return gatr2::kCalibrationNone;
     }
-    if (world_noop_) {
-        return gatr2::kResultLandmarkUnsupported;
-    }
-    if (findWire(ctx.landmark_id) == nullptr) {
-        return gatr2::kResultUnknownLandmark;
-    }
-    return gatr2::kResultOk;
+    return f->ready ? gatr2::kCalibrationDone : gatr2::kCalibrationRunning;
 }
 
 gatr2::BrainState BrainLinkPublisher::state(const PublishingInput& in) const {
@@ -204,55 +233,54 @@ gatr2::BrainState BrainLinkPublisher::state(const PublishingInput& in) const {
     s.odometry_epoch        = static_cast<uint32_t>(robot.odometry_epoch);
     s.anchor_revision       = static_cast<uint32_t>(robot.anchor_revision);
 
-    if (!encoder_health_.empty()) {
+    const std::shared_ptr<const ProfileBinding> profile =
+        profile_host_ != nullptr ? profile_host_->applied() : nullptr;
+    const std::vector<SensorId>& encoders =
+        profile_host_ != nullptr ? (profile != nullptr ? profile->encoders : encoder_health_)
+                                 : encoder_health_;
+    if (!encoders.empty()) {
         bool all_fresh = true;
-        for (const SensorId& id : encoder_health_) {
+        for (const SensorId& id : encoders) {
             all_fresh = all_fresh && sensorFresh(in.sensors, id, in.now);
         }
         if (all_fresh) {
             s.health |= gatr2::kHealthEncodersFresh;
         }
     }
-    if (!gyro_health_.empty() && sensorFresh(in.sensors, gyro_health_, in.now)) {
+    bool gyro_fresh = false;
+    if (profile_host_ == nullptr) {
+        gyro_fresh = !gyro_health_.empty() && sensorFresh(in.sensors, gyro_health_, in.now);
+    } else if (profile != nullptr && !profile->imu.empty()) {
+        gyro_fresh = sensorFresh(in.sensors, profile->imu, in.now);
+    } else if (profile != nullptr && profile->bench_imu != nullptr) {
+        const BrainImuBench& bench = *profile->bench_imu;
+        gyro_fresh = bench.valid && hostSet(bench.received) && hostSet(in.now) &&
+                     (in.now - bench.received) <= fresh_ms_;
+    }
+    if (gyro_fresh) {
         s.health |= gatr2::kHealthGyroFresh;
     }
     if (!in.observations.empty()) {
         s.health |= gatr2::kHealthVisionAlive;
     }
-    if (bias_cal_seen_) {
+    s.calibration = calibration(in, profile.get());
+    const bool bias_calibrated = profile_host_ != nullptr
+                                     ? s.calibration == gatr2::kCalibrationDone
+                                     : bias_cal_seen_;
+    if (bias_calibrated) {
         s.health |= gatr2::kHealthBiasCalibrated;
     }
 
-    s.landmark_id = in.command.object_requested ? in.command.object_wire_id : 0;
-    if (s.landmark_id == 0 || world_noop_) {
-        return s;
+    const ProfileStatus& status = in.command.profile;
+    s.profile_state             = status.state;
+    s.profile_reason            = status.reason;
+    s.profile_detail            = status.detail;
+    s.profile_id                = status.id;
+
+    if (documents_ != nullptr) {
+        s.map_id      = documents_->mapId();
+        s.estimate_id = documents_->estimateId();
     }
-    const WireObject* wire = findWire(s.landmark_id);
-    if (wire == nullptr) {
-        return s;
-    }
-    const auto it = in.field.objects.find(wire->object);
-    if (it == in.field.objects.end() || !it->second.valid) {
-        return s;
-    }
-    const FieldObjectState& o = it->second;
-    Pose2D                  landmark;
-    if (o.source == EstimateSource::kObserved) {
-        if (o.odometry_epoch != robot.odometry_epoch || !hostSet(o.lastObservedAt)) {
-            return s;   // measured in another odometry frame: no usable estimate
-        }
-        landmark          = compose(robot.field_from_odom, o.T_odom_object);
-        s.landmark_source = gatr2::kLandmarkSourceObserved;
-        s.landmark_age_ms = clampAgeMs(in.now - o.lastObservedAt);
-    } else if (o.source == EstimateSource::kFieldMap) {
-        landmark          = o.pose.pose;
-        s.landmark_source = gatr2::kLandmarkSourceNominal;
-    } else {
-        return s;
-    }
-    s.lm_x_mm         = toWireMm(landmark.x_m);
-    s.lm_y_mm         = toWireMm(landmark.y_m);
-    s.lm_heading_cdeg = radToCdeg(landmark.heading_rad);
     return s;
 }
 
@@ -264,6 +292,9 @@ PublishingOutput BrainLinkPublisher::run(const PublishingInput& in) {
             bias_cal_seen_ = true;
         }
     }
+    if (documents_ != nullptr) {
+        documents_->update(in.field, in.robot, in.now);
+    }
 
     const BrainReplyContext& ctx = in.command.reply;
     if (!ctx.pending) {
@@ -271,27 +302,51 @@ PublishingOutput BrainLinkPublisher::run(const PublishingInput& in) {
     }
 
     gatr2::BrainReply reply;
-    reply.op          = ctx.op;
-    reply.session     = ctx.session;
-    reply.request_id  = ctx.request_id;
-    reply.result      = ctx.result;
-    reply.pi_instance = ctx.pi_instance;
-    reply.nonce       = ctx.nonce;
-    if (ctx.op == gatr2::kOpSetPose && ctx.result == gatr2::kResultPending) {
-        // Ok only once localization applied exactly this placement
-        const bool applied = in.robot.placement_origin == "command" &&
-                             in.robot.placement_session == ctx.session &&
-                             in.robot.placement_sequence == ctx.placement_sequence;
-        reply.result          = applied ? gatr2::kResultOk : gatr2::kResultPending;
-        reply.odometry_epoch  = static_cast<uint32_t>(in.robot.odometry_epoch);
-        reply.anchor_revision = static_cast<uint32_t>(in.robot.anchor_revision);
-    } else if (ctx.op == gatr2::kOpSelectLandmark && ctx.result == gatr2::kResultOk) {
-        reply.result       = selectResult(ctx);
-        reply.landmark_id  = ctx.landmark_id;
-        reply.select_flags = ctx.select_flags;
-    } else if ((ctx.op == gatr2::kOpGetState || ctx.op == gatr2::kOpGetStateWithImu) &&
-               ctx.result == gatr2::kResultOk) {
-        reply.state = state(in);
+    reply.op             = ctx.op;
+    reply.session        = ctx.session;
+    reply.request_id     = ctx.request_id;
+    reply.result         = ctx.result;
+    reply.pi_instance    = ctx.pi_instance;
+    reply.nonce          = ctx.nonce;
+    reply.profile_id     = ctx.profile_id;
+    reply.received       = ctx.received;
+    reply.profile_state  = ctx.profile_state;
+    reply.profile_reason = ctx.profile_reason;
+    reply.profile_detail = ctx.profile_detail;
+    reply.action         = ctx.action;
+    switch (ctx.op) {
+    case gatr2::kOpSetPose:
+        if (ctx.result == gatr2::kResultPending) {
+            // Ok only once localization applied exactly this placement
+            const bool applied = in.robot.placement_origin == "command" &&
+                                 in.robot.placement_session == ctx.session &&
+                                 in.robot.placement_sequence == ctx.placement_sequence;
+            reply.result          = applied ? gatr2::kResultOk : gatr2::kResultPending;
+            reply.odometry_epoch  = static_cast<uint32_t>(in.robot.odometry_epoch);
+            reply.anchor_revision = static_cast<uint32_t>(in.robot.anchor_revision);
+        }
+        break;
+    case gatr2::kOpGetState:
+        if (ctx.result == gatr2::kResultOk) {
+            reply.state = state(in);
+        }
+        break;
+    case gatr2::kOpReadDoc:
+        if (ctx.result == gatr2::kResultOk) {
+            reply.result = documents_ == nullptr
+                               ? static_cast<uint8_t>(gatr2::kResultUnavailable)
+                               : documents_->read(ctx.doc_kind, ctx.doc_id, ctx.doc_offset,
+                                                  ctx.doc_max_len, reply);
+        }
+        break;
+    case gatr2::kOpControl: {
+        const std::shared_ptr<const ProfileBinding> profile =
+            profile_host_ != nullptr ? profile_host_->applied() : nullptr;
+        reply.calibration    = calibration(in, profile.get());
+        reply.control_detail = ctx.control_detail;
+        break;
+    }
+    default: break;
     }
 
     LinkStats* stats =

@@ -1,20 +1,21 @@
 // imu_heading_increment.h
 // Measurement model: one yaw-rate sensor into bias-corrected heading
-// increments. Bias is the mean of the first bias_samples readings, taken
-// while the robot sits still; nothing is published until calibration
-// completes, then one HeadingIncrement per new sample, integrated from the
+// increments. Bias is the mean of the first bias_samples readings, spanning
+// at least window_ms of sample time, taken while the robot sits still;
+// nothing is published until calibration completes, then one
+// HeadingIncrement per new sample, integrated from the
 // producer's accumulator when it has one (packet batching loses nothing)
 // and by endpoint trapezoid only when the producer offers no accumulator.
 //
 //   <Observation id="imu_heading" type="imu_heading_increment">
 //       <Input sensor_id="robot_imu"/>
-//       <Calibration bias_samples="200" max_gap_ms="250"/>
+//       <Calibration bias_samples="200" max_gap_ms="250" window_ms="0"/>
 //       <Output observation_id="imu_heading"/>
 //   </Observation>
 //
 // An outage longer than max_gap_ms, a nonpositive interval, or an
 // accumulator discontinuity reseeds instead of integrating; the interval
-// is dropped, never bridged.
+// is dropped, never bridged. recalibrate() starts a new bias window.
 
 #pragma once
 #include <memory>
@@ -49,6 +50,7 @@ public:
     void settle(const ObservationId& id, bool) override {
         if (id == output_) offered_ = false;
     }
+    bool recalibrate() override;
 
 private:
     FunctionStatus ingest(const RobotObservationInput& in, RobotObservationMap& out);
@@ -60,6 +62,7 @@ private:
     TypedSensorBinding<ImuSample> binding_;
     long                          bias_samples_ = 200;
     long                          max_gap_ms_   = 250;
+    long                          window_ms_    = 0;
 
     uint64_t last_sequence_ = 0;
     uint64_t last_epoch_    = 0;
@@ -67,6 +70,7 @@ private:
     long     cal_count_     = 0;
     double   cal_sum_       = 0.0;
     double   bias_rad_s_    = 0.0;
+    MonotonicTime cal_start_;
 
     bool          have_prev_        = false;
     double        prev_rate_        = 0.0;

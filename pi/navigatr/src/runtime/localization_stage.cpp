@@ -130,6 +130,30 @@ void LocalizationExecutor::reset() {
     configured_placement_pending_ = configured_placement_.requested;
 }
 
+void LocalizationExecutor::continueFrom(const LocalizationExecutor& previous) {
+    feed_        = previous.feed_;
+    publication_ = previous.publication_;
+    updates_     = previous.updates_;
+
+    state_                 = RobotState{};
+    state_.odometry_epoch  = previous.state_.odometry_epoch + 1;
+    state_.anchor_revision = previous.state_.anchor_revision;
+    LocalizationStatus status;
+    status.functions      = functionStatus();
+    status.estimator_type = estimator_type_;
+    status.updates        = updates_;
+    feed_->publish(state_, status, false, ++publication_);
+    configured_placement_pending_ = configured_placement_.requested;
+}
+
+bool LocalizationExecutor::recalibrate() {
+    bool any = false;
+    for (Function& f : functions_) {
+        any = f.function->recalibrate() || any;
+    }
+    return any;
+}
+
 std::optional<LocalizationExecutor> make_localization(const ConfigNode&         node,
                                                       const FunctionRegistry&   functions,
                                                       const SensorCatalog&      sensors,

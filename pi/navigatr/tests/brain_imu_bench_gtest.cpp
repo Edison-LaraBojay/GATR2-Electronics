@@ -131,7 +131,7 @@ struct BenchRig {
     }
     gatr2::BrainRequest imuRequest(uint32_t stamp, int32_t angle = 0, bool valid = true) {
         gatr2::BrainRequest r;
-        r.op = gatr2::kOpGetStateWithImu;
+        r.op = gatr2::kOpGetState;
         r.session = session;
         r.request_id = rid++;
         r.imu_flags = valid ? gatr2::kBenchImuValid : 0;
@@ -159,7 +159,7 @@ TEST(BrainImuBench, WirePathPlacementStraightTurnAndInspection) {
     EXPECT_EQ(r.system->robot().anchor_revision, revision);
     r.wheels(4000, 4000);
     const auto state = r.request(r.imuRequest(160));
-    EXPECT_EQ(state.op, gatr2::kOpGetStateWithImu);
+    EXPECT_EQ(state.op, gatr2::kOpGetState);
     EXPECT_NE(state.state.robot_flags & gatr2::kRobotPoseValid, 0);
     EXPECT_NEAR(state.state.x_mm, 1000 + 2 * kPi * 0.0254 * 1000, 2);
     const auto x = r.system->robot().odom_pose.x_m;
@@ -213,11 +213,25 @@ TEST(BrainImuBench, DuplicateInvalidStaleAndRestartDoNotBridgeTravel) {
     EXPECT_DOUBLE_EQ(r.system->robot().odom_pose.x_m, resumed);
 }
 
-TEST(BrainImuBench, OpRequiresExplicitConfiguration) {
+TEST(BrainImuBench, SamplesNeedExplicitConfiguration) {
     BenchRig r;
     ASSERT_TRUE(r.build(false));
-    EXPECT_EQ(r.request(r.imuRequest(100)).result, gatr2::kResultUnsupportedOp);
+    const auto reply = r.request(r.imuRequest(100));
+    EXPECT_EQ(reply.result, gatr2::kResultOk);   // the state is served, the sample ignored
     EXPECT_FALSE(r.imu->valid);
+    EXPECT_EQ(r.imu->sequence, 0u);
+}
+
+TEST(BrainImuBench, UnknownSampleFlagsAreRefusedAndChangeNothing) {
+    BenchRig r;
+    ASSERT_TRUE(r.build());
+    auto bad = r.imuRequest(100);
+    bad.imu_flags |= 0x80;
+    EXPECT_EQ(r.request(bad).result, gatr2::kResultInvalidArgument);
+    EXPECT_FALSE(r.imu->valid);
+    EXPECT_EQ(r.request(r.imuRequest(100)).result, gatr2::kResultOk);
+    EXPECT_TRUE(r.imu->valid);
+    EXPECT_EQ(r.imu->stamp_ms, 100u);
 }
 
 TEST(BrainImuBench, PerpendicularWheelsMeasureForwardAndSidewaysIndependently) {

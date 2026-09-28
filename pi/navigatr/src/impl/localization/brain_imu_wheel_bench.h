@@ -8,7 +8,16 @@
 namespace navigatr {
 // Arrival-time bench adapter for Pico wheels and the Brain's VEX IMU.
 // Planar mode resolves two independent wheel directions; parallel mode
-// explicitly assumes zero sideways travel for two forward-facing wheels.
+// explicitly assumes zero sideways travel for two forward-measuring wheels
+// (0 or 180 degrees). Wheels are inline TrackingWheel elements (the
+// tracking_wheel_motion schema) or a Wheels reference to wheel_geometry;
+// travel = d(wheel angle) * radius * travel_scale * sign.
+//
+//   <Observation id="tracking_motion" type="brain_imu_planar_bench">
+//       <Wheels resource_id="wheel_geometry"><Use wheel_id=.../>x2</Wheels>
+//       <Imu resource_id="brain_imu"/>
+//       <Output observation_id="tracking_motion"/>
+//   </Observation>
 class BrainImuWheelBench : public RobotObservationFunction {
 public:
     static std::unique_ptr<RobotObservationFunction> createParallel(
@@ -29,7 +38,7 @@ private:
         const ConfigNode&, RobotObservationInitializationContext&, std::string&, bool planar);
     struct Wheel {
         TypedSensorBinding<EncoderSample> binding;
-        double radius = 0, ux = 1, uy = 0, k = 0, sign = 1, angle = 0;
+        double radius = 0, scale = 1, ux = 1, uy = 0, k = 0, sign = 1, angle = 0;
         uint64_t sequence = 0, epoch = 0, discontinuity = 0;
     };
     ObservationFunctionId id_;

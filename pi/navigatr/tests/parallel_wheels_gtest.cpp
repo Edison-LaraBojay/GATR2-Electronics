@@ -5,7 +5,7 @@
 // wire path through planar_motion_integrator; the checked-in parallel-wheel
 // profiles: shared localization, no camera or third wheel in profile A,
 // the ordinary noop world estimation driven by a synthetic rig, and Brain
-// placement plus the unsupported landmark answer over the real brain link.
+// placement plus the unavailable field map answer over the real brain link.
 
 #include <gtest/gtest.h>
 
@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "common/frame_codec.h"
+#include "common/link_documents.h"
 #include "config/composition.h"
 #include "impl/localization/tracking_wheel_motion.h"
 #include "impl/resources/serial_links.h"
@@ -866,7 +867,7 @@ std::vector<gatr2::BrainReply> takeReplies(MemoryLink& link) {
 
 } // namespace
 
-TEST(ParallelWheelProfiles, BrainPlacesTheRobotAndLandmarksAreUnsupported) {
+TEST(ParallelWheelProfiles, BrainPlacesTheRobotAndReadsTheField) {
     ProfileTree      tree;
     FunctionRegistry functions;
     registerAll(functions);
@@ -949,18 +950,62 @@ TEST(ParallelWheelProfiles, BrainPlacesTheRobotAndLandmarksAreUnsupported) {
     EXPECT_NEAR(field.y_m, truth.y_m, 0.03);
     EXPECT_NEAR(radToDeg(wrapAngle(field.heading_rad - truth.heading_rad)), 0.0, 2.0);
 
-    // world estimation is off: a landmark request is refused, nothing fabricated
-    gatr2::BrainRequest select;
-    select.op           = gatr2::kOpSelectLandmark;
-    select.session      = session;
-    select.request_id   = 4;
-    select.landmark_id  = 1;
-    select.select_flags = gatr2::kSelectFlagSelected;
-    EXPECT_EQ(ask(select).result, gatr2::kResultLandmarkUnsupported);
-    get.request_id = 5;
+    // the profile serves the Override field: the map, then an estimate in the
+    // placed frame, every object nominal with noop world estimation
+    get.request_id = 4;
     state          = ask(get);
     ASSERT_EQ(state.result, gatr2::kResultOk);
-    EXPECT_EQ(state.state.landmark_source, gatr2::kLandmarkSourceNone);
+    EXPECT_NE(state.state.map_id, 0u);
+    EXPECT_NE(state.state.estimate_id, 0u);
+    uint16_t   rid       = 5;
+    const auto readWhole = [&](uint8_t kind, uint32_t doc_id) {
+        std::vector<uint8_t> bytes;
+        gatr2::BrainRequest  read;
+        read.op       = gatr2::kOpReadDoc;
+        read.session  = session;
+        read.doc_kind = kind;
+        read.doc_id   = doc_id;
+        read.max_len  = gatr2::kDocChunkMax;
+        for (;;) {
+            read.request_id             = rid++;
+            read.doc_offset             = static_cast<uint16_t>(bytes.size());
+            const gatr2::BrainReply got = ask(read);
+            EXPECT_EQ(got.result, gatr2::kResultOk);
+            if (got.result != gatr2::kResultOk || got.data_len == 0) {
+                return bytes;
+            }
+            bytes.insert(bytes.end(), got.data, got.data + got.data_len);
+            if (bytes.size() >= got.doc_total_len) {
+                EXPECT_EQ(gatr2::crc32(bytes.data(), static_cast<uint32_t>(bytes.size())),
+                          got.doc_crc32);
+                return bytes;
+            }
+        }
+    };
+    const std::vector<uint8_t> map = readWhole(gatr2::kDocFieldMap, state.state.map_id);
+    EXPECT_EQ(map.size(), gatr2::fieldMapLen(17));
+    EXPECT_EQ(gatr2::crc32(map.data(), static_cast<uint32_t>(map.size())), state.state.map_id);
+    const std::vector<uint8_t> estimate =
+        readWhole(gatr2::kDocFieldEstimate, state.state.estimate_id);
+    ASSERT_EQ(gatr2::validateFieldEstimate(estimate.data(), static_cast<uint16_t>(estimate.size()),
+                                           map.data(), static_cast<uint16_t>(map.size()),
+                                           state.state.map_id),
+              gatr2::DocError::kNone);
+    gatr2::FieldEstimateHeader header;
+    ASSERT_TRUE(gatr2::decodeFieldEstimateHeader(estimate.data(),
+                                                 static_cast<uint16_t>(estimate.size()), header));
+    EXPECT_EQ(header.anchor_revision, 1u);
+    EXPECT_EQ(header.odometry_epoch, state.state.odometry_epoch);
+    for (uint16_t i = 0; i < header.object_count; ++i) {
+        gatr2::FieldEstimateRecord r;
+        ASSERT_TRUE(gatr2::decodeFieldEstimateRecord(estimate.data(),
+                                                     static_cast<uint16_t>(estimate.size()), i, r));
+        EXPECT_EQ(r.source, gatr2::kEstimateSourceNominal);
+    }
+    get.request_id = rid++;
+    state          = ask(get);
+    ASSERT_EQ(state.result, gatr2::kResultOk);
+    EXPECT_EQ(state.state.profile_state, gatr2::kProfileNone);   // XML robot, no profile
     EXPECT_TRUE(state.state.robot_flags & gatr2::kRobotLocalized);
     EXPECT_TRUE(state.state.robot_flags & gatr2::kRobotAnchorCommand);
     EXPECT_EQ(system->robot().anchor_revision, 1u);   // nothing moved the anchor again

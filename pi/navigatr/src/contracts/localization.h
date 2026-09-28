@@ -90,6 +90,10 @@ public:
     virtual void settle(const ObservationId&, bool /*accepted*/) {}
 
     virtual void reset() {}
+
+    // Restarts the function's own IMU bias calibration, keeping everything
+    // else. False when it calibrates nothing.
+    virtual bool recalibrate() { return false; }
 };
 
 struct RobotObservationInitializationContext {

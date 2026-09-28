@@ -1,172 +1,313 @@
 // main.cpp
-// GATR2 testing application. initialize() connects to the Pi and places the
-// robot, autonomous() runs the navigation demo, opcontrol() drives manually
-// and runs the demo on a button. DriveControl is the only motor writer.
-// Every wait is bounded.
+// GATR2 testing program: localization from the Pi, planning from
+// investiGATR, following and drive control from actuGATR. The robot profile
+// comes from brain/robot/gatr2_robot.h, the drivetrain, gains and tests from
+// include/robot_config.h.
+//
+// Controller: left stick Y forward, right stick X turn, left stick X strafe
+// (mecanum). A direct test, X avoiding test, Y landmark test, B cancel, UP
+// place at the start pose, DOWN recalibrate the IMU (drive idle, robot
+// still), LEFT/RIGHT speed scale. autonomous() runs the direct then the
+// avoiding test. The drive task is the only motor writer.
 
 #include "main.h"
-
-#include <cstdarg>
-#include <cstdio>
-#include <cstdlib>
-#include <functional>
-
-#include "communigatr/pros_driver.h"
-#include "drive_control.h"
-#include "investigatr/navigator.h"
 #include "robot_config.h"
+
+#include <cmath>
+#include <cstdio>
+#include <memory>
+
+#include "actugatr/drive_owner.h"
+#include "actugatr/ports.h"
+#include "actugatr/pros_drive.h"
+#include "actugatr/pros_motor_output.h"
+#include "communigatr/link_events.h"
+#include "communigatr/pros_link.h"
+#include "communigatr/pros_vex_imu.h"
+#include "communigatr/startup_placement.h"
+#include "investigatr/planner.h"
 
 namespace
 {
 
-using communigatr::ProsDriver;
-using investigatr::Seconds;
+using communigatr::Seconds;
+using investigatr::Pose;
 
-constexpr Seconds  kConnectWait   = 3.0; // initialize(): link up
-constexpr Seconds  kPlacementWait = 2.0; // initialize(): starting pose applied
-constexpr Seconds  kWaitMargin    = 1.0; // demo step wait beyond its motion timeout
-constexpr uint32_t kLoopMs        = 10;
+std::unique_ptr<communigatr::ProsVexImu>       g_vex;
+std::unique_ptr<communigatr::ProsLink>         g_link;
+std::unique_ptr<investigatr::GeometricPlanner> g_planner;
+std::unique_ptr<actugatr::Follower>            g_follower;
+std::unique_ptr<actugatr::Motion>              g_motion;
+std::unique_ptr<actugatr::Kinematics>          g_kinematics;
+std::unique_ptr<actugatr::ProsMotorOutput>     g_motors;
+std::unique_ptr<actugatr::Drive>               g_drive;
+std::unique_ptr<actugatr::DriveOwner>          g_owner;
+std::unique_ptr<actugatr::ProsDrive>           g_task;
+std::unique_ptr<communigatr::StartupPlacement> g_startup;
+communigatr::LinkEvents                        g_events;
 
-// Screen lines.
-constexpr int16_t kLineTitle  = 0;
-constexpr int16_t kLineInit   = 1;
-constexpr int16_t kLineLink   = 2;
-constexpr int16_t kLinePose   = 3;
-constexpr int16_t kLineMotion = 4;
-constexpr int16_t kLineDemo   = 5;
+char        g_config_error[80] = {};
+const char* g_message        = "Starting";
+double      g_speed_scale    = robot_config::kSpeedScale;
 
-// Created once in initialize() and kept for the program's life.
-ProsDriver*   navigatr = nullptr;
-DriveControl* drive    = nullptr;
-
-__attribute__((format(printf, 2, 3))) void show(int16_t line, const char* format, ...) {
-    char    text[64];
-    va_list args;
-    va_start(args, format);
-    std::vsnprintf(text, sizeof(text), format, args);
-    va_end(args);
-    pros::screen::print(pros::E_TEXT_MEDIUM, line, "%-48s", text);
+Seconds now() {
+    return communigatr::ProsLink::now();
 }
 
-const char* placementName(communigatr::PlacementResult result) {
-    switch (result) {
-    case communigatr::PlacementResult::kNone:
-        return "not sent";
-    case communigatr::PlacementResult::kPending:
-        return "pending";
-    case communigatr::PlacementResult::kApplied:
-        return "applied";
-    case communigatr::PlacementResult::kRejected:
-        return "rejected";
-    case communigatr::PlacementResult::kTimedOut:
-        return "timed out, outcome unknown";
-    case communigatr::PlacementResult::kSessionLost:
-        return "session lost";
-    }
-    return "?";
+bool motionReady() {
+    return g_task != nullptr;
 }
 
-// Link, pose and motion lines, at most every 100 ms.
-void showStatus() {
-    static uint32_t next = 0;
-    if (pros::millis() < next) {
-        return;
-    }
-    next = pros::millis() + 100;
+bool tank() {
+    return robot_config::kDrivetrain == robot_config::Drivetrain::kTank;
+}
 
-    const communigatr::ProsDriverStatus link = navigatr->status();
-    if (link.connected) {
-        show(kLineLink, "link up s %08x pi %08x %d ms", static_cast<unsigned>(link.session),
-             static_cast<unsigned>(link.pi_instance), static_cast<int>(link.link_age * 1000));
+investigatr::MotionModel model() {
+    return tank() ? actugatr::motionModel(robot_config::tank(), gatr2_robot::kFootprint,
+                                          robot_config::kClearance, robot_config::limits())
+                  : actugatr::motionModel(robot_config::mecanum(), gatr2_robot::kFootprint,
+                                          robot_config::kClearance, robot_config::limits());
+}
+
+bool configError(const char* what, const char* why) {
+    std::snprintf(g_config_error, sizeof(g_config_error), "%s: %s", what, why ? why : "invalid");
+    return false;
+}
+
+// Every active Smart Port device on its own port and every drive setting
+// valid, or no motors at all.
+bool checkConfig() {
+    actugatr::PortMap map;
+    if (tank()) {
+        map.add(robot_config::tank());
     } else {
-        show(kLineLink, "link down ready %d err %d tx %u rx %u", link.ready,
-             static_cast<int>(link.error), static_cast<unsigned>(link.stats.requests),
-             static_cast<unsigned>(link.stats.replies));
+        map.add(robot_config::mecanum());
     }
-
-    const investigatr::InputSnapshot input = navigatr->latest(ProsDriver::now());
-    if (input.robot.valid) {
-        show(kLinePose, "pose %.3f %.3f m %.1f deg %d ms f%u", input.robot.pose.x,
-             input.robot.pose.y, input.robot.pose.heading * 180.0 / investigatr::kPi,
-             static_cast<int>(input.robot.age * 1000), static_cast<unsigned>(input.frame));
-    } else {
-        show(kLinePose, "pose invalid f%u", static_cast<unsigned>(input.frame));
+    if (gatr2_robot::usesVexImu()) {
+        map.add(gatr2_robot::kVexImuPort, "VEX IMU");
     }
-
-    const investigatr::MotionStatus motion = drive->status();
-    show(kLineMotion, "cmd %u %s %s %.3f m", static_cast<unsigned>(motion.command_id),
-         investigatr::toString(motion.state), investigatr::toString(motion.reason),
-         motion.distance_error);
-}
-
-// Polls done every loop for at most limit seconds.
-bool waitUntil(Seconds limit, const std::function<bool()>& done) {
-    const Seconds end = ProsDriver::now() + limit;
-    while (!done()) {
-        if (ProsDriver::now() >= end) {
-            return false;
-        }
-        showStatus();
-        pros::delay(kLoopMs);
+    if (!gatr2_robot::kUseUsb) {
+        map.add(gatr2_robot::kLinkPort, "Pi link");
+    }
+    if (!map.ok()) {
+        return configError("ports", map.error());
+    }
+    const char* why = nullptr;
+    if (tank() ? !actugatr::valid(robot_config::tank(), &why)
+               : !actugatr::valid(robot_config::mecanum(), &why)) {
+        return configError("drivetrain", why);
+    }
+    const actugatr::FollowerConfig follower = robot_config::follower();
+    if (!actugatr::valid(follower, &why)) {
+        return configError("follower", why);
+    }
+    if (!actugatr::valid(robot_config::motion(model()), &why)) {
+        return configError("motion", why);
+    }
+    // The planner's clearance must cover the most drift the follower allows.
+    if (!(std::hypot(follower.position_tolerance, follower.tracking_tolerance) <
+          robot_config::kClearance)) {
+        return configError("follower", "tolerances not below kClearance");
     }
     return true;
 }
 
-// Waits for command id to end. False, with the drive stopped, when it fails,
-// is aborted or outlasts its motion timeout; false when another command
-// replaced it.
-bool finished(const char* name, investigatr::CommandId id, const std::function<bool()>& abort) {
-    show(kLineDemo, "%s: running", name);
-    const Seconds end = ProsDriver::now() + robot_config::kDemoTimeout + kWaitMargin;
-    while (true) {
-        const investigatr::MotionStatus status = drive->status();
-        if (status.command_id != id) {
-            show(kLineDemo, "%s: replaced", name);
-            return false;
-        }
-        if (status.state == investigatr::MotionState::kCompleted) {
-            show(kLineDemo, "%s: completed", name);
-            return true;
-        }
-        if (investigatr::isTerminal(status.state)) {
-            drive->stop();
-            show(kLineDemo, "%s: %s %s", name, investigatr::toString(status.state),
-                 investigatr::toString(status.reason));
-            return false;
-        }
-        if (abort() || ProsDriver::now() >= end) {
-            drive->stop();
-            show(kLineDemo, "%s: stopped", name);
-            return false;
-        }
-        showStatus();
-        pros::delay(kLoopMs);
+void createLink() {
+    communigatr::LinkConfig config;
+    if (gatr2_robot::kUseUsb) {
+        config.transport = communigatr::Transport::kUsb;
+    } else {
+        config.transport  = communigatr::Transport::kSmartPort;
+        config.smart_port = gatr2_robot::kLinkPort;
+        config.baud       = gatr2_robot::kLinkBaud;
     }
+    config.profile = gatr2_robot::profile();
+    if (gatr2_robot::usesVexImu()) {
+        g_vex.reset(new communigatr::ProsVexImu(gatr2_robot::kVexImuPort));
+        communigatr::ProsVexImu* vex = g_vex.get();
+        config.client.bench_imu      = [vex] { return vex->sample(); };
+    }
+    g_link.reset(new communigatr::ProsLink(config));
 }
 
-// Absolute goal, waypoint path, landmark relative alignment. Ends at the
-// first step that does not complete.
-void runDemo(const std::function<bool()>& abort) {
-    investigatr::MotionOptions options;
-    options.timeout                   = robot_config::kDemoTimeout;
-    options.require_observed_landmark = robot_config::kDemoRequireObserved;
-
-    if (!finished("goal", drive->goTo(robot_config::kDemoGoal, options), abort)) {
-        return;
+void createDrive() {
+    actugatr::StopMode   stop = actugatr::StopMode::kBrake;
+    actugatr::WheelDrive wheels;
+    if (tank()) {
+        const actugatr::TankConfig c = robot_config::tank();
+        wheels                       = c.wheels;
+        stop                         = c.stop_mode;
+        g_kinematics.reset(new actugatr::TankKinematics(c.track_width));
+        g_motors.reset(new actugatr::ProsMotorOutput(c));
+        g_follower.reset(new actugatr::DifferentialFollower(robot_config::follower()));
+    } else {
+        const actugatr::MecanumConfig c = robot_config::mecanum();
+        wheels = c.wheels;
+        stop   = c.stop_mode;
+        g_kinematics.reset(new actugatr::MecanumKinematics(c.track_width, c.wheelbase));
+        g_motors.reset(new actugatr::ProsMotorOutput(c));
+        g_follower.reset(new actugatr::HolonomicFollower(robot_config::follower()));
     }
+    g_planner.reset(new investigatr::GeometricPlanner());
+    g_motion.reset(new actugatr::Motion(*g_link, *g_planner, *g_follower,
+                                        robot_config::motion(model())));
+    g_motion->setPathSink(g_link.get());
+    actugatr::DriveConfig drive;
+    drive.stop_mode = stop;
+    g_drive.reset(new actugatr::Drive(*g_kinematics, wheels, *g_motors, drive));
+    g_owner.reset(new actugatr::DriveOwner(*g_motion, *g_drive, robot_config::manual()));
+    g_task.reset(new actugatr::ProsDrive(*g_owner, *g_drive, &communigatr::ProsLink::now));
+}
 
-    investigatr::Path path;
-    for (const investigatr::Pose& pose : robot_config::kDemoPath) {
-        path.push_back({investigatr::Destination::field(pose), false});
-    }
-    if (!finished("path", drive->follow(path, options), abort)) {
-        return;
-    }
+actugatr::MoveOptions testOptions() {
+    actugatr::MoveOptions o;
+    o.timeout     = 20.0;
+    o.speed_scale = g_speed_scale;
+    return o;
+}
 
-    finished("landmark",
-             drive->goToRelative(robot_config::kDemoLandmarkId, robot_config::kDemoLandmarkOffset,
-                                 options),
-             abort);
+actugatr::CommandId runDirect() {
+    return g_task->goToDirect(robot_config::kDirectGoal, investigatr::Reference::origin(),
+                              testOptions());
+}
+
+actugatr::CommandId runAvoiding() {
+    return g_task->goToAvoiding(robot_config::kAvoidGoal, investigatr::Reference::origin(),
+                                testOptions());
+}
+
+actugatr::CommandId runLandmark() {
+    actugatr::MoveOptions o        = testOptions();
+    o.require_observed_reference = robot_config::kRequireObservedLandmark;
+    return g_task->goToAvoiding(robot_config::kLandmarkOffset, robot_config::landmark(), o);
+}
+
+bool moving(const actugatr::DriveSnapshot& s) {
+    return s.motion.command_id != 0 && s.motion.state != actugatr::MotionState::kIdle &&
+           !actugatr::isTerminal(s.motion.state);
+}
+
+// Waits for command id to end, at most limit seconds. False unless completed.
+bool waitFor(actugatr::CommandId id, Seconds limit) {
+    if (id == 0) {
+        return false;
+    }
+    const Seconds end = now() + limit;
+    while (now() < end) {
+        actugatr::DriveSnapshot s;
+        if (g_task->status(s)) {
+            if (s.motion.command_id != id) {
+                return false; // replaced
+            }
+            if (actugatr::isTerminal(s.motion.state)) {
+                return s.motion.state == actugatr::MotionState::kCompleted;
+            }
+        }
+        pros::delay(20);
+    }
+    g_task->cancel();
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Screen and background work.
+// ---------------------------------------------------------------------------
+
+template <typename... Args> void row(int index, const char* format, Args... args) {
+    const int y = 4 + index * 20;
+    pros::screen::erase_rect(0, y, 479, y + 19);
+    pros::screen::print(pros::E_TEXT_MEDIUM, 6, y, format, args...);
+}
+
+void display() {
+    const communigatr::ProsLinkStatus link  = g_link->status();
+    const investigatr::RobotState     robot = g_link->robot(now());
+    row(0, "GATR2 testing | %s | %s", gatr2_robot::kUseUsb ? "USB" : "RS-485",
+        link.busy ? "busy" : communigatr::toString(link.readiness));
+    if (!motionReady()) {
+        row(1, "DRIVE OFF: %s", g_config_error);
+    } else {
+        static actugatr::DriveSnapshot drive; // kept when a read is busy
+        g_task->status(drive);
+        const actugatr::MotionStatus& m = drive.motion;
+        row(1, "Drive %s | cmd %lu %s %s", actugatr::toString(drive.mode),
+            static_cast<unsigned long>(m.command_id), actugatr::toString(m.state),
+            actugatr::toString(m.reason));
+        row(2, "err %.3f m %.1f deg xt %.3f  seg %u/%u  plans %u", m.distance_error,
+            m.heading_error * 180.0 / investigatr::kPi, m.cross_track, unsigned(m.segment),
+            unsigned(m.segment_count), unsigned(m.plans));
+    }
+    if (robot.valid()) {
+        row(3, "x %+.3f y %+.3f h %+.1f  age %.0f ms", robot.pose.x, robot.pose.y,
+            robot.pose.heading * 180.0 / investigatr::kPi, robot.age * 1000.0);
+    } else {
+        row(3, "Pose: %s", investigatr::toString(robot.status));
+    }
+    row(4, "Speed scale %.2f  Start: %s", g_speed_scale, communigatr::toString(g_startup->state()));
+    row(5, "Last: %s", g_events.size() > 0 ? communigatr::toString(g_events.at(0).event) : "-");
+    row(6, "A direct  X avoid  Y landmark  B cancel");
+    row(7, "UP place  DOWN recal IMU  LEFT/RIGHT speed");
+    row(8, "%s", g_message);
+}
+
+// Link, profile and sensors are up: the readiness got past them.
+bool sensorsReady(communigatr::Readiness r) {
+    using communigatr::Readiness;
+    return r != Readiness::kConnecting && r != Readiness::kReconnecting &&
+           r != Readiness::kProfilePending && r != Readiness::kProfileRejected &&
+           r != Readiness::kSensorsUnavailable && r != Readiness::kSensorsInitializing;
+}
+
+// Pi IMU calibration not settled; a failed one waits for a recalibration.
+bool calibrating(communigatr::Readiness r) {
+    using communigatr::Readiness;
+    return r == Readiness::kWaitingStill || r == Readiness::kCalibrating ||
+           r == Readiness::kCalibrationFailed;
+}
+
+void background() {
+    double   next_start   = 0;
+    uint32_t last_display = pros::millis();
+    while (true) {
+        const Seconds t = now();
+        if (!g_link->status().started && t >= next_start) {
+            g_link->start();
+            next_start = t + 1.0;
+        }
+        // A busy link skips the history and start-up decisions this cycle.
+        const communigatr::ProsLinkStatus link = g_link->status();
+        if (!link.busy) {
+            communigatr::LinkSnapshot snap;
+            snap.connected       = link.connected;
+            snap.session         = link.session;
+            snap.pi_instance     = link.pi_instance;
+            snap.profile         = link.profile.state;
+            snap.state_valid     = link.state.valid;
+            snap.localized       = link.summary.localized;
+            snap.health          = link.state.valid ? link.state.state.health : 0;
+            snap.calibration     = link.summary.calibration;
+            snap.odometry_epoch  = link.state.state.odometry_epoch;
+            snap.anchor_revision = link.state.state.anchor_revision;
+            g_events.update(snap, t);
+
+            communigatr::StartupInputs in;
+            in.connected     = link.connected;
+            in.profile_ready = link.profile.state == communigatr::ProfileSync::kApplied;
+            in.sensors_ready = sensorsReady(link.readiness);
+            in.calibrating   = calibrating(link.readiness);
+            in.localized     = link.summary.localized;
+            if (g_startup->update(in, t) == communigatr::StartupState::kSubmit &&
+                g_link->place(gatr2_robot::kStartPose) != 0) {
+                g_startup->submitted();
+            }
+        }
+
+        if (pros::millis() - last_display >= 100) {
+            display();
+            last_display = pros::millis();
+        }
+        pros::delay(20);
+    }
 }
 
 double stick(int32_t value) {
@@ -175,60 +316,94 @@ double stick(int32_t value) {
 
 } // namespace
 
-// Link up, then the starting placement. Commands issued without an applied
-// placement wait for input and fail with kInputUnavailable.
 void initialize() {
-    show(kLineTitle, "GATR2 testing");
-
-    communigatr::ProsDriverConfig config;
-    config.port = robot_config::kNavigatrPort;
-    config.baud = robot_config::kNavigatrBaud;
-    navigatr    = new ProsDriver(config);
-    drive       = new DriveControl(*navigatr, &ProsDriver::now);
-
-    const char* why = nullptr;
-    if (!investigatr::Navigator::valid(robot_config::navigatorConfig(), &why)) {
-        show(kLineInit, "init: navigator config invalid: %s", why);
-        return;
+    pros::screen::set_eraser(0x00000000);
+    pros::screen::set_pen(0x00FFFFFF);
+    pros::screen::erase();
+    createLink();
+    g_startup.reset(new communigatr::StartupPlacement(robot_config::kStartupPolicy,
+                                                      robot_config::kStartupWaitSeconds));
+    if (checkConfig()) {
+        createDrive();
+        g_message = "Ready: drive disabled until opcontrol or autonomous";
+    } else {
+        g_message = "Config error: fix robot_config.h, the drive stays off";
     }
-    if (!navigatr->start()) {
-        show(kLineInit, "init: port %d not opened, errno %d", robot_config::kNavigatrPort, errno);
-        return;
-    }
-    if (!waitUntil(kConnectWait, [] { return navigatr->status().connected; })) {
-        show(kLineInit, "init: no link, robot not placed");
-        return;
-    }
-
-    const communigatr::PlacementTicket ticket = navigatr->submitPlacement(robot_config::kStartPose);
-    waitUntil(kPlacementWait, [ticket] {
-        return navigatr->placementResult(ticket) != communigatr::PlacementResult::kPending;
-    });
-    const communigatr::PlacementStatus placement = navigatr->placementStatus(ticket);
-    show(kLineInit, "init: placement %s, result %d", placementName(placement.state),
-         placement.result);
+    static pros::Task task(background, "testing ui");
 }
 
-void disabled() { drive->stop(); }
+void disabled() {
+    if (motionReady()) {
+        g_task->disable();
+    }
+}
 
 void competition_initialize() {}
 
 void autonomous() {
-    runDemo([] { return false; });
+    if (!motionReady()) {
+        return;
+    }
+    if (waitFor(runDirect(), 25.0)) {
+        waitFor(runAvoiding(), 25.0);
+    }
 }
 
-// Left stick Y drives forward, right stick X turns (right = clockwise).
 void opcontrol() {
-    pros::Controller master(pros::E_CONTROLLER_MASTER);
+    pros::Controller        master(pros::E_CONTROLLER_MASTER);
+    actugatr::DriveSnapshot drive; // kept when a read is busy
     while (true) {
-        if (master.get_digital_new_press(robot_config::kDemoButton)) {
-            runDemo([&master] { return master.get_digital(robot_config::kCancelButton) != 0; });
+        if (motionReady()) {
+            g_task->status(drive);
         }
-        investigatr::DriveCommand demand;
-        demand.forward = stick(master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y));
-        demand.turn    = -stick(master.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X));
-        drive->manual(demand);
-        showStatus();
-        pros::delay(kLoopMs);
+        if (motionReady()) {
+            if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A)) {
+                g_message = runDirect() != 0 ? "Direct test running" : "Drive busy";
+            }
+            if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_X)) {
+                g_message = runAvoiding() != 0 ? "Avoiding test running" : "Drive busy";
+            }
+            if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_Y)) {
+                g_message = runLandmark() != 0 ? "Landmark test running" : "Drive busy";
+            }
+            if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_B)) {
+                g_task->cancel();
+                g_message = "Cancelled";
+            }
+            if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_LEFT)) {
+                g_speed_scale = std::max(0.1, g_speed_scale - 0.1);
+            }
+            if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
+                g_speed_scale = std::min(1.0, g_speed_scale + 0.1);
+            }
+        }
+        if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_UP)) {
+            g_message = g_link->place(gatr2_robot::kStartPose) != 0 ? "Placing at the start pose"
+                                                                    : "Place refused";
+        }
+        if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_DOWN)) {
+            if (moving(drive)) {
+                g_message = "Recalibrate refused: a movement is running";
+            } else if (g_vex) {
+                g_vex->recalibrate();
+                g_message = "VEX IMU calibrating: hold still";
+            } else {
+                g_message = g_link->recalibrate() != 0 ? "IMU recalibration requested"
+                                                       : "Recalibrate refused";
+            }
+        }
+
+        if (motionReady()) {
+            actugatr::ManualDemand d;
+            d.forward = stick(master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y));
+            d.strafe  = -stick(master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X));
+            d.turn    = -stick(master.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X));
+            const bool sticks = d.forward != 0 || d.strafe != 0 || d.turn != 0;
+            // Sticks take over from a running test; otherwise the test keeps the drive.
+            if (sticks || !moving(drive)) {
+                g_task->manual(d);
+            }
+        }
+        pros::delay(10);
     }
 }

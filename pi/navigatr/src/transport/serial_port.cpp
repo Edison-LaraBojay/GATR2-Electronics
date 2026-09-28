@@ -99,6 +99,9 @@ bool SerialPort::open(const std::string& device, int baud, std::string& err) {
     cfsetispeed(&tio, speed);
     cfsetospeed(&tio, speed);
     tio.c_cflag |= CLOCAL | CREAD;
+#ifdef CRTSCTS
+    tio.c_cflag &= ~CRTSCTS;   // a stale RTS/CTS setting would stall output
+#endif
     tio.c_cc[VMIN]  = 0;
     tio.c_cc[VTIME] = 0;
 
@@ -232,8 +235,14 @@ int SerialPort::transmitterEmpty() {
         lsr_unsupported_ = true;
     }
 #endif
-    // blocks until sent, no deadline of its own
-    return tcdrain(fd_) == 0 ? 1 : -1;
+    // Never tcdrain here: it has no deadline and the driver enable is held.
+    // An empty kernel queue can still leave bytes in the UART FIFO; the
+    // caller only polls after the frame airtime and holds the post guard.
+    int queued = 0;
+    if (::ioctl(fd_, TIOCOUTQ, &queued) != 0) {
+        return -1;
+    }
+    return queued == 0 ? 1 : 0;
 }
 
 void SerialPort::discardOutput() {

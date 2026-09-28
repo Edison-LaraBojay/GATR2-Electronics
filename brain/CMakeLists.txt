@@ -27,3 +27,4 @@ include(GoogleTest)
 
 add_subdirectory(investiGATR)
 add_subdirectory(communiGATR)
+add_subdirectory(actuGATR)

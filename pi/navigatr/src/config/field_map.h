@@ -1,8 +1,7 @@
 // field_map.h
 // Field landmark data, meters and radians. This is data, not behavior, and
 // the core runtime never reads it; it is loaded as a typed resource and
-// consumed only by the implementations that reference it. Brain wire ids
-// are not field facts and do not appear here.
+// consumed only by the implementations that reference it.
 //
 // A landmark has one semantic origin, one nominal field pose, any number of
 // physical tag mounts, and any number of named approach frames. A printed
@@ -10,14 +9,21 @@
 // observed_id, and deciding which mount produced an observation is an
 // association implementation's job, decided by full pose, never forced.
 //
-// Optional display data, never read by estimation: a Dimensions element
-// (perimeter box plus the provenance of the numbers), Feature elements
-// (static unobserved geometry drawn as labeled boxes or tape), and one
-// Visual per Landmark (prism or box plus the tag carrier plate). See
+// Planning data, explicit and separate from display data: the root
+// revision, a Boundary, a wire_id per Landmark and Obstacle (the stable
+// semantic object id the Brain names, never a printed tag id), and at most
+// one CollisionBox per Landmark or Obstacle. Only an element with a
+// CollisionBox is an obstacle.
+//
+// Optional display data, never read by estimation or planning: a Dimensions
+// element (perimeter box plus the provenance of the numbers), Feature
+// elements (static unobserved geometry drawn as labeled boxes or tape), and
+// one Visual per Landmark (prism or box plus the tag carrier plate). See
 // docs/field_assets.md.
 //
 // Frames:
 //   landmark frame: planar at the landmark origin, yaw = nominal heading
+//   obstacle frame: planar at the obstacle pose
 //   tag surface frame S: origin at the center of the detector's four
 //     pose-estimation corners, +x outward normal toward a viewer, +z the
 //     decoded printed top, +y right-handed completion
@@ -25,6 +31,7 @@
 //     +y left when looking outward, +z up
 
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -67,12 +74,43 @@ struct LandmarkVisualDecl {
     std::string note;
 };
 
+// Planning rectangle in its owner's frame: center and yaw in that frame,
+// size_x along the box's own x. Conservative 2D footprint, no height.
+struct CollisionBoxDecl {
+    bool        declared = false;
+    Pose2D      center;
+    double      size_x_m = 0.0;
+    double      size_y_m = 0.0;
+    std::string note;
+};
+
+// Region the robot footprint must stay inside, field frame.
+struct FieldBoundaryDecl {
+    bool        declared = false;
+    double      min_x_m  = 0.0;
+    double      min_y_m  = 0.0;
+    double      max_x_m  = 0.0;
+    double      max_y_m  = 0.0;
+    std::string note;
+};
+
+// Fixed field element for planning: never estimated.
+struct ObstacleDecl {
+    std::string      id;
+    uint16_t         wire_id = 0;
+    Pose2D           pose;   // T_field_obstacle
+    CollisionBoxDecl box;
+    std::string      note;
+};
+
 struct LandmarkDecl {
     FieldObjectId id;
-    Pose2D        nominal;   // T_field_landmark from the map
+    uint16_t      wire_id = 0;   // stable Brain object id, 0 = none declared
+    Pose2D        nominal;       // T_field_landmark from the map
     std::vector<ApproachFrameDecl> approaches;
     std::vector<TagMountDecl>      mounts;
     LandmarkVisualDecl             visual;
+    CollisionBoxDecl               box;   // landmark frame
 
     const ApproachFrameDecl* findApproach(const FrameId& frame) const {
         for (const ApproachFrameDecl& a : approaches) {
@@ -119,15 +157,27 @@ struct FieldFeatureDecl {
 };
 
 struct FieldMap {
-    std::string                   name;   // display name, may be empty
+    std::string                   name;           // display name, may be empty
+    uint16_t                      revision = 0;   // human bumped, 0 = undeclared
     FieldDimensions               dimensions;
+    FieldBoundaryDecl             boundary;
     std::vector<FieldFeatureDecl> features;
+    std::vector<ObstacleDecl>     obstacles;
     std::vector<LandmarkDecl>     landmarks;
 
     const LandmarkDecl* find(const FieldObjectId& id) const {
         for (const LandmarkDecl& l : landmarks) {
             if (l.id == id) {
                 return &l;
+            }
+        }
+        return nullptr;
+    }
+
+    const ObstacleDecl* findObstacle(const std::string& id) const {
+        for (const ObstacleDecl& o : obstacles) {
+            if (o.id == id) {
+                return &o;
             }
         }
         return nullptr;
@@ -144,9 +194,12 @@ struct FieldMap {
     }
 };
 
-// Parses the Landmark children of a field map resource node. Every
-// calibration-critical attribute is required and calibration gated; false
-// and err on bad content.
+// Parses a field map resource node. Every calibration-critical attribute is
+// required; false and err on bad content. Unknown children of the root, a
+// Landmark, an Obstacle, a Boundary or a CollisionBox are rejected, and so
+// are unknown attributes on those elements. wire_id is 1..65535 and unique
+// over landmarks and obstacles; publishing a map additionally needs every
+// landmark to have one (impl/publishing/field_documents.h).
 bool parseFieldMap(const ConfigNode& node, FieldMap& out,
                    std::string& err);
 

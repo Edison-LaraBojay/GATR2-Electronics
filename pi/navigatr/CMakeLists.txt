@@ -111,13 +111,16 @@ set(NAVIGATR_SOURCES
     src/impl/target_resolution/configured_targets.cpp
     src/impl/target_resolution/register_target_resolution.cpp
     src/impl/publishing/brain_link_publisher.cpp
+    src/impl/publishing/field_documents.cpp
     src/impl/publishing/register_publishers.cpp
     src/state/pose_history.cpp
     src/state/robot_state_feed.cpp
+    src/runtime/brain_profile_builder.cpp
     src/runtime/localization_stage.cpp
     src/runtime/register_all.cpp
     src/runtime/resource_stage.cpp
     src/runtime/sensor_stage.cpp
+    src/runtime/stationary_precheck.cpp
     src/runtime/world_estimation_stage.cpp
     src/runtime/system.cpp
     src/inspection/inspection_document.cpp
@@ -166,6 +169,7 @@ add_library(navigatr_core STATIC
     ${NAVIGATR_SOURCES}
     ${NAVIGATR_VIEWER_ASSETS_CPP}
     ${REPO_ROOT}/common/frame_codec.cpp
+    ${REPO_ROOT}/common/link_documents.cpp
 )
 target_include_directories(navigatr_core PUBLIC src ${REPO_ROOT})
 target_link_libraries(navigatr_core PUBLIC navigatr_tinyxml2 navigatr_apriltag Threads::Threads)
@@ -207,6 +211,23 @@ target_link_libraries(navigatr PRIVATE navigatr_core)
 if(NOT MSVC)
     target_compile_options(navigatr PRIVATE -Wall -Wextra)
 endif()
+
+# Brain field reference header from a field definition. The field_references
+# target regenerates the checked-in one from the Override field:
+#   cmake --build <dir> --target field_references
+add_executable(navigatr_field_refs src/app/field_refs.cpp)
+target_link_libraries(navigatr_field_refs PRIVATE navigatr_core)
+if(NOT MSVC)
+    target_compile_options(navigatr_field_refs PRIVATE -Wall -Wextra)
+endif()
+add_custom_target(field_references
+    COMMAND navigatr_field_refs
+        ${CMAKE_CURRENT_SOURCE_DIR}/config/override/field.xml
+        ${REPO_ROOT}/brain/testing/include/field_references.h
+        pi/navigatr/config/override/field.xml
+    COMMENT "Regenerating brain/testing/include/field_references.h"
+    VERBATIM
+)
 
 if(NAVIGATR_BUILD_TESTS)
     enable_testing()

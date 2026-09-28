@@ -470,7 +470,7 @@ workers, and camera cleanly.
 The V5 Brain runs a PROS program built on
 [communiGATR](../../../docs/communigatr.md). The Brain asks and the Pi answers,
 one request at a time, over the HAT's RS-485 link; the Pi never sends unasked.
-[Brain link v3](../../../docs/interfaces.md#brain-link-v3) defines the
+[Brain link v4](../../../docs/interfaces.md) defines the
 requests, sessions, and the timing budget. The Pi side is implemented and host
 tested with fake links and clocks; it has not run against a real Brain yet.
 
@@ -492,7 +492,8 @@ both slots (the camera inspection profile uses `noop`):
         <Gyro sensor_id="robot_imu"/>
         <BiasCal function_id="tracking_motion"/>
     </Health>
-    <FieldObject object_id="center_goal" wire_id="1"/>   <!-- optional, repeatable -->
+    <Field resource_id="override_field"                  <!-- optional -->
+           estimate_period_ms="200"/>
 </Publishing>
 ```
 
@@ -503,7 +504,9 @@ Checked when the profile loads:
 - `window_ms > 0` and `0 <= turnaround_guard_us < window_ms * 1000`.
 - `1000 / Loop rate_hz <= window_ms / 2`: with the default 40 ms window the
   loop must run at 50 Hz or faster. The supplied profiles run at 100 Hz.
-- `FieldObject` `wire_id` is 1..255; each object and each wire id appears once.
+- `Field` names a `field_map` with a `revision`, a `Boundary` and a `wire_id`
+  on every landmark; `estimate_period_ms` is positive. See
+  [landmarks](landmarks.md#field-documents).
 
 `Reply` bounds when a reply may start: no earlier than `turnaround_guard_us`
 after the read that completed the request, and no later than `window_ms` after
@@ -548,26 +551,28 @@ re-anchors it. The other hardware profiles get the starting field pose from
 the Brain's SET_POSE when its program initializes. The Pi answers `Pending`
 until localization has applied exactly that placement, then `Ok`.
 
-A Brain reboot opens a new session. That releases the landmark selection and
-any target latch, but it never moves the robot; only a SET_POSE does. A Pi
-restart or `reset()` changes `pi_instance`, so the Brain opens a new session.
+A Brain reboot opens a new session. That withdraws an unapplied SET_POSE, but
+it never moves the robot; only a SET_POSE does. A Pi restart or `reset()`
+changes `pi_instance`, so the Brain opens a new session.
 Localization restarted too, so the robot is unplaced until a placement applies
 again: the profile's `InitialPlacement` where configured, otherwise a new
 SET_POSE from the Brain program.
 
-### Landmarks on the supplied profiles
+### Field documents on the supplied profiles
 
-No supplied profile maps a `FieldObject` wire id yet.
+Every supplied `brain_link` profile publishes the Override field with
+`<Field resource_id="override_field" estimate_period_ms="200"/>`. GET_STATE
+reports its `map_id` and the newest `estimate_id`, and READ_DOC serves both
+documents in chunks.
 
-| Profile | World estimation | SELECT_LANDMARK reply | GET_STATE landmark |
-|---|---|---|---|
-| `three_wheel_imu` (`three_wheel_imu_no_correction.xml`), `parallel_wheels_bno08x` (`parallel_wheels_bno08x_no_camera.xml`) | `noop` | `LandmarkUnsupported` | source none |
-| `three_wheel_imu_camera`, `parallel_wheels_bno08x_camera` | `apriltag` | `UnknownLandmark` | source none |
+| Profile | World estimation | Field estimate records |
+|---|---|---|
+| `three_wheel_imu` (`three_wheel_imu_no_correction.xml`), `parallel_wheels_bno08x` (`parallel_wheels_bno08x_no_camera.xml`), `bench_vex_imu`, `bench_vex_imu_usb` | `noop` | every object nominal |
+| `three_wheel_imu_camera`, `parallel_wheels_bno08x_camera` | `apriltag` | each landmark nominal until the camera observes it in the current odometry epoch, then observed with its age |
 
-A release is always `Ok`. To serve a landmark, add a `FieldObject` mapping in
-the Publishing section with a wire id agreed with the Brain program. The Brain
-then gets the nominal pose until the camera observes that landmark, then the
-observed pose with its age; see [landmarks](landmarks.md#brain-output).
+Obstacles (loaders, toggles) are always nominal. See
+[landmarks](landmarks.md#field-documents) for the rules and
+[field assets](field_assets.md#planning-data) for the collision boxes.
 
 ### Check the link
 
@@ -607,15 +612,16 @@ None of these has been checked on the robot:
 | Landmark estimates and their observation/association diagnostics | `FieldSnapshot`; the viewer compares solid observed estimates with ghost nominal objects. |
 | Detection images | Camera panel with frame-matched overlays; `/api/frame.jpg?camera=front_camera` supplies the unannotated JPEG. |
 | Configuration/geometry and runtime snapshots | Inspection HTTP `/api/hello`, `/api/snapshot`, and live `/ws`; see [inspection](inspection.md). |
-| Robot pose, anchor identity, health bits, and the selected landmark for the Brain | `brain_link` command collection and publishing on `brain_uart` answer each Brain request once and send nothing unasked; positions are millimeters and headings centidegrees on the wire. See [Connect the Brain](#connect-the-brain). |
+| Robot pose, anchor identity, health bits, and the field documents for the Brain | `brain_link` command collection and publishing on `brain_uart` answer each Brain request once and send nothing unasked; positions are millimeters and headings centidegrees on the wire. See [Connect the Brain](#connect-the-brain). |
 
 The supplied hardware profiles select `brain_link` command collection and
 publishing and `noop` target resolution. A GET_STATE reply carries the robot
-pose, its measurement age, the anchor identity, and the configured health bits,
-plus a landmark pose only for a selected and mapped wire id. Full field heading
+pose, its measurement age, the anchor identity, the configured health bits, and
+the ids of the field map and estimate documents, which READ_DOC serves in
+chunks with every configured object. Full field heading
 is the wire convention; the viewer separately shows heading error from nominal.
 See [landmarks and reporting](landmarks.md#brain-output) and the
-[wire interface](../../../docs/interfaces.md#brain-link-v3).
+[wire interface](../../../docs/interfaces.md).
 
 The Pi estimates state and answers requests; Brain code owns robot movement
 ([investiGATR](../../../docs/investigatr.md) and

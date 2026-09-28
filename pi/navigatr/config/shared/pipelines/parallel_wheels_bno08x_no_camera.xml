@@ -25,6 +25,8 @@
             <Gyro sensor_id="robot_imu"/>
             <BiasCal function_id="tracking_motion"/>
         </Health>
+        <!-- field map and estimate documents for Brain planning -->
+        <Field resource_id="override_field" estimate_period_ms="200"/>
     </Publishing>
 
 </Pipeline>

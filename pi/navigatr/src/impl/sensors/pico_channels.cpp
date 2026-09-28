@@ -143,8 +143,10 @@ std::optional<SensorExecutable> make_pico_encoder_channel(
 
     const ConfigNode calibration = node.child("Calibration");
     double           cpr         = 0.0;
+    double           gear        = 1.0;
     bool             invert      = false;
     if (!calibration.getDouble("counts_per_revolution", 0.0, cpr, err) ||
+        !calibration.getDouble("gear", 1.0, gear, err) ||
         !calibration.getBool("invert", false, invert, err)) {
         return std::nullopt;
     }
@@ -152,7 +154,12 @@ std::optional<SensorExecutable> make_pico_encoder_channel(
         err = node.path() + ": Calibration needs positive counts_per_revolution";
         return std::nullopt;
     }
-    const double radians_per_count = (2.0 * kPi / cpr) * (invert ? -1.0 : 1.0);
+    if (gear <= 0.0) {
+        err = node.path() + ": Calibration gear must be positive";
+        return std::nullopt;
+    }
+    // wheel angle: encoder revolutions divided by the gearing, sign by polarity
+    const double radians_per_count = (2.0 * kPi / (cpr * gear)) * (invert ? -1.0 : 1.0);
 
     struct State {
         ChannelInput<PicoEncoderCounts> input;

@@ -13,5 +13,6 @@ Calibration labels are optional reader notes and do not affect runtime.
     <Inspection enabled="true" bind="127.0.0.1" port="8765"
                 snapshot_hz="20" preview_hz="5" preview_quality="70" preview_max_width="640"/>
     <Robot file="../../shared/robots/gatr2_as5047_imu.xml"/>
+    <Field file="../field.xml"/>
     <Pipeline file="../../shared/pipelines/three_wheel_imu_no_correction.xml"/>
 </Configuration>

@@ -8,9 +8,10 @@ Brain owns movement control and motor commands.
 Robot position and reported landmark position use the configured field
 coordinates. Robot heading is its orientation in that field. The landmark's
 inspection `heading_error` is its estimated rotation away from nominal, wrapped
-to `(-180, 180]` degrees. The brain link answers Brain requests only. Its
-landmark fields are the physical landmark pose with full field heading, labeled
-nominal or observed; configured targets stay on the Pi.
+to `(-180, 180]` degrees. The brain link answers Brain requests only. Its field
+documents carry every configured object: the map with collision boxes, and the
+estimates as physical poses with full field heading, labeled nominal or
+observed. Configured targets stay on the Pi.
 
 ## Runtime design
 
@@ -33,7 +34,7 @@ integration still needs the checks recorded in the deployment documents.
 | [Landmarks](docs/landmarks.md) | Nominal and observed field state, association, target resolution, and Brain output. |
 | [Inspection](docs/inspection.md) | The versioned inspection contract, the service, and the browser viewer. |
 | [Localization fusion](docs/localization_fusion.md) | Noise units, the weighted step, covariance propagation, and what the fusion estimator does not model. |
-| [Field assets](docs/field_assets.md) | Official Override CAD source, revision, units, axis conversion, and what the field file was checked against. |
+| [Field assets](docs/field_assets.md) | Official Override CAD source, revision, units, axis conversion, planning data (boundary, wire ids, collision boxes), and what the field file was checked against. |
 | [Calibration inventory](docs/calibration_inventory.md) | Every remaining measurement, where it goes, and what it gates. |
 | [Pi camera setup](docs/pi_camera_setup.md) | libcamera stack, build flag, capture mode, exposure timing convention, hardware checks still to run. |
 | [Attitude follow-up](docs/attitude_firmware_followup.md) | What the Pico firmware would have to send for live tilt. |

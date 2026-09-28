@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Resource id="override_field" type="field_map" name="V5RC Override 2026-2027">
+<Resource id="override_field" type="field_map" name="V5RC Override 2026-2027"
+          revision="1">
     <!--
     V5RC Override 2026-2027 nominal field geometry.
 
@@ -24,6 +25,15 @@
     inspection viewer, from Game Manual v2.0 Appendix A and the CAD parse
     described in docs/field_assets.md. Estimation never reads them; a
     wrong value there moves a picture, not an estimate.
+
+    Planning data is separate and explicit: revision on the root, the
+    Boundary, a wire_id per Landmark and Obstacle (the stable object id
+    the Brain names; printed tag ids repeat), and CollisionBox elements.
+    Only an element with a CollisionBox is an obstacle. Every value is
+    provisional, with its source in the note. After editing any of it,
+    bump revision and regenerate brain/testing/include/field_references.h
+    (build target field_references); navigatr_tests fails while the
+    header is stale.
     -->
 
     <!--
@@ -43,6 +53,20 @@
         source="V5RC Override Game Manual v2.0 Appendix A sheets A10 and A13; CAD 276-9250-000 (2026-04-26)"
         revision="manual v2.0 (2026-09-03); CAD zip Last-Modified 2026-04-27"
         units_note="meters here; the manual gives inches [mm]; tile pitch = inside/6, the CAD tile part is 618.1 mm interlocking"/>
+
+    <!--
+    Planning boundary: the inside wall faces, the same square as
+    Dimensions (a test pins them equal). The robot footprint stays inside.
+    Which perimeter a real field uses is unresolved (A13 portable 3566.4 mm,
+    A14 metal 3568.7 mm); the smaller is the safe choice.
+    -->
+    <Boundary
+        calibration_status="provisional"
+        min_x_m="0"
+        min_y_m="0"
+        max_x_m="3.5664"
+        max_y_m="3.5664"
+        note="manual v2.0 A13 portable perimeter, inside faces"/>
 
     <!--
     Loaders (sheets A9, A10): wall mounted at y = 290.6 and 3275.8 mm on
@@ -116,8 +140,57 @@
         size_x_m="0.8648" size_y_m="0.0635" size_z_m="0" yaw_deg="45"
         color="#f2f2f2" note="manual A11; reference edge unverified"/>
 
+    <!--
+    Fixed planning obstacles: the loaders and the toggles, each box the
+    plan footprint of the Feature with the same id, centered on the
+    obstacle pose. Planning is 2D: a toggle sits 283 to 335 mm up its wall
+    and a lower robot might pass under it, but it stays an obstacle. The
+    midfield tape is driven over and is not an obstacle. wire_id 101-104
+    are the loaders, 111-114 the toggles.
+    -->
+    <Obstacle id="loader_red_south" wire_id="101" calibration_status="provisional"
+        x_m="0.0475" y_m="0.2906" heading_deg="0" note="manual A9, A10; red wall">
+        <CollisionBox x_m="0" y_m="0" size_x_m="0.095" size_y_m="0.1021"
+            note="loader body footprint, 95 mm into the field, 102.1 mm wide"/>
+    </Obstacle>
+    <Obstacle id="loader_red_north" wire_id="102" calibration_status="provisional"
+        x_m="0.0475" y_m="3.2758" heading_deg="0" note="manual A9, A10; red wall">
+        <CollisionBox x_m="0" y_m="0" size_x_m="0.095" size_y_m="0.1021"
+            note="loader body footprint, 95 mm into the field, 102.1 mm wide"/>
+    </Obstacle>
+    <Obstacle id="loader_blue_south" wire_id="103" calibration_status="provisional"
+        x_m="3.5189" y_m="0.2906" heading_deg="0" note="manual A9, A10; blue wall">
+        <CollisionBox x_m="0" y_m="0" size_x_m="0.095" size_y_m="0.1021"
+            note="loader body footprint, 95 mm into the field, 102.1 mm wide"/>
+    </Obstacle>
+    <Obstacle id="loader_blue_north" wire_id="104" calibration_status="provisional"
+        x_m="3.5189" y_m="3.2758" heading_deg="0" note="manual A9, A10; blue wall">
+        <CollisionBox x_m="0" y_m="0" size_x_m="0.095" size_y_m="0.1021"
+            note="loader body footprint, 95 mm into the field, 102.1 mm wide"/>
+    </Obstacle>
+    <Obstacle id="toggle_north" wire_id="111" calibration_status="provisional"
+        x_m="1.7832" y_m="3.5404" heading_deg="0" note="manual A8, A10; 0-degree wall">
+        <CollisionBox x_m="0" y_m="0" size_x_m="0.6602" size_y_m="0.052"
+            note="toggle plan footprint, 660.2 mm along the wall, 52 mm into the field"/>
+    </Obstacle>
+    <Obstacle id="toggle_south" wire_id="112" calibration_status="provisional"
+        x_m="1.7832" y_m="0.026" heading_deg="0" note="manual A8, A10; audience wall">
+        <CollisionBox x_m="0" y_m="0" size_x_m="0.6602" size_y_m="0.052"
+            note="toggle plan footprint, 660.2 mm along the wall, 52 mm into the field"/>
+    </Obstacle>
+    <Obstacle id="toggle_west" wire_id="113" calibration_status="provisional"
+        x_m="0.026" y_m="1.7832" heading_deg="0" note="manual A8, A10; red wall">
+        <CollisionBox x_m="0" y_m="0" size_x_m="0.052" size_y_m="0.6602"
+            note="toggle plan footprint, 660.2 mm along the wall, 52 mm into the field"/>
+    </Obstacle>
+    <Obstacle id="toggle_east" wire_id="114" calibration_status="provisional"
+        x_m="3.5404" y_m="1.7832" heading_deg="0" note="manual A8, A10; blue wall">
+        <CollisionBox x_m="0" y_m="0" size_x_m="0.052" size_y_m="0.6602"
+            note="toggle plan footprint, 660.2 mm along the wall, 52 mm into the field"/>
+    </Obstacle>
+
     <!-- short neutral goal; all four physical faces decode observed ID 4. -->
-    <Landmark id="neutral_goal_4_north">
+    <Landmark id="neutral_goal_4_north" wire_id="1">
         <NominalPose
             calibration_status="provisional"
             x_m="1.185141466"
@@ -134,6 +207,14 @@
             tag_plate_thickness_m="0.0049"
             color="#2b2b2b"
             note="manual A7: base plus 64 mm riser 276-9250-004, 146.5 mm"/>
+
+        <CollisionBox
+            calibration_status="provisional"
+            x_m="0"
+            y_m="0"
+            size_x_m="0.1543"
+            size_y_m="0.1543"
+            note="widest part is the base octagon, 0.1425 m across flats; circumscribed circle 0.15424 m (0.1425/cos 22.5 deg) rounded up, so any octagon orientation fits"/>
 
         <TagMount
             instance_id="neutral_goal_4_north_east_tag"
@@ -197,7 +278,7 @@
     </Landmark>
 
     <!-- blue alliance goal; all four physical faces decode observed ID 3. -->
-    <Landmark id="blue_goal_3_north">
+    <Landmark id="blue_goal_3_north" wire_id="2">
         <NominalPose
             calibration_status="provisional"
             x_m="2.381258534"
@@ -214,6 +295,14 @@
             tag_plate_thickness_m="0.0049"
             color="#00a3e0"
             note="manual A7: base 276-9250-003 alone, 82.5 mm; plate 276-9250-006 on each axis face"/>
+
+        <CollisionBox
+            calibration_status="provisional"
+            x_m="0"
+            y_m="0"
+            size_x_m="0.1543"
+            size_y_m="0.1543"
+            note="widest part is the base octagon, 0.1425 m across flats; circumscribed circle 0.15424 m (0.1425/cos 22.5 deg) rounded up, so any octagon orientation fits"/>
 
         <TagMount
             instance_id="blue_goal_3_north_east_tag"
@@ -277,7 +366,7 @@
     </Landmark>
 
     <!-- short neutral goal; all four physical faces decode observed ID 1. -->
-    <Landmark id="neutral_goal_1_west">
+    <Landmark id="neutral_goal_1_west" wire_id="3">
         <NominalPose
             calibration_status="provisional"
             x_m="0.587082932"
@@ -294,6 +383,14 @@
             tag_plate_thickness_m="0.0049"
             color="#2b2b2b"
             note="manual A7: base plus 64 mm riser 276-9250-004, 146.5 mm"/>
+
+        <CollisionBox
+            calibration_status="provisional"
+            x_m="0"
+            y_m="0"
+            size_x_m="0.1543"
+            size_y_m="0.1543"
+            note="widest part is the base octagon, 0.1425 m across flats; circumscribed circle 0.15424 m (0.1425/cos 22.5 deg) rounded up, so any octagon orientation fits"/>
 
         <TagMount
             instance_id="neutral_goal_1_west_east_tag"
@@ -357,7 +454,7 @@
     </Landmark>
 
     <!-- blue alliance goal; all four physical faces decode observed ID 2. -->
-    <Landmark id="blue_goal_2_east">
+    <Landmark id="blue_goal_2_east" wire_id="4">
         <NominalPose
             calibration_status="provisional"
             x_m="2.979317068"
@@ -374,6 +471,14 @@
             tag_plate_thickness_m="0.0049"
             color="#00a3e0"
             note="manual A7: base 276-9250-003 alone, 82.5 mm; plate 276-9250-006 on each axis face"/>
+
+        <CollisionBox
+            calibration_status="provisional"
+            x_m="0"
+            y_m="0"
+            size_x_m="0.1543"
+            size_y_m="0.1543"
+            note="widest part is the base octagon, 0.1425 m across flats; circumscribed circle 0.15424 m (0.1425/cos 22.5 deg) rounded up, so any octagon orientation fits"/>
 
         <TagMount
             instance_id="blue_goal_2_east_east_tag"
@@ -437,7 +542,7 @@
     </Landmark>
 
     <!-- tall neutral goal; all four physical faces decode observed ID 0. -->
-    <Landmark id="neutral_goal_0_center">
+    <Landmark id="neutral_goal_0_center" wire_id="5">
         <NominalPose
             calibration_status="provisional"
             x_m="1.783200000"
@@ -454,6 +559,14 @@
             tag_plate_thickness_m="0.0049"
             color="#2b2b2b"
             note="manual A7: base plus 140.2 mm riser 276-9250-005, 222.7 mm"/>
+
+        <CollisionBox
+            calibration_status="provisional"
+            x_m="0"
+            y_m="0"
+            size_x_m="0.1543"
+            size_y_m="0.1543"
+            note="widest part is the base octagon, 0.1425 m across flats; circumscribed circle 0.15424 m (0.1425/cos 22.5 deg) rounded up, so any octagon orientation fits"/>
 
         <TagMount
             instance_id="neutral_goal_0_center_east_tag"
@@ -517,7 +630,7 @@
     </Landmark>
 
     <!-- red alliance goal; all four physical faces decode observed ID 2. -->
-    <Landmark id="red_goal_2_west">
+    <Landmark id="red_goal_2_west" wire_id="6">
         <NominalPose
             calibration_status="provisional"
             x_m="0.587082932"
@@ -534,6 +647,14 @@
             tag_plate_thickness_m="0.0049"
             color="#d50032"
             note="manual A7: base 276-9250-003 alone, 82.5 mm; plate 276-9250-006 on each axis face"/>
+
+        <CollisionBox
+            calibration_status="provisional"
+            x_m="0"
+            y_m="0"
+            size_x_m="0.1543"
+            size_y_m="0.1543"
+            note="widest part is the base octagon, 0.1425 m across flats; circumscribed circle 0.15424 m (0.1425/cos 22.5 deg) rounded up, so any octagon orientation fits"/>
 
         <TagMount
             instance_id="red_goal_2_west_east_tag"
@@ -597,7 +718,7 @@
     </Landmark>
 
     <!-- short neutral goal; all four physical faces decode observed ID 1. -->
-    <Landmark id="neutral_goal_1_east">
+    <Landmark id="neutral_goal_1_east" wire_id="7">
         <NominalPose
             calibration_status="provisional"
             x_m="2.979317068"
@@ -614,6 +735,14 @@
             tag_plate_thickness_m="0.0049"
             color="#2b2b2b"
             note="manual A7: base plus 64 mm riser 276-9250-004, 146.5 mm"/>
+
+        <CollisionBox
+            calibration_status="provisional"
+            x_m="0"
+            y_m="0"
+            size_x_m="0.1543"
+            size_y_m="0.1543"
+            note="widest part is the base octagon, 0.1425 m across flats; circumscribed circle 0.15424 m (0.1425/cos 22.5 deg) rounded up, so any octagon orientation fits"/>
 
         <TagMount
             instance_id="neutral_goal_1_east_east_tag"
@@ -677,7 +806,7 @@
     </Landmark>
 
     <!-- red alliance goal; all four physical faces decode observed ID 3. -->
-    <Landmark id="red_goal_3_south">
+    <Landmark id="red_goal_3_south" wire_id="8">
         <NominalPose
             calibration_status="provisional"
             x_m="1.185141466"
@@ -694,6 +823,14 @@
             tag_plate_thickness_m="0.0049"
             color="#d50032"
             note="manual A7: base 276-9250-003 alone, 82.5 mm; plate 276-9250-006 on each axis face"/>
+
+        <CollisionBox
+            calibration_status="provisional"
+            x_m="0"
+            y_m="0"
+            size_x_m="0.1543"
+            size_y_m="0.1543"
+            note="widest part is the base octagon, 0.1425 m across flats; circumscribed circle 0.15424 m (0.1425/cos 22.5 deg) rounded up, so any octagon orientation fits"/>
 
         <TagMount
             instance_id="red_goal_3_south_east_tag"
@@ -757,7 +894,7 @@
     </Landmark>
 
     <!-- short neutral goal; all four physical faces decode observed ID 4. -->
-    <Landmark id="neutral_goal_4_south">
+    <Landmark id="neutral_goal_4_south" wire_id="9">
         <NominalPose
             calibration_status="provisional"
             x_m="2.381258534"
@@ -774,6 +911,14 @@
             tag_plate_thickness_m="0.0049"
             color="#2b2b2b"
             note="manual A7: base plus 64 mm riser 276-9250-004, 146.5 mm"/>
+
+        <CollisionBox
+            calibration_status="provisional"
+            x_m="0"
+            y_m="0"
+            size_x_m="0.1543"
+            size_y_m="0.1543"
+            note="widest part is the base octagon, 0.1425 m across flats; circumscribed circle 0.15424 m (0.1425/cos 22.5 deg) rounded up, so any octagon orientation fits"/>
 
         <TagMount
             instance_id="neutral_goal_4_south_east_tag"

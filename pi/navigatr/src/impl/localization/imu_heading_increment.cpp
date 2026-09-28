@@ -26,12 +26,13 @@ ImuHeadingIncrement::create(const ConfigNode& node, RobotObservationInitializati
 
     const ConfigNode calibration = node.child("Calibration");
     if (!calibration.getInt("bias_samples", 200, fn->bias_samples_, err) ||
-        !calibration.getInt("max_gap_ms", 250, fn->max_gap_ms_, err)) {
+        !calibration.getInt("max_gap_ms", 250, fn->max_gap_ms_, err) ||
+        !calibration.getInt("window_ms", 0, fn->window_ms_, err)) {
         return nullptr;
     }
-    if (fn->bias_samples_ < 0 || fn->max_gap_ms_ <= 0) {
-        err = node.path() +
-              ": bias_samples cannot be negative and max_gap_ms must be positive";
+    if (fn->bias_samples_ < 0 || fn->window_ms_ < 0 || fn->max_gap_ms_ <= 0) {
+        err = node.path() + ": bias_samples and window_ms cannot be negative and max_gap_ms "
+                            "must be positive";
         return nullptr;
     }
     fn->calibrated_ = fn->bias_samples_ == 0;
@@ -56,6 +57,16 @@ ObservationReadiness ImuHeadingIncrement::readiness() const {
                           : "gyro bias calibrating " + std::to_string(cal_count_) + "/" +
                                 std::to_string(bias_samples_);
     return r;
+}
+
+bool ImuHeadingIncrement::recalibrate() {
+    pending_.reset();
+    calibrated_ = bias_samples_ == 0;
+    cal_count_  = 0;
+    cal_sum_    = 0.0;
+    have_prev_  = false;   // nothing integrates across the calibration
+    last_note_.clear();
+    return true;
 }
 
 void ImuHeadingIncrement::reset() {
@@ -121,9 +132,14 @@ FunctionStatus ImuHeadingIncrement::ingest(const RobotObservationInput& in,
     last_epoch_               = stored->epoch;
 
     if (!calibrated_) {
+        if (cal_count_ == 0) {
+            cal_start_ = stored->measuredAt;
+        }
         cal_sum_ += sample->yaw_rate_rad_s;
         ++cal_count_;
-        if (cal_count_ >= bias_samples_) {
+        const bool spans = sameDomain(stored->measuredAt, cal_start_) &&
+                           (stored->measuredAt - cal_start_) >= window_ms_;
+        if (cal_count_ >= bias_samples_ && spans) {
             bias_rad_s_ = cal_sum_ / cal_count_;
             calibrated_ = true;
         }

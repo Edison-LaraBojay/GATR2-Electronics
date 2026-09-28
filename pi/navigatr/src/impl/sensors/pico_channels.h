@@ -6,7 +6,7 @@
 //
 //   <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
 //       <Source resource_id="pico_telemetry" output_id="encoder_a"/>
-//       <Calibration counts_per_revolution="4000" invert="false"/>
+//       <Calibration counts_per_revolution="4000" gear="1" invert="false"/>
 //       <Freshness stale_after_ms="250"/>
 //   </Sensor>
 //
@@ -15,10 +15,12 @@
 //       <Calibration invert="false"/>
 //   </Sensor>
 //
-// Ownership per the architecture: counts per revolution and electrical sign
-// are sensor calibration; wheel radius and geometry belong to the tracking
-// motion observation model. The encoder publishes an accumulated
-// unwrapped shaft angle in radians. The IMU sensor converts wire units and
+// Ownership per the architecture: counts per revolution, gearing (encoder
+// revolutions per wheel revolution, default 1) and polarity are sensor
+// calibration; wheel radius, geometry and the travel scale belong to the
+// tracking motion observation model. The encoder publishes an accumulated
+// unwrapped wheel angle in radians: counts * 2 pi / (cpr * gear), negated
+// by invert. The IMU sensor converts wire units and
 // forwards the resource's accumulated angle; bias removal stays downstream.
 //
 // Freshness: a link that stays open but goes silent turns the sensor

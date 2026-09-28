@@ -1,5 +1,6 @@
 #include "impl/localization/brain_imu_wheel_bench.h"
 #include <cmath>
+#include <vector>
 #include "math/angles.h"
 #include "payloads/robot_observations.h"
 #include "resources/resource_store.h"
@@ -30,34 +31,80 @@ std::unique_ptr<RobotObservationFunction> BrainImuWheelBench::create(
     }
     model->imu_ = context.resources->require<BrainImuBench>(
         ResourceId{node.child("Imu").attr("resource_id")}, err);
-    const auto geometry = context.resources->require<const WheelGeometryMap>(
-        ResourceId{node.child("Wheels").attr("resource_id")}, err);
-    if (!model->imu_ || !geometry) return nullptr;
-    std::size_t count = 0;
+    if (!model->imu_) return nullptr;
+
+    // Inline TrackingWheel elements or a Wheels reference to wheel_geometry.
+    std::vector<WheelDecl> declared;
     bool ok = true;
-    node.child("Wheels").forEach("Use", [&](const ConfigNode& use) {
+    node.forEach("TrackingWheel", [&](const ConfigNode& w) {
         if (!ok) return;
-        const auto* w = geometry->find(use.attr("wheel_id"));
-        if (!w || count == 2) {
-            err = node.path() + ": bench model needs exactly two declared wheels";
+        WheelDecl decl;
+        std::string sensor, direction;
+        ok = w.requireAttr("sensor_id", sensor, err) &&
+             w.requireDouble("radius_m", decl.radius_m, err) &&
+             w.requireDouble("position_x_m", decl.position_x_m, err) &&
+             w.requireDouble("position_y_m", decl.position_y_m, err) &&
+             w.requireDouble("measurement_angle_deg", decl.measurement_angle_deg, err) &&
+             w.requireAttr("direction", direction, err) &&
+             w.getDouble("travel_scale", 1.0, decl.travel_scale, err);
+        if (ok && direction != "positive" && direction != "negative") {
+            err = w.path() + ": direction must be positive or negative";
             ok = false;
-            return;
         }
-        if (!planar && std::fabs(w->measurement_angle_deg) > 1e-6) {
-            err = node.path() + ": bench model needs exactly two forward (0 degree) wheels";
-            ok = false;
-            return;
-        }
-        auto& dest = model->wheels_[count++];
-        ok = context.sensors->bind<EncoderSample>(w->sensor, node.path(), dest.binding, err);
-        dest.radius = w->radius_m;
-        const double angle = degToRad(w->measurement_angle_deg);
-        dest.ux = std::cos(angle);
-        dest.uy = std::sin(angle);
-        dest.k = w->position_x_m * dest.uy - w->position_y_m * dest.ux;
-        dest.sign = w->direction_positive ? 1.0 : -1.0;
+        decl.sensor = SensorId{sensor};
+        decl.direction_positive = direction == "positive";
+        declared.push_back(decl);
     });
     if (!ok) return nullptr;
+    const ConfigNode wheels_ref = node.child("Wheels");
+    if (wheels_ref.valid()) {
+        if (!declared.empty()) {
+            err = wheels_ref.path() + ": use either inline TrackingWheel elements or a Wheels "
+                                      "reference, not both";
+            return nullptr;
+        }
+        const auto geometry = context.resources->require<const WheelGeometryMap>(
+            ResourceId{wheels_ref.attr("resource_id")}, err);
+        if (!geometry) return nullptr;
+        wheels_ref.forEach("Use", [&](const ConfigNode& use) {
+            if (!ok) return;
+            const auto* w = geometry->find(use.attr("wheel_id"));
+            if (!w) {
+                err = node.path() + ": bench model needs exactly two declared wheels";
+                ok = false;
+                return;
+            }
+            declared.push_back(*w);
+        });
+        if (!ok) return nullptr;
+    }
+    if (declared.size() > 2) {
+        err = node.path() + ": bench model needs exactly two declared wheels";
+        return nullptr;
+    }
+    std::size_t count = 0;
+    for (const WheelDecl& w : declared) {
+        const double angle = degToRad(w.measurement_angle_deg);
+        // forward wheels measure along +x or -x; the travel projects onto x
+        if (!planar && std::fabs(std::sin(angle)) > 1e-9) {
+            err = node.path() + ": bench model needs exactly two forward (0 or 180 degree) wheels";
+            return nullptr;
+        }
+        if (w.radius_m <= 0.0 || w.travel_scale <= 0.0) {
+            err = node.path() + ": radius_m and travel_scale must be positive";
+            return nullptr;
+        }
+        auto& dest = model->wheels_[count++];
+        if (!context.sensors->bind<EncoderSample>(w.sensor, node.path(), dest.binding, err)) {
+            return nullptr;
+        }
+        dest.radius = w.radius_m;
+        dest.scale = w.travel_scale;
+        dest.ux = std::cos(angle);
+        dest.uy = std::sin(angle);
+        dest.k = w.position_x_m * dest.uy - w.position_y_m * dest.ux;
+        dest.sign = w.direction_positive ? 1.0 : -1.0;
+    }
     if (count != 2 || model->wheels_[0].binding.id == model->wheels_[1].binding.id) {
         err = node.path() + ": bench model needs two distinct encoder sensors";
         return nullptr;
@@ -127,7 +174,7 @@ FunctionStatus BrainImuWheelBench::run(const RobotObservationInput& in, RobotObs
         auto& w = wheels_[i];
         // Wheel travel = ux*dx + uy*dy + (x*uy - y*ux)*dtheta.
         // Remove travel caused by the wheel's offset before solving translation.
-        travel[i] = (samples[i]->angle_rad - w.angle) * w.radius * w.sign -
+        travel[i] = (samples[i]->angle_rad - w.angle) * w.radius * w.scale * w.sign -
                     w.k * motion.dtheta_rad;
         Provenance source = stored[i]->upstream;
         source.source = w.binding.id.value;
@@ -145,7 +192,8 @@ FunctionStatus BrainImuWheelBench::run(const RobotObservationInput& in, RobotObs
         motion.dx_m = (travel[0] * b.uy - a.uy * travel[1]) / determinant_;
         motion.dy_m = (a.ux * travel[1] - travel[0] * b.ux) / determinant_;
     } else {
-        motion.dx_m = 0.5 * (travel[0] + travel[1]);
+        // both wheels along +-x: the mean forward travel
+        motion.dx_m = 0.5 * (wheels_[0].ux * travel[0] + wheels_[1].ux * travel[1]);
     }
     motion.sources.push_back(Provenance{"brain_imu_bench", "brain.vex_imu", "brain",
                                         imu_->sequence, imu_->epoch});

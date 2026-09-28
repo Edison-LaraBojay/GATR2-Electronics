@@ -19,7 +19,50 @@ std::string badValue(const ConfigNode& node, const char* key, const char* raw) {
     return node.path() + " attribute " + key + ": invalid value \"" + raw + "\"";
 }
 
+bool listed(const char* name, std::initializer_list<const char*> allowed) {
+    for (const char* a : allowed) {
+        if (std::string(name) == a) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
+
+bool ConfigNode::onlyChildren(std::initializer_list<const char*> allowed,
+                              std::string& err) const {
+    for (ConfigNode c = child(); c.valid(); c = c.next()) {
+        if (!listed(c.name(), allowed)) {
+            err = path() + " has unknown element " + c.name();
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ConfigNode::onlyAttributes(std::initializer_list<const char*> allowed,
+                                std::string& err) const {
+    if (e_ == nullptr) {
+        return true;
+    }
+    for (const tinyxml2::XMLAttribute* a = e_->FirstAttribute(); a != nullptr; a = a->Next()) {
+        if (!listed(a->Name(), allowed)) {
+            err = path() + " has unknown attribute " + a->Name();
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ConfigNode::atMostOne(const char* child_name, std::string& err) const {
+    const ConfigNode first = child(child_name);
+    if (first.valid() && first.next(child_name).valid()) {
+        err = path() + " has more than one " + child_name;
+        return false;
+    }
+    return true;
+}
 
 const char* ConfigNode::name() const { return e_ == nullptr ? "" : e_->Name(); }
 

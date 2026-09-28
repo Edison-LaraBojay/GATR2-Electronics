@@ -2,6 +2,8 @@
 
 #include "runtime/sensor_stage.h"
 
+#include <algorithm>
+
 #include "core/diagnostics.h"
 #include "runtime/record_bookkeeping.h"
 
@@ -35,6 +37,41 @@ void SensorExecutor::reset() {
         }
         resetRecord(retained_[entry.id]);
     }
+}
+
+void SensorExecutor::replaceProfile(SensorExecutor profile) {
+    const auto inProfile = [this](const SensorId& id) {
+        return std::find(profile_ids_.begin(), profile_ids_.end(), id) != profile_ids_.end();
+    };
+    SensorFunctions functions;
+    SensorCatalog   catalog;
+    SensorMap       retained;
+    for (SensorFunctions::Entry& entry : functions_.executionOrder()) {
+        if (inProfile(entry.id)) {
+            retired_epochs_[entry.id] = retained_[entry.id].epoch;
+            continue;
+        }
+        catalog.add(entry.id, *catalog_.payloadOf(entry.id));
+        retained[entry.id] = std::move(retained_[entry.id]);
+        const SensorId id  = entry.id;
+        functions.add(id, std::move(entry.sensor), std::move(entry.label));
+    }
+    profile_ids_.clear();
+    for (SensorFunctions::Entry& entry : profile.functions_.executionOrder()) {
+        catalog.add(entry.id, *profile.catalog_.payloadOf(entry.id));
+        MeasurementRecord record;
+        const auto        retired = retired_epochs_.find(entry.id);
+        if (retired != retired_epochs_.end()) {
+            record.epoch = retired->second + 1;
+        }
+        retained[entry.id] = std::move(record);
+        profile_ids_.push_back(entry.id);
+        const SensorId id = entry.id;
+        functions.add(id, std::move(entry.sensor), std::move(entry.label));
+    }
+    functions_ = std::move(functions);
+    catalog_   = std::move(catalog);
+    retained_  = std::move(retained);
 }
 
 std::optional<SensorExecutor> make_sensors(const ConfigNode&         node,

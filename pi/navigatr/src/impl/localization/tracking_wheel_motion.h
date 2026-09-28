@@ -9,22 +9,26 @@
 //       <TrackingWheel sensor_id="tracking_encoder_a" label="left"
 //                      radius_m="0.0254" position_x_m="0.000"
 //                      position_y_m="0.130" measurement_angle_deg="0"
-//                      direction="positive"/>
+//                      direction="positive" travel_scale="1"/>
 //       ...   or   <Wheels resource_id="wheel_geometry"><Use wheel_id=.../></Wheels>
 //       <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
-//                          max_calibration_travel_m="0.005" max_gap_ms="250"/>
+//                          max_calibration_travel_m="0.005" max_gap_ms="250"
+//                          window_ms="0"/>
 //       <LateralMotion assume="zero"/>   optional, forward-only wheels
 //       <Timing interval_tolerance_ms="20" max_pending_ms="500"/>
 //       <Output observation_id="tracking_motion"/>
 //   </Observation>
 //
 // Rigid model per wheel: m_i = u_i . d + k_i * dtheta with
-// k_i = x_i * u_iy - y_i * u_ix. Three suitably placed wheels solve planar
+// k_i = x_i * u_iy - y_i * u_ix, and m_i = d(wheel angle) * radius *
+// travel_scale * sign (travel_scale is the optional empirical correction,
+// default 1, applied here only). Three suitably placed wheels solve planar
 // motion alone; two wheels need the heading constraint; degenerate
 // geometry is rejected at build. The constraint calibrates its own gyro
-// bias over its first bias_samples readings while the robot sits still;
-// wheel travel during calibration restarts it and wheel baselines rebase
-// until it completes.
+// bias over its first bias_samples readings, spanning at least window_ms of
+// sample time, while the robot sits still; wheel travel during calibration
+// restarts it and wheel baselines rebase until it completes. recalibrate()
+// starts a new bias calibration; the pose holds meanwhile.
 //
 // Wheels that all measure along body x cannot see sideways motion. They
 // build only with LateralMotion assume="zero", which needs the heading
@@ -74,6 +78,7 @@ public:
     void settle(const ObservationId& id, bool) override {
         if (id == output_) offered_ = false;
     }
+    bool recalibrate() override;
 
 private:
     struct Wheel {
@@ -83,6 +88,7 @@ private:
         double                            ux = 1.0, uy = 0.0;   // measurement direction
         double                            k_m  = 0.0;           // x*uy - y*ux
         double                            sign = 1.0;
+        double                            scale = 1.0;   // travel scale
 
         bool          have_prev      = false;
         double        prev_angle_rad = 0.0;
@@ -104,6 +110,7 @@ private:
         TypedSensorBinding<ImuSample> binding;
         long                          bias_samples = 200;
         long                          max_gap_ms   = 250;
+        long                          window_ms    = 0;   // minimum bias window sample time
 
         double max_calibration_travel_m = 0.005;
         double cal_travel_m             = 0.0;
@@ -114,6 +121,7 @@ private:
         bool          cal_have_accum   = false;
         double        cal_accum_start  = 0.0;
         MonotonicTime cal_accum_start_stamp;
+        MonotonicTime cal_start_stamp;   // first sample of the bias window
         double        bias_rad_s       = 0.0;
 
         bool          have_prev        = false;

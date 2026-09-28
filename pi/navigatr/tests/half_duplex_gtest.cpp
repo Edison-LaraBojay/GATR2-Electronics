@@ -148,6 +148,25 @@ TEST(HalfDuplex, FrameBudgetAndCharacterTime) {
     // 59 * 10 / 115200 s = 5121.5 us, rounded up, plus 2 ms
     EXPECT_EQ(transmitBudgetUs(59, 115200, 2000), 7122);
     EXPECT_EQ(transmitBudgetUs(0, 115200, 2000), 2000);
+    // the largest v4 frame, 128 bytes: 11111.1 us rounded up, plus 2 ms
+    EXPECT_EQ(transmitBudgetUs(128, 115200, 2000), 13112);
+}
+
+TEST(HalfDuplex, LargestFrameHoldsTheDriverUntilItsLastStopBit) {
+    FakePort               port;
+    const HalfDuplexTiming timing;
+    const auto             bytes = frame(128);
+
+    const SerialWriteResult r = transmitHalfDuplex(port, span(bytes), TransmitWindow{}, timing);
+
+    EXPECT_TRUE(r.ok);
+    EXPECT_FALSE(r.late_release);
+    EXPECT_EQ(port.wire, bytes);
+    EXPECT_FALSE(port.released_before_empty);
+    EXPECT_GE(port.driver_off_us, port.txDoneUs() + timing.post_guard_us);
+    EXPECT_LE(port.driver_off_us - port.driver_on_us,
+              transmitBudgetUs(bytes.size(), timing.baud, timing.margin_us) +
+                  timing.post_guard_us);
 }
 
 TEST(HalfDuplex, DriverOnBeforeFirstByteAndOffAfterTransmitterEmpty) {

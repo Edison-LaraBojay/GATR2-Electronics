@@ -78,6 +78,13 @@ public:
 
     void reset();
 
+    // Profile sensors: removes the entries the previous call added and
+    // appends the entries of profile, keeping every other entry with its
+    // state and record. A record whose id was used before continues under a
+    // new epoch, so consumers see a restart, never a continuation. Ids must
+    // not collide with the kept entries.
+    void replaceProfile(SensorExecutor profile);
+
     const SensorCatalog& outputs() const { return catalog_; }
     const SensorMap&     retained() const { return retained_; }
 
@@ -85,6 +92,9 @@ private:
     SensorFunctions functions_;
     SensorCatalog   catalog_;
     SensorMap       retained_;
+
+    std::vector<SensorId>                                  profile_ids_;
+    std::unordered_map<SensorId, uint64_t, SensorId::Hash> retired_epochs_;
 };
 
 // node may be invalid (no Sensors section). Nothing on failure.

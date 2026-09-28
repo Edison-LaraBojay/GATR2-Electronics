@@ -63,6 +63,8 @@
             <Encoder sensor_id="tracking_encoder_c"/>
             <Gyro sensor_id="robot_imu"/>
         </Health>
+        <!-- field map and estimate documents for Brain planning -->
+        <Field resource_id="override_field" estimate_period_ms="200"/>
     </Publishing>
 
 </Pipeline>

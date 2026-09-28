@@ -4,12 +4,7 @@
      updates landmark estimates only; it never corrects the robot pose.
      Each frame is placed with the pose history at its exposure time and
      the robot_geometry camera mount. Gate values are tuning starting
-     points, not calibration.
-
-     Landmarks the Brain may request need a Publishing FieldObject mapping
-     with a wire id agreed with the Brain code, e.g.
-         <FieldObject object_id="center_goal" wire_id="1"/>
-     None is configured yet, so such requests are refused as unknown. -->
+     points, not calibration. -->
 <Pipeline>
 
     <CommandCollection type="brain_link">
@@ -54,6 +49,8 @@
             <Gyro sensor_id="robot_imu"/>
             <BiasCal function_id="tracking_motion"/>
         </Health>
+        <!-- field map and estimate documents for Brain planning -->
+        <Field resource_id="override_field" estimate_period_ms="200"/>
     </Publishing>
 
 </Pipeline>

@@ -38,43 +38,25 @@ set(TEST_SOURCES
     localization_fusion_gtest.cpp
     brain_io_gtest.cpp
     brain_imu_bench_gtest.cpp
+    brain_profile_gtest.cpp
     world_estimation_gtest.cpp
     vision_targets_gtest.cpp
     system_build_gtest.cpp
     profiles_gtest.cpp
     end_to_end_gtest.cpp
-    brain_link_e2e_gtest.cpp
     inspection_gtest.cpp
     workers_gtest.cpp
     field_assets_gtest.cpp
+    field_documents_gtest.cpp
     capture_transform_gtest.cpp
     camera_capture_gtest.cpp
     inspection_document_gtest.cpp
 )
 
-# Brain libraries for brain_link_e2e_gtest.cpp, compiled in from brain/: the
-# portable sources plus the host drivetrain sim. common/frame_codec.cpp comes
-# with navigatr_core.
-set(BRAIN_DIR ${REPO_ROOT}/brain)
-set(BRAIN_SOURCES
-    ${BRAIN_DIR}/investiGATR/src/drive.cpp
-    ${BRAIN_DIR}/investiGATR/src/geometry.cpp
-    ${BRAIN_DIR}/investiGATR/src/navigator.cpp
-    ${BRAIN_DIR}/investiGATR/src/odometry_source.cpp
-    ${BRAIN_DIR}/investiGATR/src/pid.cpp
-    ${BRAIN_DIR}/investiGATR/sim/differential_drive_sim.cpp
-    ${BRAIN_DIR}/communiGATR/src/client.cpp
-    ${BRAIN_DIR}/communiGATR/src/driver.cpp
-)
-
-add_executable(navigatr_tests ${TEST_SOURCES} ${BRAIN_SOURCES})
+add_executable(navigatr_tests ${TEST_SOURCES})
 target_compile_definitions(navigatr_tests PRIVATE
-    NAVIGATR_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../config")
-target_include_directories(navigatr_tests PRIVATE
-    ${BRAIN_DIR}/investiGATR/include
-    ${BRAIN_DIR}/investiGATR
-    ${BRAIN_DIR}/communiGATR/include
-)
+    NAVIGATR_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../config"
+    NAVIGATR_FIELD_REFERENCES_H="${REPO_ROOT}/brain/testing/include/field_references.h")
 target_link_libraries(navigatr_tests PRIVATE navigatr_core GTest::gtest_main)
 if(NOT MSVC)
     target_compile_options(navigatr_tests PRIVATE -Wall -Wextra)

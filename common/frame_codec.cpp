@@ -54,13 +54,18 @@ void storeSensorValue(SensorSample& s, uint8_t bit, uint8_t word, int32_t v) {
 }
 
 bool linkLenValid(uint8_t type, uint8_t len) {
-    if (type == kFrameBrainRequest) {
-        return len >= kBrainRequestHeaderLen && len <= kBrainRequestMaxLen;
+    switch (type) {
+    case kFrameBrainRequest: return len >= kBrainRequestHeaderLen && len <= kBrainRequestMaxLen;
+    case kFrameBrainReply: return len >= kBrainReplyHeaderLen && len <= kBrainReplyMaxLen;
+    case kFramePicoCommand: return len >= kPicoCommandHeaderLen && len <= kPicoCommandMaxLen;
+    case kFramePicoStatus: return len == kPicoStatusLen;
+    default: return false;
     }
-    if (type == kFrameBrainReply) {
-        return len >= kBrainReplyHeaderLen && len <= kBrainReplyMaxLen;
-    }
-    return false;
+}
+
+bool linkType(uint8_t type) {
+    return type == kFrameBrainRequest || type == kFrameBrainReply || type == kFramePicoCommand ||
+           type == kFramePicoStatus;
 }
 
 // Sync, type, len and crc around a payload already written at buf + 4.
@@ -100,12 +105,13 @@ void wrState(uint8_t* p, const BrainState& s) {
     wr32(p + 15, s.odometry_epoch);
     wr32(p + 19, s.anchor_revision);
     p[23] = s.health;
-    p[24] = s.landmark_id;
-    p[25] = s.landmark_source;
-    wr32(p + 26, static_cast<uint32_t>(s.lm_x_mm));
-    wr32(p + 30, static_cast<uint32_t>(s.lm_y_mm));
-    wr32(p + 34, static_cast<uint32_t>(s.lm_heading_cdeg));
-    wr16(p + 38, s.landmark_age_ms);
+    p[24] = s.profile_state;
+    p[25] = s.profile_reason;
+    wr32(p + 26, s.profile_id);
+    wr32(p + 30, s.map_id);
+    wr32(p + 34, s.estimate_id);
+    p[38] = s.calibration;
+    p[39] = s.profile_detail;
 }
 
 void rdState(const uint8_t* p, BrainState& s) {
@@ -117,12 +123,65 @@ void rdState(const uint8_t* p, BrainState& s) {
     s.odometry_epoch  = rd32(p + 15);
     s.anchor_revision = rd32(p + 19);
     s.health          = p[23];
-    s.landmark_id     = p[24];
-    s.landmark_source = p[25];
-    s.lm_x_mm         = static_cast<int32_t>(rd32(p + 26));
-    s.lm_y_mm         = static_cast<int32_t>(rd32(p + 30));
-    s.lm_heading_cdeg = static_cast<int32_t>(rd32(p + 34));
-    s.landmark_age_ms = rd16(p + 38);
+    s.profile_state   = p[24];
+    s.profile_reason  = p[25];
+    s.profile_id      = rd32(p + 26);
+    s.map_id          = rd32(p + 30);
+    s.estimate_id     = rd32(p + 34);
+    s.calibration     = p[38];
+    s.profile_detail  = p[39];
+}
+
+bool knownResult(uint8_t result) {
+    switch (result) {
+    case kResultOk:
+    case kResultPending:
+    case kResultUnknownSession:
+    case kResultUnsupportedVersion:
+    case kResultUnsupportedOp:
+    case kResultInvalidArgument:
+    case kResultStale:
+    case kResultNotReady:
+    case kResultProfileRejected:
+    case kResultUnavailable:
+    case kResultNotStationary:
+    case kResultFailed: return true;
+    default: return false;
+    }
+}
+
+// Request payload length for the encoder, 0 when a variable body is out of range.
+uint8_t requestLen(const BrainRequest& in) {
+    switch (in.op) {
+    case kOpProfileWrite:
+        if (in.data_len == 0 || in.data_len > kProfileChunkMax) {
+            return 0;
+        }
+        return static_cast<uint8_t>(kBrainRequestHeaderLen + kProfileWriteHeaderLen + in.data_len);
+    case kOpPathReport:
+        if (in.point_count > kPathReportMaxPoints) {
+            return 0;
+        }
+        return static_cast<uint8_t>(kBrainRequestHeaderLen + kPathReportHeaderLen +
+                                    8 * in.point_count);
+    default: return brainRequestMinLen(in.op);
+    }
+}
+
+uint8_t replyLen(const BrainReply& in) {
+    if (in.op == kOpReadWheels && in.result == kResultOk) {
+        if (in.wheel_count > kWheelReadingsMax) {
+            return 0;
+        }
+        return static_cast<uint8_t>(kBrainReplyHeaderLen + 1 + kWheelReadingLen * in.wheel_count);
+    }
+    if (in.op == kOpReadDoc && in.result == kResultOk) {
+        if (in.data_len == 0 || in.data_len > kDocChunkMax) {
+            return 0;
+        }
+        return static_cast<uint8_t>(kBrainReplyHeaderLen + kReadDocReplyHeaderLen + in.data_len);
+    }
+    return brainReplyMinLen(in.op, in.result);
 }
 
 } // namespace
@@ -161,52 +220,107 @@ uint16_t sensorFrameLen(uint16_t mask) {
     return static_cast<uint16_t>(kSensorHeaderLen + sensorPayloadLen(mask) + 1);
 }
 
-uint8_t brainRequestLen(uint8_t op) {
+uint16_t sensorV2FrameLen(uint16_t mask) {
+    return static_cast<uint16_t>(kSensorV2HeaderLen + sensorPayloadLen(mask) + 1);
+}
+
+uint8_t picoCommandLen(uint8_t op) {
     switch (op) {
-    case kOpHello: return kBrainRequestHeaderLen + 4;
-    case kOpSetPose: return kBrainRequestHeaderLen + 12;
-    case kOpSelectLandmark: return kBrainRequestHeaderLen + 2;
-    case kOpGetState: return kBrainRequestHeaderLen;
-    case kOpGetStateWithImu: return kBrainRequestHeaderLen + 9;
+    case kPicoOpConfigure:
+    case kPicoOpReinitImu: return kPicoCommandHeaderLen + 1;
+    case kPicoOpRestartAcquisition: return kPicoCommandHeaderLen;
     default: return 0;
     }
 }
 
-uint8_t brainReplyLen(uint8_t op, uint8_t result) {
+uint8_t brainRequestMinLen(uint8_t op) {
+    switch (op) {
+    case kOpHello: return kBrainRequestHeaderLen + 4;
+    case kOpSetPose: return kBrainRequestHeaderLen + 12;
+    case kOpGetState: return kBrainRequestHeaderLen + 9;
+    case kOpProfileWrite: return kBrainRequestHeaderLen + kProfileWriteHeaderLen + 1;
+    case kOpProfileApply: return kBrainRequestHeaderLen + 6;
+    case kOpReadDoc: return kBrainRequestHeaderLen + 8;
+    case kOpControl: return kBrainRequestHeaderLen + 2;
+    case kOpPathReport: return kBrainRequestHeaderLen + kPathReportHeaderLen;
+    case kOpReadWheels: return kBrainRequestHeaderLen;
+    default: return 0;
+    }
+}
+
+uint8_t brainRequestMaxLen(uint8_t op) {
+    switch (op) {
+    case kOpProfileWrite: return kBrainRequestHeaderLen + kProfileWriteHeaderLen + kProfileChunkMax;
+    case kOpPathReport:
+        return kBrainRequestHeaderLen + kPathReportHeaderLen + 8 * kPathReportMaxPoints;
+    default: return brainRequestMinLen(op);
+    }
+}
+
+uint8_t brainReplyMinLen(uint8_t op, uint8_t result) {
     if (op == kOpHello) {
         return kBrainReplyHeaderLen + 4;
     }
-    if (result > kResultStale) {
+    if (!knownResult(result)) {
         return 0;
     }
     const bool ok = result == kResultOk;
     switch (op) {
     case kOpSetPose:
         return (ok || result == kResultPending) ? kBrainReplyHeaderLen + 8 : kBrainReplyHeaderLen;
-    case kOpSelectLandmark: return ok ? kBrainReplyHeaderLen + 2 : kBrainReplyHeaderLen;
-    case kOpGetState:
-    case kOpGetStateWithImu: return ok ? kBrainReplyHeaderLen + kBrainStateLen : kBrainReplyHeaderLen;
+    case kOpGetState: return ok ? kBrainReplyHeaderLen + kBrainStateLen : kBrainReplyHeaderLen;
+    case kOpProfileWrite: return ok ? kBrainReplyHeaderLen + 6 : kBrainReplyHeaderLen;
+    case kOpProfileApply:
+        return (ok || result == kResultPending || result == kResultProfileRejected)
+                   ? kBrainReplyHeaderLen + 7
+                   : kBrainReplyHeaderLen;
+    case kOpReadDoc:
+        return ok ? kBrainReplyHeaderLen + kReadDocReplyHeaderLen + 1 : kBrainReplyHeaderLen;
+    case kOpControl:
+        return (ok || result == kResultPending || result == kResultFailed)
+                   ? kBrainReplyHeaderLen + 3
+                   : kBrainReplyHeaderLen;
+    case kOpPathReport: return kBrainReplyHeaderLen;
+    case kOpReadWheels: return ok ? kBrainReplyHeaderLen + 1 : kBrainReplyHeaderLen;
     default: return 0;
     }
+}
+
+uint8_t brainReplyMaxLen(uint8_t op, uint8_t result) {
+    if (op == kOpReadDoc && result == kResultOk) {
+        return kBrainReplyHeaderLen + kReadDocReplyHeaderLen + kDocChunkMax;
+    }
+    if (op == kOpReadWheels && result == kResultOk) {
+        return kBrainReplyHeaderLen + 1 + kWheelReadingLen * kWheelReadingsMax;
+    }
+    return brainReplyMinLen(op, result);
 }
 
 uint16_t encodeSensorFrame(const SensorSample& in, uint8_t* buf, uint16_t cap) {
     if (!sensorMaskValid(in.mask)) {
         return 0;
     }
-    const uint16_t total = sensorFrameLen(in.mask);
+    const uint16_t total = in.identity ? sensorV2FrameLen(in.mask) : sensorFrameLen(in.mask);
     if (total > cap || total > kMaxFrameLen) {
         return 0;
     }
 
     buf[0] = kSync0;
     buf[1] = kSync1;
-    buf[2] = kFrameSensor;
+    buf[2] = in.identity ? kFrameSensorV2 : kFrameSensor;
     buf[3] = in.seq;
     wr32(buf + 4, in.stamp_ms);
-    wr16(buf + 8, in.mask);
-
     uint16_t at = kSensorHeaderLen;
+    if (in.identity) {
+        wr16(buf + 8, in.boot_id);
+        buf[10] = in.acq_epoch;
+        buf[11] = in.imu_epoch;
+        wr16(buf + 12, in.mask);
+        at = kSensorV2HeaderLen;
+    } else {
+        wr16(buf + 8, in.mask);
+    }
+
     for (uint8_t bit = 0; bit < kSensorBitCount; ++bit) {
         if ((in.mask & (1u << bit)) == 0) {
             continue;
@@ -226,11 +340,18 @@ bool decodeSensorFrame(const uint8_t* buf, uint16_t len, SensorSample& out) {
     if (len < kSensorHeaderLen + 1 || len > kMaxFrameLen) {
         return false;
     }
-    if (buf[0] != kSync0 || buf[1] != kSync1 || buf[2] != kFrameSensor) {
+    if (buf[0] != kSync0 || buf[1] != kSync1) {
         return false;
     }
-    const uint16_t mask = rd16(buf + 8);
-    if (!sensorMaskValid(mask) || sensorFrameLen(mask) != len) {
+    const bool v2 = buf[2] == kFrameSensorV2;
+    if (!v2 && buf[2] != kFrameSensor) {
+        return false;
+    }
+    if (v2 && len < kSensorV2HeaderLen + 1) {
+        return false;
+    }
+    const uint16_t mask = rd16(buf + (v2 ? 12 : 8));
+    if (!sensorMaskValid(mask) || (v2 ? sensorV2FrameLen(mask) : sensorFrameLen(mask)) != len) {
         return false;
     }
     if (checksum(buf, len) != 0) {
@@ -241,8 +362,15 @@ bool decodeSensorFrame(const uint8_t* buf, uint16_t len, SensorSample& out) {
     out.seq      = buf[3];
     out.stamp_ms = rd32(buf + 4);
     out.mask     = mask;
+    uint16_t at  = kSensorHeaderLen;
+    if (v2) {
+        out.identity  = true;
+        out.boot_id   = rd16(buf + 8);
+        out.acq_epoch = buf[10];
+        out.imu_epoch = buf[11];
+        at            = kSensorV2HeaderLen;
+    }
 
-    uint16_t at = kSensorHeaderLen;
     for (uint8_t bit = 0; bit < kSensorBitCount; ++bit) {
         if ((mask & (1u << bit)) == 0) {
             continue;
@@ -257,8 +385,13 @@ bool decodeSensorFrame(const uint8_t* buf, uint16_t len, SensorSample& out) {
 }
 
 uint16_t encodeBrainRequest(const BrainRequest& in, uint8_t* buf, uint16_t cap) {
-    const uint8_t known = brainRequestLen(in.op);
-    const uint8_t n     = known != 0 ? known : kBrainRequestHeaderLen;
+    uint8_t n = kBrainRequestHeaderLen;
+    if (brainRequestMinLen(in.op) != 0) {
+        n = requestLen(in);
+        if (n == 0) {
+            return 0;
+        }
+    }
     if (n + kLinkEnvelopeLen > cap) {
         return 0;
     }
@@ -277,14 +410,40 @@ uint16_t encodeBrainRequest(const BrainRequest& in, uint8_t* buf, uint16_t cap) 
         wr32(body + 4, static_cast<uint32_t>(in.y_mm));
         wr32(body + 8, static_cast<uint32_t>(in.heading_cdeg));
         break;
-    case kOpSelectLandmark:
-        body[0] = in.landmark_id;
-        body[1] = in.select_flags;
-        break;
-    case kOpGetStateWithImu:
+    case kOpGetState:
         body[0] = in.imu_flags;
         wr32(body + 1, in.imu_stamp_ms);
         wr32(body + 5, static_cast<uint32_t>(in.imu_rotation_mdeg));
+        break;
+    case kOpProfileWrite:
+        wr32(body, in.profile_id);
+        wr16(body + 4, in.total_len);
+        wr16(body + 6, in.offset);
+        memcpy(body + kProfileWriteHeaderLen, in.data, in.data_len);
+        break;
+    case kOpProfileApply:
+        wr32(body, in.profile_id);
+        wr16(body + 4, in.total_len);
+        break;
+    case kOpReadDoc:
+        body[0] = in.doc_kind;
+        wr32(body + 1, in.doc_id);
+        wr16(body + 5, in.doc_offset);
+        body[7] = in.max_len;
+        break;
+    case kOpControl:
+        body[0] = in.action;
+        body[1] = in.action_arg;
+        break;
+    case kOpPathReport:
+        wr32(body, in.command_id);
+        body[4] = in.path_mode;
+        body[5] = in.point_count;
+        for (uint8_t i = 0; i < in.point_count; ++i) {
+            uint8_t* at = body + kPathReportHeaderLen + 8 * i;
+            wr32(at, static_cast<uint32_t>(in.points[i].x_mm));
+            wr32(at + 4, static_cast<uint32_t>(in.points[i].y_mm));
+        }
         break;
     default: break;
     }
@@ -307,11 +466,11 @@ bool decodeBrainRequest(const uint8_t* buf, uint16_t len, BrainRequest& out) {
         return true;
     }
 
-    const uint8_t want = brainRequestLen(out.op);
-    if (want == 0) {
+    const uint8_t lo = brainRequestMinLen(out.op);
+    if (lo == 0) {
         return true;
     }
-    if (n != want) {
+    if (n < lo || n > brainRequestMaxLen(out.op)) {
         return false;
     }
     const uint8_t* body = p + kBrainRequestHeaderLen;
@@ -322,14 +481,45 @@ bool decodeBrainRequest(const uint8_t* buf, uint16_t len, BrainRequest& out) {
         out.y_mm         = static_cast<int32_t>(rd32(body + 4));
         out.heading_cdeg = static_cast<int32_t>(rd32(body + 8));
         break;
-    case kOpSelectLandmark:
-        out.landmark_id  = body[0];
-        out.select_flags = body[1];
-        break;
-    case kOpGetStateWithImu:
-        out.imu_flags = body[0];
-        out.imu_stamp_ms = rd32(body + 1);
+    case kOpGetState:
+        out.imu_flags         = body[0];
+        out.imu_stamp_ms      = rd32(body + 1);
         out.imu_rotation_mdeg = static_cast<int32_t>(rd32(body + 5));
+        break;
+    case kOpProfileWrite:
+        out.profile_id = rd32(body);
+        out.total_len  = rd16(body + 4);
+        out.offset     = rd16(body + 6);
+        out.data_len = static_cast<uint8_t>(n - kBrainRequestHeaderLen - kProfileWriteHeaderLen);
+        memcpy(out.data, body + kProfileWriteHeaderLen, out.data_len);
+        break;
+    case kOpProfileApply:
+        out.profile_id = rd32(body);
+        out.total_len  = rd16(body + 4);
+        break;
+    case kOpReadDoc:
+        out.doc_kind   = body[0];
+        out.doc_id     = rd32(body + 1);
+        out.doc_offset = rd16(body + 5);
+        out.max_len    = body[7];
+        break;
+    case kOpControl:
+        out.action     = body[0];
+        out.action_arg = body[1];
+        break;
+    case kOpPathReport:
+        out.command_id  = rd32(body);
+        out.path_mode   = body[4];
+        out.point_count = body[5];
+        if (out.point_count > kPathReportMaxPoints ||
+            n != kBrainRequestHeaderLen + kPathReportHeaderLen + 8 * out.point_count) {
+            return false;
+        }
+        for (uint8_t i = 0; i < out.point_count; ++i) {
+            const uint8_t* at  = body + kPathReportHeaderLen + 8 * i;
+            out.points[i].x_mm = static_cast<int32_t>(rd32(at));
+            out.points[i].y_mm = static_cast<int32_t>(rd32(at + 4));
+        }
         break;
     default: break;
     }
@@ -337,8 +527,13 @@ bool decodeBrainRequest(const uint8_t* buf, uint16_t len, BrainRequest& out) {
 }
 
 uint16_t encodeBrainReply(const BrainReply& in, uint8_t* buf, uint16_t cap) {
-    const uint8_t known = brainReplyLen(in.op, in.result);
-    const uint8_t n     = known != 0 ? known : kBrainReplyHeaderLen;
+    uint8_t n = kBrainReplyHeaderLen;
+    if (brainReplyMinLen(in.op, in.result) != 0) {
+        n = replyLen(in);
+        if (n == 0) {
+            return 0;
+        }
+    }
     if (n + kLinkEnvelopeLen > cap) {
         return 0;
     }
@@ -359,12 +554,44 @@ uint16_t encodeBrainReply(const BrainReply& in, uint8_t* buf, uint16_t cap) {
             wr32(body, in.odometry_epoch);
             wr32(body + 4, in.anchor_revision);
             break;
-        case kOpSelectLandmark:
-            body[0] = in.landmark_id;
-            body[1] = in.select_flags;
+        case kOpGetState: wrState(body, in.state); break;
+        case kOpProfileWrite:
+            wr32(body, in.profile_id);
+            wr16(body + 4, in.received);
             break;
-        case kOpGetState:
-        case kOpGetStateWithImu: wrState(body, in.state); break;
+        case kOpProfileApply:
+            wr32(body, in.profile_id);
+            body[4] = in.profile_state;
+            body[5] = in.profile_reason;
+            body[6] = in.profile_detail;
+            break;
+        case kOpReadDoc:
+            body[0] = in.doc_kind;
+            wr32(body + 1, in.doc_id);
+            wr16(body + 5, in.doc_total_len);
+            wr32(body + 7, in.doc_crc32);
+            wr16(body + 11, in.doc_offset);
+            memcpy(body + kReadDocReplyHeaderLen, in.data, in.data_len);
+            break;
+        case kOpControl:
+            body[0] = in.action;
+            body[1] = in.calibration;
+            body[2] = in.control_detail;
+            break;
+        case kOpReadWheels:
+            body[0] = in.wheel_count;
+            for (uint8_t i = 0; i < in.wheel_count; ++i) {
+                const WheelReading& w  = in.wheels[i];
+                uint8_t*            at = body + 1 + kWheelReadingLen * i;
+                memset(at, 0, kWheelReadingLen);
+                at[0] = w.port;
+                at[1] = w.flags;
+                wr16(at + 2, w.discontinuity);
+                wr32(at + 4, static_cast<uint32_t>(w.counts));
+                wr32(at + 8, static_cast<uint32_t>(w.travel_um));
+                wr16(at + 12, w.age_ms);
+            }
+            break;
         default: break;
         }
     }
@@ -389,11 +616,11 @@ bool decodeBrainReply(const uint8_t* buf, uint16_t len, BrainReply& out) {
         return true;
     }
 
-    const uint8_t want = brainReplyLen(out.op, out.result);
-    if (want == 0) {
+    const uint8_t lo = brainReplyMinLen(out.op, out.result);
+    if (lo == 0) {
         return true;
     }
-    if (n != want) {
+    if (n < lo || n > brainReplyMaxLen(out.op, out.result)) {
         return false;
     }
     if (n == kBrainReplyHeaderLen) {
@@ -406,14 +633,140 @@ bool decodeBrainReply(const uint8_t* buf, uint16_t len, BrainReply& out) {
         out.odometry_epoch  = rd32(body);
         out.anchor_revision = rd32(body + 4);
         break;
-    case kOpSelectLandmark:
-        out.landmark_id  = body[0];
-        out.select_flags = body[1];
+    case kOpGetState: rdState(body, out.state); break;
+    case kOpProfileWrite:
+        out.profile_id = rd32(body);
+        out.received   = rd16(body + 4);
         break;
-    case kOpGetState:
-    case kOpGetStateWithImu: rdState(body, out.state); break;
+    case kOpProfileApply:
+        out.profile_id     = rd32(body);
+        out.profile_state  = body[4];
+        out.profile_reason = body[5];
+        out.profile_detail = body[6];
+        break;
+    case kOpReadDoc:
+        out.doc_kind      = body[0];
+        out.doc_id        = rd32(body + 1);
+        out.doc_total_len = rd16(body + 5);
+        out.doc_crc32     = rd32(body + 7);
+        out.doc_offset    = rd16(body + 11);
+        out.data_len = static_cast<uint8_t>(n - kBrainReplyHeaderLen - kReadDocReplyHeaderLen);
+        memcpy(out.data, body + kReadDocReplyHeaderLen, out.data_len);
+        break;
+    case kOpControl:
+        out.action         = body[0];
+        out.calibration    = body[1];
+        out.control_detail = body[2];
+        break;
+    case kOpReadWheels:
+        out.wheel_count = body[0];
+        if (out.wheel_count > kWheelReadingsMax ||
+            n != kBrainReplyHeaderLen + 1 + kWheelReadingLen * out.wheel_count) {
+            return false;
+        }
+        for (uint8_t i = 0; i < out.wheel_count; ++i) {
+            const uint8_t* at      = body + 1 + kWheelReadingLen * i;
+            WheelReading&  w       = out.wheels[i];
+            w.port                 = at[0];
+            w.flags                = at[1];
+            w.discontinuity        = rd16(at + 2);
+            w.counts               = static_cast<int32_t>(rd32(at + 4));
+            w.travel_um            = static_cast<int32_t>(rd32(at + 8));
+            w.age_ms               = rd16(at + 12);
+        }
+        break;
     default: break;
     }
+    return true;
+}
+
+uint16_t encodePicoCommand(const PicoCommand& in, uint8_t* buf, uint16_t cap) {
+    const uint8_t known = picoCommandLen(in.op);
+    const uint8_t n     = known != 0 ? known : kPicoCommandHeaderLen;
+    if (n + kLinkEnvelopeLen > cap) {
+        return 0;
+    }
+    uint8_t* p = buf + 4;
+    p[0]       = in.version;
+    p[1]       = in.op;
+    wr16(p + 2, in.request_id);
+    wr16(p + 4, in.target_boot_id);
+    if (in.op == kPicoOpConfigure) {
+        p[6] = in.imu_enabled;
+    } else if (in.op == kPicoOpReinitImu) {
+        p[6] = in.imu_port;
+    }
+    return finishLinkFrame(kFramePicoCommand, n, buf);
+}
+
+bool decodePicoCommand(const uint8_t* buf, uint16_t len, PicoCommand& out) {
+    const uint8_t* p = linkPayload(kFramePicoCommand, buf, len);
+    if (p == nullptr || p[0] != kPicoLinkVersion) {
+        return false;
+    }
+    const uint8_t n    = buf[3];
+    out                = PicoCommand{};
+    out.version        = p[0];
+    out.op             = p[1];
+    out.request_id     = rd16(p + 2);
+    out.target_boot_id = rd16(p + 4);
+    const uint8_t want = picoCommandLen(out.op);
+    if (want == 0) {
+        return true;
+    }
+    if (n != want) {
+        return false;
+    }
+    if (out.op == kPicoOpConfigure) {
+        out.imu_enabled = p[6];
+    } else if (out.op == kPicoOpReinitImu) {
+        out.imu_port = p[6];
+    }
+    return true;
+}
+
+uint16_t encodePicoStatus(const PicoStatus& in, uint8_t* buf, uint16_t cap) {
+    if (kPicoStatusLen + kLinkEnvelopeLen > cap) {
+        return 0;
+    }
+    uint8_t* p = buf + 4;
+    p[0]       = in.version;
+    wr16(p + 1, in.boot_id);
+    p[3] = in.acq_epoch;
+    p[4] = in.imu_epoch;
+    wr32(p + 5, in.uptime_ms);
+    p[9]  = in.imu_state;
+    p[10] = in.imu_reason;
+    wr16(p + 11, in.imu_attempts);
+    p[13] = in.flags;
+    wr16(p + 14, in.last_request_id);
+    p[16] = in.last_op;
+    p[17] = in.last_status;
+    p[18] = in.last_detail;
+    p[19] = in.firmware;
+    return finishLinkFrame(kFramePicoStatus, kPicoStatusLen, buf);
+}
+
+bool decodePicoStatus(const uint8_t* buf, uint16_t len, PicoStatus& out) {
+    const uint8_t* p = linkPayload(kFramePicoStatus, buf, len);
+    if (p == nullptr || p[0] != kPicoLinkVersion) {
+        return false;
+    }
+    out                 = PicoStatus{};
+    out.version         = p[0];
+    out.boot_id         = rd16(p + 1);
+    out.acq_epoch       = p[3];
+    out.imu_epoch       = p[4];
+    out.uptime_ms       = rd32(p + 5);
+    out.imu_state       = p[9];
+    out.imu_reason      = p[10];
+    out.imu_attempts    = rd16(p + 11);
+    out.flags           = p[13];
+    out.last_request_id = rd16(p + 14);
+    out.last_op         = p[16];
+    out.last_status     = p[17];
+    out.last_detail     = p[18];
+    out.firmware        = p[19];
     return true;
 }
 
@@ -435,7 +788,14 @@ uint16_t FrameReader::expectedLen() const {
         const uint16_t mask = rd16(buf_ + 8);
         return sensorMaskValid(mask) ? sensorFrameLen(mask) : reject;
     }
-    if (type == kFrameBrainRequest || type == kFrameBrainReply) {
+    if (type == kFrameSensorV2) {
+        if (len_ < kSensorV2HeaderLen) {
+            return 0;
+        }
+        const uint16_t mask = rd16(buf_ + 12);
+        return sensorMaskValid(mask) ? sensorV2FrameLen(mask) : reject;
+    }
+    if (linkType(type)) {
         if (len_ < 4) {
             return 0;
         }
@@ -446,7 +806,7 @@ uint16_t FrameReader::expectedLen() const {
 }
 
 bool FrameReader::frameValid(uint16_t len) const {
-    if (buf_[2] == kFrameSensor) {
+    if (buf_[2] == kFrameSensor || buf_[2] == kFrameSensorV2) {
         return checksum(buf_, len) == 0;
     }
     return crc16(buf_ + 2, static_cast<uint16_t>(len - 4)) == rd16(buf_ + len - 2);

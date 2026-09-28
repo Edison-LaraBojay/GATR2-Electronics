@@ -24,13 +24,18 @@
 
 ## Brain
 
-- [investiGATR](investigatr.md): Brain navigation library: API, input contract,
-  input sources and fallback, control law, configuration and tuning, host build
-  and tests.
-- [communiGATR](communigatr.md): Brain side of the brain link: driver and client,
-  sessions and restarts, timing, PROS packaging, the testing application, and
-  the hardware bring-up checklist.
-- [Brain folder](../brain/README.md): libraries, PROS applications, and the host
+- [Brain setup](brain_setup.md): where robot settings live, building and
+  uploading, the localization test and drive test programs, wheel and IMU
+  calibration, placement, recovery, and what is not yet hardware validated.
+- [investiGATR](investigatr.md): path planning and the shared Brain types
+  (field, state source, references, motion model, paths); planner method,
+  exits by walls, cost and limits.
+- [communiGATR](communigatr.md): the Pi link over USB or RS-485: sessions,
+  robot profile, field transfer, placement, calibration, recovery, timing,
+  PROS packaging.
+- [actuGATR](actugatr.md): movement commands, path following, tank and
+  mecanum drives, drive ownership, tuning.
+- [Brain folder](../brain/README.md): libraries, PROS programs, and the host
   build.
 
 ## Hardware and deployment
@@ -38,8 +43,8 @@
 - [PCB overview](../pcb/README.md): board families, revisions, and validation status.
 - [Hardware](hardware.md): sensor roles, firmware settings, and communication wiring.
 - [Pico firmware](../pico/README.md): acquisition and sensor telemetry.
-- [Wire interfaces](interfaces.md): Pico sensor frames and the brain link v3
-  request/reply protocol (sessions, results, bus timing).
+- [Wire interfaces](interfaces.md): Pico sensor frames and control, and the brain
+  link v4 request/reply protocol (sessions, profile, documents, bus timing).
 - [Pi access](pi_setup.md): SSH and provisioning.
 - [Pi camera setup](../pi/navigatr/docs/pi_camera_setup.md): libcamera build and
   capture checks.

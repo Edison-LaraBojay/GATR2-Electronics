@@ -44,12 +44,18 @@ ResourceInstance make_wheel_geometry(const ConfigNode&              node,
             !w.requireDouble("position_x_m", decl.position_x_m, err) ||
             !w.requireDouble("position_y_m", decl.position_y_m, err) ||
             !w.requireDouble("measurement_angle_deg", decl.measurement_angle_deg, err) ||
-            !w.requireAttr("direction", direction, err)) {
+            !w.requireAttr("direction", direction, err) ||
+            !w.getDouble("travel_scale", 1.0, decl.travel_scale, err)) {
             ok = false;
             return;
         }
         if (decl.radius_m <= 0.0) {
             err = w.path() + ": radius_m must be positive";
+            ok  = false;
+            return;
+        }
+        if (decl.travel_scale <= 0.0) {
+            err = w.path() + ": travel_scale must be positive";
             ok  = false;
             return;
         }

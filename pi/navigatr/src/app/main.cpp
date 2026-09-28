@@ -131,6 +131,17 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
+    // lifecycle events (profile applies and refusals, controls) as log lines
+    uint64_t   events_seen = 0;
+    const auto printEvents = [&] {
+        for (const navigatr::RuntimeEvent& e : system->events()) {
+            if (e.sequence > events_seen) {
+                std::fprintf(stderr, "event: %s\n", e.text.c_str());
+                events_seen = e.sequence;
+            }
+        }
+    };
+
     if (inline_mode) {
         const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
             std::chrono::duration<double>(1.0 / system->loopRateHz()));
@@ -138,6 +149,7 @@ int main(int argc, char** argv) {
         long cycles = 0;
         while (g_stop == 0 && (max_cycles < 0 || cycles < max_cycles)) {
             system->step(navigatr::HostClock::now());
+            printEvents();
             ++cycles;
             next += period;
             std::this_thread::sleep_until(next);
@@ -149,6 +161,9 @@ int main(int argc, char** argv) {
         }
         while (g_stop == 0 &&
                (max_cycles < 0 || system->cycle() < static_cast<uint64_t>(max_cycles))) {
+            // the Brain profile boundary belongs to this thread
+            system->applyPendingProfile();
+            printEvents();
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
     }

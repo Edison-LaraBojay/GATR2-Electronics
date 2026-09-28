@@ -2,8 +2,11 @@
 
 #include "communigatr/client.h"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
+
+#include "common/link_documents.h"
 
 namespace communigatr
 {
@@ -12,54 +15,92 @@ namespace
 {
 
 constexpr Seconds  kLongAgo   = std::numeric_limits<Seconds>::lowest();
+constexpr Seconds  kUnknown   = -std::numeric_limits<Seconds>::infinity();
 constexpr int      kMaxReads  = 16; // 64 byte reads per receive or drain
 constexpr uint32_t kNonceStep = 0x9E3779B9u;
+constexpr int      kFailuresBeforeBackoff = 3;
+constexpr int      kPollsBeforeTransfer   = 4; // due polls a waiting transfer yields to
+constexpr int      kBudgetFrameBytes      = 85; // v3 largest request plus largest reply
 
 // Anchor revisions only grow within one pi_instance; serial order handles wrap.
 bool anchorReached(uint32_t reported, uint32_t wanted) {
     return static_cast<uint32_t>(reported - wanted) < 0x80000000u;
 }
 
+// The same shared check the Pi runs, before anything is sent.
+bool profileValid(const ProfileDocument& doc, uint8_t& reason, uint8_t& detail) {
+    reason = doc.reason;
+    detail = doc.detail;
+    if (reason != gatr2::kProfileReasonNone) {
+        return false;
+    }
+    gatr2::RobotProfileDoc decoded;
+    if (!gatr2::decodeRobotProfile(doc.bytes, doc.len, decoded)) {
+        reason = gatr2::kProfileReasonFormat;
+        detail = 0;
+        return false;
+    }
+    return gatr2::validateRobotProfile(decoded, reason, detail);
+}
+
 } // namespace
 
 Client::Client(BytePort& port, std::function<uint32_t()> nonce, const ClientConfig& config)
-    : port_(port), nonce_source_(std::move(nonce)), config_(config) {
+    : port_(port), nonce_source_(std::move(nonce)), config_(config),
+      map_cache_(gatr2::kFieldMapMaxLen), map_asm_(gatr2::kFieldMapMaxLen),
+      estimate_asm_(gatr2::kFieldEstimateMaxLen) {
     next_send_      = kLongAgo;
     next_hello_     = kLongAgo;
     next_state_     = kLongAgo;
     next_placement_ = kLongAgo;
-    next_select_    = kLongAgo;
+    next_profile_   = kLongAgo;
+    next_map_       = kLongAgo;
+    next_estimate_  = kLongAgo;
+    field_.map.reserve(gatr2::kFieldMapMaxLen);
+    field_.estimate.reserve(gatr2::kFieldEstimateMaxLen);
+    if (config_.profile.configured()) {
+        configureProfile(config_.profile);
+    }
 }
 
 void Client::poll(Seconds now) {
-    // The operation deadline includes confirmation after SET_POSE Ok. Check
-    // before receive so a reply processed after the deadline cannot revive it.
-    // Keep any outstanding bus response window until its reply or timeout.
+    // Operation deadlines include confirmation. Checked before receive so a
+    // reply processed after the deadline cannot revive them. An outstanding
+    // bus response window is kept until its reply or timeout.
     if (placementPending() && placement_tx_.attempts > 0 &&
         now - placement_tx_.first_sent >= config_.placement_deadline) {
         settlePlacement(PlacementResult::kTimedOut, placement_.result);
     }
+    if (controlPending() && control_tx_.attempts > 0 &&
+        now - control_tx_.first_sent >=
+            (control_answered_ ? config_.control_wait : config_.control_deadline)) {
+        settleControl(ControlResult::kTimedOut, control_.result);
+    }
     receive(now);
-    if (outstanding_ != Kind::kNone && now - sent_at_ >= config_.response_timeout) {
+    if (outstanding_ != Kind::kNone && now - sent_at_ >= sent_timeout_) {
         ++stats_.timeouts;
         attemptFailed(now);
     }
     transmit(now);
 }
 
+// ---------------------------------------------------------------------------
+// Public operations
+// ---------------------------------------------------------------------------
+
 PlacementTicket Client::submitPlacement(int32_t x_mm, int32_t y_mm, int32_t heading_cdeg) {
-    if (placementPending()) {
+    if (placementPending() || !ready_ || (profileConfigured() && !profileApplied())) {
         return 0;
     }
     last_ticket_ = last_ticket_ == UINT32_MAX ? 1 : last_ticket_ + 1;
 
-    placement_        = PlacementStatus{};
-    placement_.ticket = last_ticket_;
-    placement_.state  = PlacementResult::kPending;
-    placement_acked_  = false;
-    placement_tx_     = Transaction{};
-    next_placement_   = kLongAgo;
-    bench_poll_before_retry_ = false;
+    placement_          = PlacementStatus{};
+    placement_.ticket   = last_ticket_;
+    placement_.state    = PlacementResult::kPending;
+    placement_acked_    = false;
+    placement_tx_       = Transaction{};
+    next_placement_     = kLongAgo;
+    state_before_retry_ = false;
 
     placement_request_              = gatr2::BrainRequest{};
     placement_request_.op           = gatr2::kOpSetPose;
@@ -84,22 +125,115 @@ PlacementStatus Client::placementStatus(PlacementTicket ticket) const {
 
 bool Client::placementPending() const { return placement_.state == PlacementResult::kPending; }
 
-SelectionState Client::selection() const {
-    if (want_ == 0) {
-        return SelectionState::kNotRequested;
+ControlTicket Client::control(uint8_t action) {
+    if (controlPending() || !ready_) {
+        return 0;
     }
-    if (!pi_selection_known_ || pi_selection_ != want_ || select_tx_.len != 0) {
-        return SelectionState::kPending;
+    last_control_     = last_control_ == UINT32_MAX ? 1 : last_control_ + 1;
+    control_          = ControlStatus{};
+    control_.ticket   = last_control_;
+    control_.action   = action;
+    control_.state    = ControlResult::kPending;
+    control_tx_       = Transaction{};
+    control_answered_ = false;
+    control_misses_   = 0;
+    next_control_     = kLongAgo;
+    return last_control_;
+}
+
+bool Client::requestWheels() {
+    if (session_ == 0) {
+        return false;
     }
-    if (selection_result_ == gatr2::kResultUnknownLandmark) {
-        return SelectionState::kUnknownLandmark;
+    wheels_wanted_ = true;
+    return true;
+}
+
+ControlStatus Client::controlStatus(ControlTicket ticket) const {
+    if (ticket == 0 || ticket != control_.ticket) {
+        ControlStatus none;
+        none.ticket = ticket;
+        return none;
     }
-    if (selection_result_ == gatr2::kResultLandmarkUnsupported) {
-        return SelectionState::kUnsupported;
+    return control_;
+}
+
+bool Client::controlPending() const { return control_.state == ControlResult::kPending; }
+
+void Client::resubmitProfile() {
+    if (profile_.state == ProfileSync::kNone || profile_.state == ProfileSync::kInvalid) {
+        return;
     }
-    const bool reported =
-        state_.valid && state_count_ > selection_mark_ && state_.state.landmark_id == want_;
-    return reported ? SelectionState::kActive : SelectionState::kPending;
+    profile_.state    = ready_ ? ProfileSync::kWriting : ProfileSync::kWaiting;
+    profile_.reason   = gatr2::kProfileReasonNone;
+    profile_.detail   = 0;
+    profile_.result   = gatr2::kResultOk;
+    profile_.received = 0;
+    profile_failures_ = 0;
+    next_profile_     = kLongAgo;
+}
+
+bool Client::setProfile(const ProfileDocument& doc) {
+    if (!doc.configured()) {
+        return false;
+    }
+    uint8_t    reason  = 0;
+    uint8_t    detail  = 0;
+    const bool valid   = profileValid(doc, reason, detail);
+    const bool running = profile_.state != ProfileSync::kNone &&
+                         profile_.state != ProfileSync::kInvalid;
+    if (!valid && running) {
+        return false;
+    }
+    if (valid && running && profileId(doc) == profile_.id && doc.len == profile_len_) {
+        return true;
+    }
+    configureProfile(doc);
+    return valid;
+}
+
+bool Client::reportPath(uint32_t command_id, uint8_t path_mode, const gatr2::PathPoint* points,
+                        std::size_t count) {
+    if (session_ == 0 || path_mode > gatr2::kPathAvoiding || (count > 0 && points == nullptr)) {
+        ++stats_.paths_dropped;
+        return false;
+    }
+    if (path_pending_) {
+        ++stats_.paths_dropped;
+    }
+    if (path_mode == gatr2::kPathNone) {
+        count = 0;
+    }
+    gatr2::BrainRequest request;
+    request.op         = gatr2::kOpPathReport;
+    request.command_id = command_id;
+    request.path_mode  = path_mode;
+    const std::size_t max = gatr2::kPathReportMaxPoints;
+    if (count <= max) {
+        request.point_count = static_cast<uint8_t>(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            request.points[i] = points[i];
+        }
+    } else {
+        // Evenly spaced, rounded; first and last kept.
+        request.point_count = static_cast<uint8_t>(max);
+        for (std::size_t i = 0; i < max; ++i) {
+            const std::size_t at = (2 * i * (count - 1) + (max - 1)) / (2 * (max - 1));
+            request.points[i]    = points[at];
+        }
+    }
+    path_request_ = request;
+    path_pending_ = true;
+    return true;
+}
+
+FieldSyncStatus Client::fieldSync() const {
+    FieldSyncStatus s;
+    s.map_id           = map_cache_id_;
+    s.map_reading      = map_asm_.active();
+    s.map_received     = map_asm_.active() ? map_asm_.offset() : 0;
+    s.estimate_reading = estimate_asm_.active() ? estimate_asm_.docId() : 0;
+    return s;
 }
 
 bool Client::connected(Seconds now) const {
@@ -111,6 +245,15 @@ Seconds Client::linkAge(Seconds now) const {
         return std::numeric_limits<Seconds>::infinity();
     }
     return now - last_reply_;
+}
+
+Seconds Client::responseTimeout(uint8_t op, uint16_t frame_len) const {
+    uint8_t reply = gatr2::brainReplyMaxLen(op, gatr2::kResultOk);
+    if (reply == 0) {
+        reply = gatr2::kBrainReplyHeaderLen;
+    }
+    const int extra = frame_len + reply + gatr2::kLinkEnvelopeLen - kBudgetFrameBytes;
+    return config_.response_timeout + (extra > 0 ? extra * config_.byte_time : 0.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -200,11 +343,31 @@ void Client::handleReply(const gatr2::BrainReply& reply, Seconds now) {
     case Kind::kPlacement:
         handlePlacement(reply, now);
         break;
-    case Kind::kSelect:
-        handleSelect(reply, now);
+    case Kind::kControl:
+        handleControl(reply, now);
+        break;
+    case Kind::kWheels:
+        handleWheels(reply, now, round_trip);
+        break;
+    case Kind::kProfileWrite:
+        handleProfileWrite(reply);
+        break;
+    case Kind::kProfileApply:
+        handleProfileApply(reply, now);
         break;
     case Kind::kState:
         handleState(reply, now, round_trip);
+        break;
+    case Kind::kMapChunk:
+        handleMapChunk(reply, now);
+        break;
+    case Kind::kEstimateChunk:
+        handleEstimateChunk(reply, now);
+        break;
+    case Kind::kPathReport:
+        if (reply.result != gatr2::kResultOk) {
+            ++stats_.unexpected;
+        }
         break;
     default:
         break;
@@ -223,18 +386,13 @@ void Client::handleHello(const gatr2::BrainReply& reply, Seconds now) {
         return;
     }
     ++stats_.sessions;
-    session_            = reply.session;
-    pi_instance_        = reply.pi_instance;
-    last_reply_         = now;
-    ready_              = false;
-    state_              = StateSample{};
-    state_count_        = 0;
-    next_state_         = now;
-    pi_selection_       = 0;
-    pi_selection_known_ = true;
-    selection_result_   = gatr2::kResultOk;
-    select_tx_.len      = 0;
-    next_select_        = kLongAgo;
+    session_     = reply.session;
+    pi_instance_ = reply.pi_instance;
+    last_reply_  = now;
+    ready_       = false;
+    state_       = StateSample{};
+    state_count_ = 0;
+    next_state_  = now;
 }
 
 void Client::handlePlacement(const gatr2::BrainReply& reply, Seconds now) {
@@ -255,34 +413,134 @@ void Client::handlePlacement(const gatr2::BrainReply& reply, Seconds now) {
         if (placementExhausted(now)) {
             settlePlacement(PlacementResult::kTimedOut, reply.result);
         } else {
-            next_placement_ = now + config_.pending_retry;
-            bench_poll_before_retry_ = static_cast<bool>(config_.bench_imu);
+            // The Pi holds the record: a state poll may go before the resend.
+            next_placement_     = now + config_.pending_retry;
+            state_before_retry_ = static_cast<bool>(config_.bench_imu);
         }
         return;
     }
     settlePlacement(PlacementResult::kRejected, reply.result);
 }
 
-void Client::handleSelect(const gatr2::BrainReply& reply, Seconds now) {
-    const gatr2::BrainRequest& request   = sent_;
-    const bool                 selecting = (request.select_flags & gatr2::kSelectFlagSelected) != 0;
-    select_tx_.len                       = 0;
-
-    const bool echo_ok =
-        reply.landmark_id == request.landmark_id && reply.select_flags == request.select_flags;
-    if (reply.result == gatr2::kResultOk && echo_ok) {
-        pi_selection_ = selecting ? request.landmark_id : 0;
-    } else if (selecting && (reply.result == gatr2::kResultUnknownLandmark ||
-                             reply.result == gatr2::kResultLandmarkUnsupported)) {
-        pi_selection_ = request.landmark_id;
-    } else {
-        ++stats_.unexpected;
-        selectFailed(now);
+void Client::handleControl(const gatr2::BrainReply& reply, Seconds now) {
+    if (!controlPending() || control_tx_.attempts == 0 ||
+        sent_.request_id != control_tx_.request.request_id) {
         return;
     }
-    pi_selection_known_ = true;
-    selection_result_   = reply.result;
-    selection_mark_     = state_count_;
+    control_.result   = reply.result;
+    control_answered_ = true;
+    control_misses_   = 0;
+    const bool body   = reply.result == gatr2::kResultOk || reply.result == gatr2::kResultPending ||
+                      reply.result == gatr2::kResultFailed;
+    if (body && reply.action != control_.action) {
+        ++stats_.unexpected;
+        settleControl(ControlResult::kRejected, reply.result);
+        return;
+    }
+    if (body) {
+        control_.calibration = reply.calibration;
+        control_.detail      = reply.control_detail;
+    }
+    switch (reply.result) {
+    case gatr2::kResultOk:
+        settleControl(ControlResult::kOk, reply.result);
+        return;
+    case gatr2::kResultPending:
+        // Asked again with the same bytes; the Pi answers from its record.
+        next_control_ = now + config_.control_retry;
+        return;
+    case gatr2::kResultFailed:
+        settleControl(ControlResult::kFailed, reply.result);
+        return;
+    case gatr2::kResultNotStationary:
+        settleControl(ControlResult::kNotStationary, reply.result);
+        return;
+    case gatr2::kResultNotReady:
+        settleControl(ControlResult::kNotReady, reply.result);
+        return;
+    default:
+        settleControl(ControlResult::kRejected, reply.result);
+        return;
+    }
+}
+
+void Client::handleWheels(const gatr2::BrainReply& reply, Seconds now, Seconds round_trip) {
+    wheels_.result = reply.result;
+    if (reply.result != gatr2::kResultOk) {
+        return;
+    }
+    ++wheels_.sequence;
+    wheels_.received_at = now;
+    wheels_.round_trip  = round_trip;
+    wheels_.count       = reply.wheel_count;
+    for (uint8_t i = 0; i < reply.wheel_count && i < gatr2::kWheelReadingsMax; ++i) {
+        wheels_.wheels[i] = reply.wheels[i];
+    }
+}
+
+void Client::handleProfileWrite(const gatr2::BrainReply& reply) {
+    if (profile_.state != ProfileSync::kWriting || sent_.profile_id != profile_.id) {
+        return; // replaced by setProfile while in flight
+    }
+    profile_.result = reply.result;
+    if (reply.result != gatr2::kResultOk) {
+        profileFailure(reply.result); // a gap or other bytes: rewrite from 0
+        return;
+    }
+    if (reply.profile_id != profile_.id) {
+        ++stats_.unexpected;
+        profileFailure(reply.result);
+        return;
+    }
+    ++stats_.profile_writes;
+    const uint16_t held = std::min<uint16_t>(reply.received, profile_len_);
+    const uint32_t end  = static_cast<uint32_t>(sent_.offset) + sent_.data_len;
+    profile_.received   = held;
+    if (held < end) {
+        // The Pi did not keep this chunk; continue from what it holds.
+        if (++profile_failures_ >= kFailuresBeforeBackoff) {
+            settleProfileRejected(reply.result, gatr2::kProfileReasonNone, 0);
+        }
+        return;
+    }
+    profile_failures_ = 0;
+    if (held >= profile_len_) {
+        profile_.state = ProfileSync::kApplying;
+        next_profile_  = kLongAgo;
+    }
+}
+
+void Client::handleProfileApply(const gatr2::BrainReply& reply, Seconds now) {
+    if (profile_.state != ProfileSync::kApplying || sent_.profile_id != profile_.id) {
+        return;
+    }
+    profile_.result = reply.result;
+    switch (reply.result) {
+    case gatr2::kResultOk:
+        if (reply.profile_id != profile_.id) {
+            ++stats_.unexpected;
+            profileFailure(reply.result);
+            return;
+        }
+        profile_.state    = ProfileSync::kApplied;
+        profile_.reason   = gatr2::kProfileReasonNone;
+        profile_.detail   = 0;
+        profile_failures_ = 0;
+        return;
+    case gatr2::kResultPending:
+        next_profile_ = now + config_.pending_retry;
+        return;
+    case gatr2::kResultProfileRejected:
+        settleProfileRejected(reply.result, reply.profile_reason, reply.profile_detail);
+        return;
+    case gatr2::kResultInvalidArgument:
+        profileFailure(reply.result); // staging incomplete or replaced: rewrite
+        return;
+    default:
+        ++stats_.unexpected;
+        profileFailure(reply.result);
+        return;
+    }
 }
 
 void Client::handleState(const gatr2::BrainReply& reply, Seconds now, Seconds round_trip) {
@@ -290,6 +548,11 @@ void Client::handleState(const gatr2::BrainReply& reply, Seconds now, Seconds ro
         ++stats_.unexpected;
         return;
     }
+    // An estimate id first seen now was taken after the previous poll was
+    // answered; one already current at the first state predates the session.
+    noteEstimateId(reply.state.estimate_id, state_count_ == 0 ? kUnknown : last_state_sent_);
+    last_state_sent_ = sent_at_;
+
     state_.valid       = true;
     state_.pi_instance = reply.pi_instance;
     state_.session     = reply.session;
@@ -297,13 +560,104 @@ void Client::handleState(const gatr2::BrainReply& reply, Seconds now, Seconds ro
     state_.received_at = now;
     state_.round_trip  = round_trip;
     ++state_count_;
-    ready_ = true;
-    error_ = LinkError::kNone;
+    ready_      = true;
+    ever_ready_ = true;
+    error_      = LinkError::kNone;
 
     if (placementPending() && placement_acked_ && state_count_ > placement_mark_ &&
         anchorReached(reply.state.anchor_revision, placement_.anchor_revision)) {
         settlePlacement(PlacementResult::kApplied, gatr2::kResultOk);
     }
+    profileFromState(reply.state);
+    if (map_asm_.active() && map_asm_.docId() != reply.state.map_id) {
+        map_asm_.clear(); // map replaced; read the new one
+    }
+}
+
+void Client::handleMapChunk(const gatr2::BrainReply& reply, Seconds now) {
+    if (!map_asm_.active() || sent_.doc_id != map_asm_.docId() ||
+        sent_.doc_offset != map_asm_.offset()) {
+        return;
+    }
+    switch (reply.result) {
+    case gatr2::kResultOk:
+        break;
+    case gatr2::kResultStale:
+        ++stats_.doc_stale;
+        mapFailure(now);
+        return;
+    case gatr2::kResultUnavailable:
+        map_asm_.clear();
+        next_map_ = now + config_.field_period;
+        return;
+    default:
+        ++stats_.unexpected;
+        mapFailure(now);
+        return;
+    }
+    ++stats_.doc_chunks;
+    const DocAssembly::Step step = map_asm_.accept(reply);
+    if (step == DocAssembly::Step::kMore) {
+        return;
+    }
+    const uint32_t id = map_asm_.docId();
+    if (step != DocAssembly::Step::kComplete || map_asm_.crc() != id ||
+        gatr2::validateFieldMap(map_asm_.data(), map_asm_.length()) != gatr2::DocError::kNone) {
+        ++stats_.doc_rejects;
+        mapFailure(now);
+        return;
+    }
+    std::copy(map_asm_.data(), map_asm_.data() + map_asm_.length(), map_cache_.begin());
+    map_cache_len_ = map_asm_.length();
+    map_cache_id_  = id;
+    map_failures_  = 0;
+    map_asm_.clear();
+    estimate_asm_.clear();     // any estimate in progress names the old map
+    next_estimate_ = kLongAgo; // an estimate for the new map at once
+    ++stats_.maps;
+}
+
+void Client::handleEstimateChunk(const gatr2::BrainReply& reply, Seconds now) {
+    if (!estimate_asm_.active() || sent_.doc_id != estimate_asm_.docId() ||
+        sent_.doc_offset != estimate_asm_.offset()) {
+        return;
+    }
+    switch (reply.result) {
+    case gatr2::kResultOk:
+        break;
+    case gatr2::kResultStale:
+        ++stats_.doc_stale;
+        estimateFailure(now); // restarts from the newest id
+        return;
+    case gatr2::kResultUnavailable:
+        estimate_asm_.clear();
+        next_estimate_ = now + config_.field_period;
+        return;
+    default:
+        ++stats_.unexpected;
+        estimateFailure(now);
+        return;
+    }
+    ++stats_.doc_chunks;
+    const DocAssembly::Step step = estimate_asm_.accept(reply);
+    if (step == DocAssembly::Step::kMore) {
+        return;
+    }
+    gatr2::FieldEstimateHeader header;
+    const bool                 good =
+        step == DocAssembly::Step::kComplete && map_cache_id_ != 0 &&
+        gatr2::decodeFieldEstimateHeader(estimate_asm_.data(), estimate_asm_.length(), header) &&
+        header.estimate_id == estimate_asm_.docId() &&
+        gatr2::validateFieldEstimate(estimate_asm_.data(), estimate_asm_.length(),
+                                     map_cache_.data(), map_cache_len_,
+                                     map_cache_id_) == gatr2::DocError::kNone;
+    if (!good) {
+        ++stats_.doc_rejects;
+        estimateFailure(now);
+        return;
+    }
+    estimate_failures_ = 0;
+    publish(now);
 }
 
 // Unsupported version or op: a terminal error, not a retry storm. The session
@@ -313,9 +667,12 @@ void Client::incompatible(Kind kind, const gatr2::BrainReply& reply, Seconds now
                          reply.result == gatr2::kResultUnsupportedVersion;
     error_             = version ? LinkError::kUnsupportedVersion : LinkError::kUnsupportedOp;
     peer_version_      = reply.version;
+    const uint8_t result = version ? uint8_t{gatr2::kResultUnsupportedVersion} : reply.result;
     if (kind == Kind::kPlacement && placementPending()) {
-        const uint8_t result = version ? uint8_t{gatr2::kResultUnsupportedVersion} : reply.result;
         settlePlacement(PlacementResult::kRejected, result);
+    }
+    if (kind == Kind::kControl && controlPending()) {
+        settleControl(ControlResult::kRejected, result);
     }
     if (session_ != 0) {
         loseSession();
@@ -334,21 +691,38 @@ void Client::attemptFailed(Seconds now) {
     next_send_      = now + config_.request_gap;
     switch (kind) {
     case Kind::kPlacement:
-        if (placementPending() && placement_tx_.attempts > 0 &&
-            sent_.request_id == placement_tx_.request.request_id && placementExhausted(now)) {
-            settlePlacement(PlacementResult::kTimedOut, placement_.result);
+        if (!placementPending() || placement_tx_.attempts == 0 ||
+            sent_.request_id != placement_tx_.request.request_id) {
+            break;
         }
-        if (placementPending() && config_.bench_imu) {
-            bench_poll_before_retry_ = true;
+        if (placementExhausted(now)) {
+            settlePlacement(PlacementResult::kTimedOut, placement_.result);
+        } else if (!placement_acked_) {
+            // The Pi may not have it: resend before any newer request id,
+            // which would make this one stale.
+            retry_first_        = Kind::kPlacement;
+            state_before_retry_ = false;
         }
         break;
-    case Kind::kSelect:
-        if (select_tx_.attempts >= config_.select_attempts) {
-            selectFailed(now);
+    case Kind::kControl:
+        if (!controlPending() || control_tx_.attempts == 0 ||
+            sent_.request_id != control_tx_.request.request_id) {
+            break;
         }
+        ++control_misses_;
+        if (controlExhausted(now)) {
+            settleControl(ControlResult::kTimedOut, control_.result);
+        } else {
+            retry_first_ = Kind::kControl;
+        }
+        break;
+    case Kind::kProfileWrite:
+    case Kind::kProfileApply:
+        // Idempotent by content, sent again with a new id; a state poll first.
+        next_profile_ = now + config_.state_period;
         break;
     default:
-        // HELLO resends the same bytes; GET_STATE is never resent.
+        // HELLO resends the same bytes; everything else is never resent.
         break;
     }
 }
@@ -358,10 +732,17 @@ void Client::transmit(Seconds now) {
         return;
     }
     const Kind kind = choose(now);
+    retry_first_    = Kind::kNone;
     if (kind == Kind::kNone) {
         return;
     }
-    Transaction& tx = transaction(kind);
+    Transaction& tx = kind == Kind::kHello       ? hello_
+                      : kind == Kind::kPlacement ? placement_tx_
+                      : kind == Kind::kControl   ? control_tx_
+                                                 : once_tx_;
+    if (tx.len == 0) {
+        return;
+    }
     drain();
 
     if (tx.attempts == 0) {
@@ -376,15 +757,19 @@ void Client::transmit(Seconds now) {
     if (kind == Kind::kHello && error_ != LinkError::kNone) {
         next_hello_ = now + config_.hello_backoff;
     }
-    outstanding_ = kind;
-    sent_        = tx.request;
-    sent_at_     = now;
+    outstanding_  = kind;
+    sent_         = tx.request;
+    sent_at_      = now;
+    sent_timeout_ = responseTimeout(tx.request.op, tx.len);
     if (!port_.write(tx.frame, static_cast<int>(tx.len))) {
         ++stats_.write_errors;
         attemptFailed(now);
         return;
     }
     ++stats_.requests;
+    if (kind == Kind::kPathReport) {
+        ++stats_.path_reports;
+    }
 }
 
 Client::Kind Client::choose(Seconds now) {
@@ -401,31 +786,24 @@ Client::Kind Client::choose(Seconds now) {
         return Kind::kHello;
     }
 
-    const auto statePoll = [this]() {
-        gatr2::BrainRequest request;
-        request.op = gatr2::kOpGetState;
-        request.session = session_;
-        if (config_.bench_imu) {
-            const BenchImuSample sample = config_.bench_imu();
-            request.op = gatr2::kOpGetStateWithImu;
-            request.imu_flags = sample.valid ? uint8_t{gatr2::kBenchImuValid} : uint8_t{0};
-            request.imu_stamp_ms = sample.stamp_ms;
-            request.imu_rotation_mdeg = sample.rotation_mdeg;
-        }
-        start(state_tx_, request);
-        bench_poll_before_retry_ = false;
-        return Kind::kState;
-    };
-    // A pending placement needs live IMU reports to become applicable. Always
-    // send one between retries, even when placement is already due again.
-    if (bench_poll_before_retry_ && config_.bench_imu) {
-        return statePoll();
+    if (retry_first_ == Kind::kPlacement && placementPending() && !placement_acked_ &&
+        placement_tx_.len != 0) {
+        return Kind::kPlacement;
+    }
+    if (retry_first_ == Kind::kControl && controlPending() && control_tx_.len != 0) {
+        return Kind::kControl;
     }
 
+    // 2. Placement.
     if (placementPending() && !placement_acked_ && now >= next_placement_) {
         if (placement_tx_.len != 0 && placementExhausted(now)) {
             settlePlacement(PlacementResult::kTimedOut, placement_.result);
         } else {
+            // A pending placement needs live bench IMU reports to become
+            // applicable: one state poll between Pending resends.
+            if (state_before_retry_ && config_.bench_imu) {
+                return statePoll();
+            }
             if (placement_tx_.len == 0) {
                 gatr2::BrainRequest request = placement_request_;
                 request.session             = session_;
@@ -435,45 +813,121 @@ Client::Kind Client::choose(Seconds now) {
         }
     }
 
-    if (selectionNeeded() && now >= next_select_) {
-        const uint8_t id    = want_;
-        const uint8_t flags = want_ != 0 ? gatr2::kSelectFlagSelected : 0;
-        if (select_tx_.len != 0 &&
-            (select_tx_.request.landmark_id != id || select_tx_.request.select_flags != flags)) {
-            // Abandoned after a send: the Pi may hold either selection.
-            if (select_tx_.attempts > 0) {
-                pi_selection_known_ = false;
+    // 3. Control.
+    if (controlPending() && now >= next_control_) {
+        if (control_tx_.len != 0 && controlExhausted(now)) {
+            settleControl(ControlResult::kTimedOut, control_.result);
+        } else {
+            if (control_tx_.len == 0) {
+                gatr2::BrainRequest request;
+                request.op      = gatr2::kOpControl;
+                request.session = session_;
+                request.action  = control_.action;
+                start(control_tx_, request);
             }
-            select_tx_.len = 0;
+            return Kind::kControl;
         }
-        if (select_tx_.len == 0) {
-            gatr2::BrainRequest request;
-            request.op           = gatr2::kOpSelectLandmark;
-            request.session      = session_;
-            request.landmark_id  = id;
-            request.select_flags = flags;
-            start(select_tx_, request);
-        }
-        return Kind::kSelect;
     }
 
-    if (now >= next_state_) {
+    // 4. Profile sync.
+    if (ready_ && now >= next_profile_ &&
+        (profile_.state == ProfileSync::kWriting || profile_.state == ProfileSync::kApplying)) {
+        if (profile_.state == ProfileSync::kWriting && profile_.received >= profile_len_) {
+            profile_.state = ProfileSync::kApplying;
+        }
+        gatr2::BrainRequest request;
+        request.session    = session_;
+        request.profile_id = profile_.id;
+        request.total_len  = profile_len_;
+        if (profile_.state == ProfileSync::kWriting) {
+            const uint16_t offset = profile_.received;
+            const uint16_t left   = static_cast<uint16_t>(profile_len_ - offset);
+            request.op            = gatr2::kOpProfileWrite;
+            request.offset        = offset;
+            request.data_len      = static_cast<uint8_t>(
+                std::min<uint16_t>(left, gatr2::kProfileChunkMax));
+            std::copy(config_.profile.bytes + offset,
+                      config_.profile.bytes + offset + request.data_len, request.data);
+            start(once_tx_, request);
+            return Kind::kProfileWrite;
+        }
+        request.op = gatr2::kOpProfileApply;
+        start(once_tx_, request);
+        return Kind::kProfileApply;
+    }
+
+    // 5. State poll. When exchanges outlast the poll period the poll is
+    // always due; a waiting transfer then goes after kPollsBeforeTransfer
+    // polls in a row instead of never.
+    const bool transfer = wheels_wanted_ || mapWanted(now) || estimateWanted(now) || path_pending_;
+    if (now >= next_state_ && (!transfer || starved_polls_ < kPollsBeforeTransfer)) {
+        starved_polls_ = transfer ? starved_polls_ + 1 : 0;
         return statePoll();
+    }
+    starved_polls_ = 0;
+
+    // 6-9. Reads and transfers, normally only while the state poll is not due.
+    if (wheels_wanted_) {
+        gatr2::BrainRequest request;
+        request.op      = gatr2::kOpReadWheels;
+        request.session = session_;
+        wheels_wanted_  = false;
+        start(once_tx_, request);
+        return Kind::kWheels;
+    }
+    if (mapWanted(now)) {
+        const uint32_t target = state_.state.map_id;
+        if (!map_asm_.active() || map_asm_.docId() != target) {
+            map_asm_.begin(gatr2::kDocFieldMap, target);
+        }
+        gatr2::BrainRequest request;
+        request.op         = gatr2::kOpReadDoc;
+        request.session    = session_;
+        request.doc_kind   = gatr2::kDocFieldMap;
+        request.doc_id     = target;
+        request.doc_offset = map_asm_.offset();
+        request.max_len    = map_asm_.maxLen();
+        start(once_tx_, request);
+        return Kind::kMapChunk;
+    }
+    if (estimateWanted(now)) {
+        if (!estimate_asm_.active()) {
+            estimate_asm_.begin(gatr2::kDocFieldEstimate, state_.state.estimate_id);
+            next_estimate_ = now + config_.field_period;
+        }
+        gatr2::BrainRequest request;
+        request.op         = gatr2::kOpReadDoc;
+        request.session    = session_;
+        request.doc_kind   = gatr2::kDocFieldEstimate;
+        request.doc_id     = estimate_asm_.docId();
+        request.doc_offset = estimate_asm_.offset();
+        request.max_len    = estimate_asm_.maxLen();
+        start(once_tx_, request);
+        return Kind::kEstimateChunk;
+    }
+    if (path_pending_) {
+        gatr2::BrainRequest request = path_request_;
+        request.session             = session_;
+        path_pending_               = false;
+        start(once_tx_, request);
+        return Kind::kPathReport;
     }
     return Kind::kNone;
 }
 
-Client::Transaction& Client::transaction(Kind kind) {
-    switch (kind) {
-    case Kind::kHello:
-        return hello_;
-    case Kind::kPlacement:
-        return placement_tx_;
-    case Kind::kSelect:
-        return select_tx_;
-    default:
-        return state_tx_;
+Client::Kind Client::statePoll() {
+    gatr2::BrainRequest request;
+    request.op      = gatr2::kOpGetState;
+    request.session = session_;
+    if (config_.bench_imu) {
+        bench_sample_             = config_.bench_imu();
+        request.imu_flags         = bench_sample_.valid ? uint8_t{gatr2::kBenchImuValid} : uint8_t{0};
+        request.imu_stamp_ms      = bench_sample_.stamp_ms;
+        request.imu_rotation_mdeg = bench_sample_.rotation_mdeg;
     }
+    start(once_tx_, request);
+    state_before_retry_ = false;
+    return Kind::kState;
 }
 
 void Client::start(Transaction& tx, gatr2::BrainRequest request) {
@@ -503,7 +957,8 @@ void Client::drain() {
 }
 
 // Pi restart, unknown session, or an incompatible peer. Nothing of the old
-// session carries over and nothing in flight is ever resent.
+// session carries over and nothing in flight is ever resent. The complete
+// map and the published field stay.
 void Client::loseSession() {
     ++stats_.session_losses;
     session_     = 0;
@@ -513,20 +968,43 @@ void Client::loseSession() {
     if (placementPending()) {
         settlePlacement(PlacementResult::kSessionLost, placement_.result);
     }
-    pi_selection_       = 0;
-    pi_selection_known_ = true;
-    selection_result_   = gatr2::kResultOk;
-    select_tx_.len      = 0;
-    next_select_        = kLongAgo;
+    if (controlPending()) {
+        settleControl(ControlResult::kSessionLost, control_.result);
+    }
+    if (profile_.state != ProfileSync::kNone && profile_.state != ProfileSync::kInvalid) {
+        profile_.state    = ProfileSync::kWaiting;
+        profile_.reason   = gatr2::kProfileReasonNone;
+        profile_.detail   = 0;
+        profile_.received = 0;
+        profile_failures_ = 0;
+        next_profile_     = kLongAgo;
+    }
+    map_asm_.clear();
+    estimate_asm_.clear();
+    map_failures_      = 0;
+    estimate_failures_ = 0;
+    next_map_          = kLongAgo;
+    next_estimate_     = kLongAgo;
+    for (EstimateSeen& seen : estimate_seen_) {
+        seen = EstimateSeen{};
+    }
+    if (path_pending_) {
+        ++stats_.paths_dropped;
+        path_pending_ = false;
+    }
+    wheels_wanted_      = false;
     hello_.len          = 0;
+    retry_first_        = Kind::kNone;
+    state_before_retry_ = false;
+    starved_polls_      = 0;
 }
 
 void Client::settlePlacement(PlacementResult state, uint8_t result) {
-    placement_.state  = state;
-    placement_.result = result;
-    placement_acked_  = false;
-    placement_tx_.len = 0;
-    bench_poll_before_retry_ = false;
+    placement_.state    = state;
+    placement_.result   = result;
+    placement_acked_    = false;
+    placement_tx_.len   = 0;
+    state_before_retry_ = false;
 }
 
 bool Client::placementExhausted(Seconds now) const {
@@ -534,15 +1012,151 @@ bool Client::placementExhausted(Seconds now) const {
            now - placement_tx_.first_sent >= config_.placement_deadline;
 }
 
-bool Client::selectionNeeded() const {
-    return select_tx_.len != 0 || !pi_selection_known_ || pi_selection_ != want_;
+void Client::settleControl(ControlResult state, uint8_t result) {
+    control_.state  = state;
+    control_.result = result;
+    control_tx_.len = 0;
 }
 
-// The Pi may or may not have taken it; a new transaction follows later.
-void Client::selectFailed(Seconds now) {
-    select_tx_.len      = 0;
-    pi_selection_known_ = false;
-    next_select_        = now + config_.select_retry;
+bool Client::controlExhausted(Seconds now) const {
+    return control_misses_ >= config_.control_attempts ||
+           now - control_tx_.first_sent >=
+               (control_answered_ ? config_.control_wait : config_.control_deadline);
+}
+
+// A new document: nothing of an earlier upload counts for it.
+void Client::configureProfile(const ProfileDocument& doc) {
+    config_.profile   = doc;
+    profile_          = ProfileStatus{};
+    profile_.id       = profileId(doc);
+    profile_len_      = doc.len;
+    uint8_t reason    = 0;
+    uint8_t detail    = 0;
+    profile_.state    = profileValid(doc, reason, detail) ? ProfileSync::kWaiting
+                                                          : ProfileSync::kInvalid;
+    profile_.reason   = reason;
+    profile_.detail   = detail;
+    profile_failures_ = 0;
+    next_profile_     = kLongAgo;
+}
+
+// The Pi is authoritative for what it runs. A mismatch restarts the upload
+// unless a rejection is settled.
+void Client::profileFromState(const gatr2::BrainState& state) {
+    switch (profile_.state) {
+    case ProfileSync::kNone:
+    case ProfileSync::kInvalid:
+    case ProfileSync::kRejected:
+        return;
+    default:
+        break;
+    }
+    const bool mine = state.profile_state == gatr2::kProfileApplied && state.profile_id == profile_.id;
+    if (mine) {
+        profile_.state    = ProfileSync::kApplied;
+        profile_.reason   = gatr2::kProfileReasonNone;
+        profile_.detail   = 0;
+        profile_failures_ = 0;
+        return;
+    }
+    if (profile_.state == ProfileSync::kWaiting || profile_.state == ProfileSync::kApplied) {
+        profile_.state    = ProfileSync::kWriting;
+        profile_.received = 0;
+        next_profile_     = kLongAgo;
+    }
+}
+
+void Client::profileFailure(uint8_t result) {
+    profile_.state    = ProfileSync::kWriting;
+    profile_.received = 0;
+    if (++profile_failures_ >= kFailuresBeforeBackoff) {
+        settleProfileRejected(result, gatr2::kProfileReasonNone, 0);
+    }
+}
+
+void Client::settleProfileRejected(uint8_t result, uint8_t reason, uint8_t detail) {
+    profile_.state    = ProfileSync::kRejected;
+    profile_.result   = result;
+    profile_.reason   = reason;
+    profile_.detail   = detail;
+    profile_failures_ = 0;
+}
+
+bool Client::mapWanted(Seconds now) const {
+    return ready_ && state_.valid && state_.state.map_id != 0 &&
+           state_.state.map_id != map_cache_id_ && now >= next_map_;
+}
+
+bool Client::estimateWanted(Seconds now) const {
+    if (!ready_ || !state_.valid) {
+        return false;
+    }
+    const gatr2::BrainState& s = state_.state;
+    if (map_cache_id_ == 0 || s.map_id != map_cache_id_ || s.estimate_id == 0) {
+        return false;
+    }
+    if (estimate_asm_.active()) {
+        return true;
+    }
+    if (now < next_estimate_) {
+        return false;
+    }
+    return s.estimate_id != field_.estimate_id || field_.pi_instance != pi_instance_ ||
+           field_.map_id != map_cache_id_;
+}
+
+void Client::mapFailure(Seconds now) {
+    map_asm_.clear();
+    if (++map_failures_ >= kFailuresBeforeBackoff) {
+        map_failures_ = 0;
+        next_map_     = now + config_.transfer_backoff;
+    }
+}
+
+void Client::estimateFailure(Seconds now) {
+    estimate_asm_.clear();
+    if (++estimate_failures_ >= kFailuresBeforeBackoff) {
+        estimate_failures_ = 0;
+        next_estimate_     = now + config_.transfer_backoff;
+    } else {
+        next_estimate_ = kLongAgo; // again at once, from the newest id
+    }
+}
+
+void Client::publish(Seconds now) {
+    field_.generation = field_.generation == UINT32_MAX ? 1 : field_.generation + 1;
+    if (field_.map_id != map_cache_id_ || field_.map.empty()) {
+        field_.map.assign(map_cache_.begin(), map_cache_.begin() + map_cache_len_);
+        field_.map_id = map_cache_id_;
+    }
+    field_.estimate.assign(estimate_asm_.data(), estimate_asm_.data() + estimate_asm_.length());
+    field_.estimate_id    = estimate_asm_.docId();
+    field_.pi_instance    = pi_instance_;
+    field_.session        = session_;
+    field_.completed_at   = now;
+    field_.snapshot_after = kUnknown;
+    for (const EstimateSeen& seen : estimate_seen_) {
+        if (seen.id == field_.estimate_id) {
+            field_.snapshot_after = seen.after;
+        }
+    }
+    estimate_asm_.clear();
+    ++stats_.estimates;
+}
+
+void Client::noteEstimateId(uint32_t id, Seconds after) {
+    if (id == 0) {
+        return;
+    }
+    for (const EstimateSeen& seen : estimate_seen_) {
+        if (seen.id == id) {
+            return;
+        }
+    }
+    for (int i = 3; i > 0; --i) {
+        estimate_seen_[i] = estimate_seen_[i - 1];
+    }
+    estimate_seen_[0] = EstimateSeen{id, after};
 }
 
 // Per boot counter, 1..65535, wraps to 1, never 0.

@@ -29,6 +29,19 @@ void PicoTelemetry::reset() {
     gyro_have_prev_   = false;
 }
 
+PicoLinkState PicoTelemetry::link() const {
+    std::lock_guard<std::mutex> lock(link_mutex_);
+    return link_state_;
+}
+
+uint32_t PicoTelemetry::submit(uint8_t, uint8_t, MonotonicTime, double) {
+    return 0;
+}
+
+PicoRequestStatus PicoTelemetry::request(uint32_t) const {
+    return PicoRequestStatus{};
+}
+
 void PicoTelemetry::refresh(uint64_t cycle, Diagnostics* diagnostics) {
     if (polled_once_ && cycle == last_poll_cycle_) {
         return;   // already drained this cycle
@@ -74,6 +87,9 @@ void PicoTelemetry::refresh(uint64_t cycle, Diagnostics* diagnostics) {
             } while (reader_.next());
         }
     }
+
+    std::lock_guard<std::mutex> lock(link_mutex_);
+    link_state_.frames_fresh = have_seq_ && !link_dead_;
 }
 
 void PicoTelemetry::applyPacket(const gatr2::SensorSample& s, Diagnostics* diagnostics) {

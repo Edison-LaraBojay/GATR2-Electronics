@@ -19,15 +19,17 @@
 // bind to them by name.
 //
 // Thread safety: single-threaded; refresh and channel reads happen on the
-// pipeline thread.
+// pipeline thread. The PicoControl part follows its contract.
 
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "common/frame_codec.h"
 #include "core/time.h"
+#include "resources/pico_control.h"
 #include "resources/resource_store.h"
 #include "resources/serial_link.h"
 
@@ -36,7 +38,9 @@ namespace navigatr
 
 struct Diagnostics;
 
-class PicoTelemetry
+// Consumers of the Pico link require<PicoTelemetry> by resource id and use
+// it through PicoControl.
+class PicoTelemetry : public PicoControl
 {
 public:
     PicoTelemetry(std::shared_ptr<SerialLink> link, std::string diagnostics_id);
@@ -81,6 +85,11 @@ public:
 
     void reset();
 
+    // PicoControl. Link freshness only for now: no identity, commands refused.
+    PicoLinkState     link() const override;
+    uint32_t          submit(uint8_t op, uint8_t arg, MonotonicTime now, double timeout_s) override;
+    PicoRequestStatus request(uint32_t handle) const override;
+
 private:
     void applyPacket(const gatr2::SensorSample& s, Diagnostics* diagnostics);
 
@@ -107,6 +116,9 @@ private:
     uint64_t last_poll_cycle_ = 0;
     bool     polled_once_     = false;
     bool     link_dead_       = false;
+
+    mutable std::mutex link_mutex_;
+    PicoLinkState      link_state_; // published at the end of each refresh
 };
 
 ResourceInstance make_pico_telemetry(const ConfigNode& node,

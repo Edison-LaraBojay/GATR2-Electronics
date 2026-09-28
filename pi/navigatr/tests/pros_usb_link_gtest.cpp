@@ -8,6 +8,7 @@
 
 #include "common/frame_codec.h"
 #include "common/frames.h"
+#include "common/link_documents.h"
 #include "config/composition.h"
 #include "impl/resources/pros_usb_link.h"
 #include "impl/resources/serial_links.h"
@@ -147,6 +148,51 @@ TEST(ProsUsbLink, AcceptsMaximumFrameAndRejectsOversizedWrite) {
     EXPECT_TRUE(raw->output().takeAll().empty());
 }
 
+TEST(ProsUsbLink, LargestV4RequestAndReplySurviveTheEnvelope) {
+    auto raw = std::make_shared<MemoryLink>();
+    ProsUsbLink link(raw);
+
+    gatr2::BrainRequest write;
+    write.op         = gatr2::kOpProfileWrite;
+    write.session    = 0x01020304;
+    write.request_id = 7;
+    write.profile_id = 0xA5A5A5A5;
+    write.total_len  = gatr2::kProfileMaxLen;
+    write.data_len   = gatr2::kProfileChunkMax;
+    for (uint8_t i = 0; i < write.data_len; ++i) {
+        write.data[i] = static_cast<uint8_t>(i * 7);
+    }
+    std::array<uint8_t, gatr2::kMaxFrameLen> bytes{};
+    ASSERT_EQ(gatr2::encodeBrainRequest(write, bytes.data(), bytes.size()), gatr2::kMaxFrameLen);
+    ASSERT_TRUE(link.write({bytes.data(), bytes.size()}).ok);
+
+    gatr2::BrainReply doc;
+    doc.op            = gatr2::kOpReadDoc;
+    doc.doc_kind      = gatr2::kDocFieldMap;
+    doc.doc_total_len = 500;
+    doc.data_len      = gatr2::kDocChunkMax;
+    std::array<uint8_t, gatr2::kMaxFrameLen> reply{};
+    ASSERT_EQ(gatr2::encodeBrainReply(doc, reply.data(), reply.size()), gatr2::kMaxFrameLen);
+    ASSERT_TRUE(link.write({reply.data(), reply.size()}).ok);
+
+    raw->input().feed(raw->output().takeAll());
+    std::vector<uint8_t> received;
+    for (int attempt = 0; attempt < 8 && received.size() < 2u * gatr2::kMaxFrameLen; ++attempt) {
+        const auto part = read(link, 64);
+        received.insert(received.end(), part.begin(), part.end());
+    }
+    ASSERT_EQ(received.size(), 2u * gatr2::kMaxFrameLen);
+    gatr2::BrainRequest decoded;
+    ASSERT_TRUE(gatr2::decodeBrainRequest(received.data(), gatr2::kMaxFrameLen, decoded));
+    EXPECT_EQ(decoded.data_len, gatr2::kProfileChunkMax);
+    EXPECT_EQ(std::vector<uint8_t>(decoded.data, decoded.data + decoded.data_len),
+              std::vector<uint8_t>(write.data, write.data + write.data_len));
+    gatr2::BrainReply decoded_reply;
+    ASSERT_TRUE(gatr2::decodeBrainReply(received.data() + gatr2::kMaxFrameLen,
+                                        gatr2::kMaxFrameLen, decoded_reply));
+    EXPECT_EQ(decoded_reply.data_len, gatr2::kDocChunkMax);
+}
+
 TEST_F(UsbDiscovery, SelectsOnlyBrainUserInterfaceWithoutAssumingAcmNumber) {
     device("ttyACM0", "00");
     device("ttyACM1", "02", "1234");
@@ -256,7 +302,7 @@ TEST(ProsUsbLink, UsbProfileHandshakeImuPlacementMotionAndInspectionUseExistingP
     const uint32_t session = request(hello).session;
     ASSERT_NE(session, 0u);
     gatr2::BrainRequest imu;
-    imu.op = gatr2::kOpGetStateWithImu;
+    imu.op = gatr2::kOpGetState;
     imu.request_id = 2;
     imu.session = session;
     imu.imu_flags = gatr2::kBenchImuValid;

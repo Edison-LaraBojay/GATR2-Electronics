@@ -11,17 +11,57 @@ namespace gatr2
 {
 
 // Fixed header sizes, sync through the last field before the variable part.
-constexpr uint16_t kSensorHeaderLen = 10;
+constexpr uint16_t kSensorHeaderLen   = 10;
+constexpr uint16_t kSensorV2HeaderLen = 14;
 
 // Brain link: sync0 sync1 type len, then crc u16 after the payload.
 constexpr uint16_t kLinkEnvelopeLen = 6;
 
 // Brain link payload sizes.
+constexpr uint8_t kBrainPayloadMax       = kMaxFrameLen - kLinkEnvelopeLen; // 122
 constexpr uint8_t kBrainRequestHeaderLen = 8;
-constexpr uint8_t kBrainRequestMaxLen    = 32;
+constexpr uint8_t kBrainRequestMaxLen    = kBrainPayloadMax;
 constexpr uint8_t kBrainReplyHeaderLen   = 13;
-constexpr uint8_t kBrainReplyMaxLen      = 64;
+constexpr uint8_t kBrainReplyMaxLen      = kBrainPayloadMax;
 constexpr uint8_t kBrainStateLen         = 40;
+
+// v4 bodies, bytes after the header.
+//
+// Requests
+//   HELLO          nonce u32                                         4
+//   SET_POSE       x_mm i32, y_mm i32, heading_cdeg i32              12
+//   GET_STATE      imu_flags u8, imu_stamp_ms u32, imu_rotation i32  9
+//   PROFILE_WRITE  profile_id u32, total_len u16, offset u16, data   8 + 1..106
+//   PROFILE_APPLY  profile_id u32, total_len u16                     6
+//   READ_DOC       doc_kind u8, doc_id u32, offset u16, max_len u8   8
+//   CONTROL        action u8, arg u8                                 2
+//   PATH_REPORT    command_id u32, path_mode u8, count u8,           6 + 8 x 0..13
+//                  count x (x_mm i32, y_mm i32)
+//   READ_WHEELS    none                                              0
+//
+// Replies (other results and ops are header only)
+//   HELLO          any result: nonce u32                             4
+//   SET_POSE       Ok, Pending: odometry_epoch u32, anchor_rev u32   8
+//   GET_STATE      Ok: state block                                   40
+//   PROFILE_WRITE  Ok: profile_id u32, received u16                  6
+//   PROFILE_APPLY  Ok, Pending, ProfileRejected: profile_id u32,     7
+//                  profile_state u8, reason u8, detail u8
+//   READ_DOC       Ok: doc_kind u8, doc_id u32, total_len u16,       13 + 1..96
+//                  crc32 u32, offset u16, data
+//   CONTROL        Ok, Pending, Failed: action u8, calibration u8,   3
+//                  detail u8
+//   READ_WHEELS    Ok: count u8, count x (port u8, flags u8,         1 + 16 x 0..4
+//                  discontinuity u16, counts i32, travel_um i32,
+//                  age_ms u16, reserved u16)
+constexpr uint8_t kProfileWriteHeaderLen = 8;
+constexpr uint8_t kReadDocReplyHeaderLen = 13;
+constexpr uint8_t kPathReportHeaderLen   = 6;
+constexpr uint8_t kWheelReadingLen       = 16;
+
+// Pico link payload sizes.
+constexpr uint8_t kPicoCommandHeaderLen = 6;
+constexpr uint8_t kPicoCommandMaxLen    = 8;
+constexpr uint8_t kPicoStatusLen        = 20;
 
 // CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, xorout 0.
 uint16_t crc16(const uint8_t* data, uint16_t len);
@@ -34,32 +74,49 @@ uint16_t sensorPayloadLen(uint16_t mask);
 
 // Total frame length, sync through checksum.
 uint16_t sensorFrameLen(uint16_t mask);
+uint16_t sensorV2FrameLen(uint16_t mask);
 
-// v3 payload length for an op, or for an (op, result) reply.
-// 0 when v3 does not define it (unknown op, or unknown result except HELLO).
-uint8_t brainRequestLen(uint8_t op);
-uint8_t brainReplyLen(uint8_t op, uint8_t result);
+// Pico command payload length for an op, 0 for an unknown op.
+uint8_t picoCommandLen(uint8_t op);
+
+// v4 payload length range for a request op, or for an (op, result) reply.
+// Fixed bodies have min == max. 0 when v4 does not define it (unknown op, or
+// unknown result except HELLO).
+uint8_t brainRequestMinLen(uint8_t op);
+uint8_t brainRequestMaxLen(uint8_t op);
+uint8_t brainReplyMinLen(uint8_t op, uint8_t result);
+uint8_t brainReplyMaxLen(uint8_t op, uint8_t result);
 
 // Encode into buf. Returns bytes written, or 0 if the input is not encodable
-// or would not fit in cap.
-// Brain link encoders write version as given and the v3 body for the op
-// (header only when brainRequestLen/brainReplyLen is 0).
+// (a variable body out of range) or would not fit in cap.
+// Brain link encoders write version as given and the v4 body for the op and
+// result (header only when v4 defines no body).
+// Sensor frames: v2 when in.identity, else v1.
 uint16_t encodeSensorFrame(const SensorSample& in, uint8_t* buf, uint16_t cap);
 uint16_t encodeBrainRequest(const BrainRequest& in, uint8_t* buf, uint16_t cap);
 uint16_t encodeBrainReply(const BrainReply& in, uint8_t* buf, uint16_t cap);
 
-// Decode one whole frame. False on bad sync, wrong length, unknown type,
-// unknown mask bit, or checksum mismatch.
+// Decode one whole frame, v1 or v2 (out.identity tells which). False on bad
+// sync, wrong length, unknown type, unknown mask bit, or checksum mismatch.
 bool decodeSensorFrame(const uint8_t* buf, uint16_t len, SensorSample& out);
+
+// Pico link. Encoders return bytes written or 0. Decoders are false on a bad
+// envelope, CRC, length for the op, or version; a command with an unknown op
+// decodes its header and returns true so the Pico can report it.
+uint16_t encodePicoCommand(const PicoCommand& in, uint8_t* buf, uint16_t cap);
+uint16_t encodePicoStatus(const PicoStatus& in, uint8_t* buf, uint16_t cap);
+bool     decodePicoCommand(const uint8_t* buf, uint16_t len, PicoCommand& out);
+bool     decodePicoStatus(const uint8_t* buf, uint16_t len, PicoStatus& out);
 
 // Brain link decode. False on a bad envelope, len out of range for the type,
 // or CRC mismatch. Version other than kBrainLinkVersion: header only, true.
-// v3: a known op (reply: op and result) with the wrong length is false; an
-// unknown one is true with the body ignored.
+// v4: a known op (reply: op and result) with a length outside its range, or a
+// variable body inconsistent with its length, is false; an unknown one is
+// true with the body ignored.
 bool decodeBrainRequest(const uint8_t* buf, uint16_t len, BrainRequest& out);
 bool decodeBrainReply(const uint8_t* buf, uint16_t len, BrainReply& out);
 
-// Byte stream reader for sensor and brain link frames. Scans for the sync
+// Byte stream reader for sensor, brain link and Pico link frames. Scans for the sync
 // pair, buffers one frame and validates its length and checksum or CRC. On a
 // rejected candidate it rescans the buffered bytes after that sync byte, so
 // one push can leave more complete frames buffered behind the reported one.

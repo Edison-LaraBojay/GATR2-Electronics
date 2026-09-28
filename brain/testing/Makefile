@@ -22,9 +22,9 @@ C_STANDARD:=gnu17
 CXX_STANDARD:=gnu++20
 
 # GATR2 Brain libraries, compiled in place from this repository by
-# brain/gatr2_brain.mk. This application uses both.
+# brain/gatr2_brain.mk. This application uses all three.
 GATR2_ROOT ?= ../..
-GATR2_BRAIN_LIBS := investigatr communigatr
+GATR2_BRAIN_LIBS := investigatr communigatr actugatr
 
 # Set to 1 to enable hot/cold linking
 USE_PACKAGE:=1

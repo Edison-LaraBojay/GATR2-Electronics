@@ -2,6 +2,9 @@
 
 #include "sim/fake_pi.h"
 
+#include <algorithm>
+#include <cstring>
+
 namespace communigatr
 {
 
@@ -13,13 +16,113 @@ uint32_t seed(uint32_t pi_instance) {
     return s == 0 ? 1 : s;
 }
 
-bool sameBody(const gatr2::BrainRequest& a, const gatr2::BrainRequest& b) {
-    return a.op == b.op && a.x_mm == b.x_mm && a.y_mm == b.y_mm &&
-           a.heading_cdeg == b.heading_cdeg && a.landmark_id == b.landmark_id &&
-           a.select_flags == b.select_flags;
+// 16-bit serial arithmetic: a is newer when (a - b) mod 65536 is in 1..32767.
+bool newerId(uint16_t a, uint16_t b) {
+    const uint16_t d = static_cast<uint16_t>(a - b);
+    return d != 0 && d < 0x8000;
+}
+
+// Read-only, or idempotent by content: the newest id is answered again.
+bool repeatable(uint8_t op) {
+    return op == gatr2::kOpGetState || op == gatr2::kOpProfileWrite ||
+           op == gatr2::kOpProfileApply || op == gatr2::kOpReadDoc ||
+           op == gatr2::kOpPathReport || op == gatr2::kOpReadWheels;
+}
+
+bool sameRequest(const gatr2::BrainRequest& a, const gatr2::BrainRequest& b) {
+    if (a.op != b.op) {
+        return false;
+    }
+    switch (a.op) {
+    case gatr2::kOpSetPose:
+        return a.x_mm == b.x_mm && a.y_mm == b.y_mm && a.heading_cdeg == b.heading_cdeg;
+    case gatr2::kOpGetState:
+        return a.imu_flags == b.imu_flags && a.imu_stamp_ms == b.imu_stamp_ms &&
+               a.imu_rotation_mdeg == b.imu_rotation_mdeg;
+    case gatr2::kOpProfileWrite:
+        return a.profile_id == b.profile_id && a.total_len == b.total_len &&
+               a.offset == b.offset && a.data_len == b.data_len &&
+               std::memcmp(a.data, b.data, a.data_len) == 0;
+    case gatr2::kOpProfileApply:
+        return a.profile_id == b.profile_id && a.total_len == b.total_len;
+    case gatr2::kOpReadDoc:
+        return a.doc_kind == b.doc_kind && a.doc_id == b.doc_id && a.doc_offset == b.doc_offset &&
+               a.max_len == b.max_len;
+    case gatr2::kOpControl:
+        return a.action == b.action && a.action_arg == b.action_arg;
+    case gatr2::kOpPathReport:
+        if (a.command_id != b.command_id || a.path_mode != b.path_mode ||
+            a.point_count != b.point_count) {
+            return false;
+        }
+        for (uint8_t i = 0; i < a.point_count; ++i) {
+            if (a.points[i].x_mm != b.points[i].x_mm || a.points[i].y_mm != b.points[i].y_mm) {
+                return false;
+            }
+        }
+        return true;
+    case gatr2::kOpReadWheels:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool wellFormed(const gatr2::BrainRequest& r) {
+    switch (r.op) {
+    case gatr2::kOpGetState:
+        return (r.imu_flags & ~gatr2::kBenchImuValid) == 0;
+    case gatr2::kOpProfileWrite:
+        return r.total_len >= gatr2::kProfileHeaderLen && r.total_len <= gatr2::kProfileMaxLen &&
+               static_cast<uint32_t>(r.offset) + r.data_len <= r.total_len;
+    case gatr2::kOpProfileApply:
+        return r.total_len >= gatr2::kProfileHeaderLen && r.total_len <= gatr2::kProfileMaxLen;
+    case gatr2::kOpReadDoc:
+        return (r.doc_kind == gatr2::kDocFieldMap || r.doc_kind == gatr2::kDocFieldEstimate) &&
+               r.max_len > 0;
+    case gatr2::kOpControl:
+        return r.action >= gatr2::kControlRecalibrate &&
+               r.action <= gatr2::kControlRestartAcquisition;
+    case gatr2::kOpPathReport:
+        return r.path_mode <= gatr2::kPathAvoiding;
+    default:
+        return true;
+    }
 }
 
 } // namespace
+
+FakeField makeFakeField(uint16_t count, uint16_t revision) {
+    FakeField field;
+    field.revision = revision;
+    for (uint16_t i = 0; i < count; ++i) {
+        gatr2::FieldObjectRecord r;
+        r.object_id    = static_cast<uint16_t>(10 * (i + 1));
+        r.x_mm         = 300 + (i % 8) * 400;
+        r.y_mm         = 300 + (i / 8) * 200;
+        r.heading_cdeg = (i % 8) * 4500 - 13500;
+        if (i % 6 == 5) {
+            r.kind  = gatr2::kObjectFixed; // reference only, no box
+            r.flags = gatr2::kObjectReference;
+        } else if (i % 2 == 0) {
+            r.kind             = gatr2::kObjectLandmark;
+            r.flags            = gatr2::kObjectObstacle | gatr2::kObjectEstimated |
+                      gatr2::kObjectReference;
+            r.box_x_mm         = 20;
+            r.box_y_mm         = -10;
+            r.box_heading_cdeg = 4500;
+            r.box_length_mm    = 150;
+            r.box_width_mm     = 100;
+        } else {
+            r.kind          = gatr2::kObjectFixed;
+            r.flags         = gatr2::kObjectObstacle;
+            r.box_length_mm = 200;
+            r.box_width_mm  = 50;
+        }
+        field.objects.push_back(r);
+    }
+    return field;
+}
 
 FakePi::FakePi(uint32_t pi_instance) : pi_instance_(pi_instance), rng_(seed(pi_instance)) {}
 
@@ -47,7 +150,7 @@ std::vector<std::vector<uint8_t>> FakePi::receive(const uint8_t* data, std::size
 
 gatr2::BrainReply FakePi::answer(const gatr2::BrainRequest& request) {
     requests_.push_back(request);
-    tickPlacement();
+    tick();
 
     gatr2::BrainReply reply;
     reply.version     = version_;
@@ -61,8 +164,12 @@ gatr2::BrainReply FakePi::answer(const gatr2::BrainRequest& request) {
         reply.result = gatr2::kResultUnsupportedVersion;
         return reply;
     }
-    if (gatr2::brainRequestLen(request.op) == 0 || request.op == unsupported_op_) {
+    if (gatr2::brainRequestMinLen(request.op) == 0 || request.op == unsupported_op_) {
         reply.result = gatr2::kResultUnsupportedOp;
+        return reply;
+    }
+    if (request.request_id == 0 || !wellFormed(request)) {
+        reply.result = gatr2::kResultInvalidArgument;
         return reply;
     }
 
@@ -87,35 +194,14 @@ gatr2::BrainReply FakePi::answer(const gatr2::BrainRequest& request) {
         reply.result = gatr2::kResultUnknownSession;
         return reply;
     }
-    const uint16_t id = request.request_id;
-    if (id == 0) {
-        reply.result = gatr2::kResultInvalidArgument;
+    if (have_newest_ && !newerId(request.request_id, newest_.request_id)) {
+        repeat(reply, request);
         return reply;
     }
-    const uint16_t ahead = static_cast<uint16_t>(id - newest_);
-    if (!have_newest_ || (ahead >= 1 && ahead <= 32767)) {
-        have_newest_    = true;
-        newest_         = id;
-        accepted_other_ = true;
-        apply(reply, request);
-        return reply;
-    }
-
-    // Not newer: a duplicate of a record, a repeated GET_STATE, or stale.
-    if (last_set_pose_.have && id == last_set_pose_.request.request_id &&
-        sameBody(request, last_set_pose_.request)) {
-        answerPlacement(reply, last_set_pose_.sequence);
-    } else if (last_select_.have && id == last_select_.request.request_id &&
-               sameBody(request, last_select_.request)) {
-        answerSelect(reply, request);
-    } else if (id == newest_ && request.op == gatr2::kOpGetState) {
-        answerState(reply);
-    } else if (id == newest_ || (last_set_pose_.have && id == last_set_pose_.request.request_id) ||
-               (last_select_.have && id == last_select_.request.request_id)) {
-        reply.result = gatr2::kResultInvalidArgument;
-    } else {
-        reply.result = gatr2::kResultStale;
-    }
+    have_newest_    = true;
+    newest_         = request;
+    accepted_other_ = true;
+    execute(reply, request, false);
     return reply;
 }
 
@@ -128,32 +214,137 @@ void FakePi::restart(uint32_t pi_instance) {
     accepted_other_  = false;
     nonce_count_     = 0;
     have_newest_     = false;
-    newest_          = 0;
+    newest_          = gatr2::BrainRequest{};
     last_set_pose_   = Record{};
-    last_select_     = Record{};
+    last_control_    = Record{};
 
     init_sequence_    = 0;
     placement_        = Placement{};
     applied_session_  = 0;
     applied_sequence_ = 0;
-    object_requested_ = false;
-    object_wire_id_   = 0;
-    object_sequence_  = 0;
+
+    staging_id_         = 0;
+    staging_total_      = 0;
+    staging_received_   = 0;
+    applied_profile_    = 0;
+    applying_profile_   = 0;
+    applying_countdown_ = 0;
+    profile_state_      = gatr2::kProfileNone;
+    profile_id_         = 0;
+    profile_reason_     = gatr2::kProfileReasonNone;
+    profile_detail_     = 0;
+    rejected_.clear();
 
     robot_.robot_flags &= static_cast<uint8_t>(
         ~(gatr2::kRobotLocalized | gatr2::kRobotAnchorCommand | gatr2::kRobotAnchorConfigured));
     robot_.odometry_epoch  = 0;
     robot_.anchor_revision = 0;
+    robot_.calibration     = gatr2::kCalibrationNone;
+    calibration_left_      = 0;
+
+    estimates_.clear();
+    next_estimate_id_ = 1;
+    if (map_id_ != 0) {
+        publishNominalEstimate();
+    }
+    path_ = FakePath{};
     reader_.reset();
 }
+
+// ---------------------------------------------------------------------------
+// Field documents
+// ---------------------------------------------------------------------------
+
+void FakePi::setField(const FakeField& field) {
+    const uint16_t count = static_cast<uint16_t>(field.objects.size());
+    map_doc_.assign(gatr2::fieldMapLen(count), 0);
+    gatr2::FieldMapHeader header;
+    header.revision     = field.revision;
+    header.object_count = count;
+    header.min_x_mm     = field.min_x_mm;
+    header.min_y_mm     = field.min_y_mm;
+    header.max_x_mm     = field.max_x_mm;
+    header.max_y_mm     = field.max_y_mm;
+    const uint16_t cap  = static_cast<uint16_t>(map_doc_.size());
+    gatr2::encodeFieldMapHeader(header, map_doc_.data(), cap);
+    for (uint16_t i = 0; i < count; ++i) {
+        gatr2::encodeFieldObjectRecord(field.objects[i], i, map_doc_.data(), cap);
+    }
+    map_id_ = gatr2::crc32(map_doc_.data(), cap);
+    estimates_.clear();
+    publishNominalEstimate();
+}
+
+void FakePi::setMapDocument(const std::vector<uint8_t>& doc) {
+    map_doc_ = doc;
+    map_id_  = gatr2::crc32(doc.data(), static_cast<uint32_t>(doc.size()));
+    estimates_.clear();
+}
+
+void FakePi::clearField() {
+    map_doc_.clear();
+    map_id_ = 0;
+    estimates_.clear();
+}
+
+std::vector<gatr2::FieldEstimateRecord> FakePi::nominalRecords() const {
+    std::vector<gatr2::FieldEstimateRecord> records;
+    gatr2::FieldMapHeader                   header;
+    const uint16_t                          len = static_cast<uint16_t>(map_doc_.size());
+    if (!gatr2::decodeFieldMapHeader(map_doc_.data(), len, header)) {
+        return records;
+    }
+    for (uint16_t i = 0; i < header.object_count; ++i) {
+        gatr2::FieldObjectRecord o;
+        gatr2::decodeFieldObjectRecord(map_doc_.data(), len, i, o);
+        gatr2::FieldEstimateRecord e;
+        e.object_id    = o.object_id;
+        e.source       = gatr2::kEstimateSourceNominal;
+        e.flags        = gatr2::kEstimateValid;
+        e.x_mm         = o.x_mm;
+        e.y_mm         = o.y_mm;
+        e.heading_cdeg = o.heading_cdeg;
+        records.push_back(e);
+    }
+    return records;
+}
+
+uint32_t FakePi::publishEstimate(const std::vector<gatr2::FieldEstimateRecord>& records) {
+    const uint16_t count = static_cast<uint16_t>(records.size());
+    Estimate       e;
+    e.id = next_estimate_id_++;
+    e.doc.assign(gatr2::fieldEstimateLen(count), 0);
+    gatr2::FieldEstimateHeader header;
+    header.object_count    = count;
+    header.map_id          = estimate_map_id_ != 0 ? estimate_map_id_ : map_id_;
+    header.estimate_id     = e.id;
+    header.odometry_epoch  = robot_.odometry_epoch;
+    header.anchor_revision = robot_.anchor_revision;
+    const uint16_t cap     = static_cast<uint16_t>(e.doc.size());
+    gatr2::encodeFieldEstimateHeader(header, e.doc.data(), cap);
+    for (uint16_t i = 0; i < count; ++i) {
+        gatr2::encodeFieldEstimateRecord(records[i], i, e.doc.data(), cap);
+    }
+    estimates_.push_back(e);
+    if (estimates_.size() > 3) {
+        estimates_.erase(estimates_.begin());
+    }
+    return e.id;
+}
+
+uint32_t FakePi::publishNominalEstimate() { return publishEstimate(nominalRecords()); }
+
+// ---------------------------------------------------------------------------
+// Requests
+// ---------------------------------------------------------------------------
 
 void FakePi::openSession(const gatr2::BrainRequest& request) {
     session_         = nextSession();
     open_nonce_      = request.nonce;
     open_request_id_ = request.request_id;
     accepted_other_  = false;
-    have_newest_     = true;
-    newest_          = request.request_id;
+    have_newest_     = false;
+    newest_          = gatr2::BrainRequest{};
 
     for (int i = 3; i > 0; --i) {
         nonce_ring_[i] = nonce_ring_[i - 1];
@@ -161,42 +352,108 @@ void FakePi::openSession(const gatr2::BrainRequest& request) {
     nonce_ring_[0] = request.nonce;
     nonce_count_   = nonce_count_ < 4 ? nonce_count_ + 1 : 4;
 
-    // Client state of the old session ends; localization is untouched.
-    last_set_pose_    = Record{};
-    last_select_      = Record{};
-    object_requested_ = false;
-    object_wire_id_   = 0;
-    object_sequence_ += 1;
-    placement_ = Placement{}; // withdraws an unapplied placement
+    // Client state of the old session ends; localization, the profile and
+    // its staging are untouched.
+    last_set_pose_ = Record{};
+    last_control_  = Record{};
+    placement_     = Placement{}; // withdraws an unapplied placement
+    path_          = FakePath{};
     ++sessions_opened_;
 }
 
-void FakePi::apply(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
-    if (request.op == gatr2::kOpSetPose) {
-        init_sequence_ += 1;
-        placement_.pending   = true;
-        placement_.session   = session_;
-        placement_.sequence  = init_sequence_;
-        placement_.x_mm      = request.x_mm;
-        placement_.y_mm      = request.y_mm;
-        placement_.heading   = request.heading_cdeg;
-        placement_.countdown = apply_delay_;
-        last_set_pose_       = Record{true, request, init_sequence_};
-        if (apply_delay_ == 0) {
-            applyPlacement();
+void FakePi::execute(gatr2::BrainReply& reply, const gatr2::BrainRequest& request, bool repeat) {
+    switch (request.op) {
+    case gatr2::kOpGetState:
+        if (!repeat && (request.imu_flags & gatr2::kBenchImuValid) != 0) {
+            ++imu_samples_;
         }
-        answerPlacement(reply, init_sequence_);
-    } else if (request.op == gatr2::kOpSelectLandmark) {
-        object_requested_ = (request.select_flags & gatr2::kSelectFlagSelected) != 0;
-        if (object_requested_) {
-            object_wire_id_ = request.landmark_id;
-        }
-        object_sequence_ += 1;
-        last_select_ = Record{true, request, 0};
-        answerSelect(reply, request);
-    } else {
         answerState(reply);
+        break;
+    case gatr2::kOpSetPose:
+        setPose(reply, request);
+        break;
+    case gatr2::kOpProfileWrite:
+        profileWrite(reply, request);
+        break;
+    case gatr2::kOpProfileApply:
+        profileApply(reply, request);
+        break;
+    case gatr2::kOpReadDoc:
+        readDoc(reply, request);
+        break;
+    case gatr2::kOpControl:
+        control(reply, request);
+        break;
+    case gatr2::kOpReadWheels:
+        readWheels(reply);
+        break;
+    case gatr2::kOpPathReport:
+        path_ = FakePath{};
+        if (request.path_mode != gatr2::kPathNone) {
+            path_.have       = true;
+            path_.command_id = request.command_id;
+            path_.mode       = request.path_mode;
+            path_.points.assign(request.points, request.points + request.point_count);
+        }
+        break;
+    default:
+        break;
     }
+}
+
+void FakePi::repeat(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+    const uint16_t id = request.request_id;
+    if (last_set_pose_.have && id == last_set_pose_.request.request_id) {
+        if (!sameRequest(request, last_set_pose_.request)) {
+            reply.result = gatr2::kResultInvalidArgument;
+        } else if (last_set_pose_.result == gatr2::kResultNotReady) {
+            reply.result = gatr2::kResultNotReady;
+        } else {
+            answerPlacement(reply, last_set_pose_.sequence);
+        }
+        return;
+    }
+    if (last_control_.have && id == last_control_.request.request_id) {
+        if (!sameRequest(request, last_control_.request)) {
+            reply.result = gatr2::kResultInvalidArgument;
+        } else {
+            reply.result         = last_control_.result;
+            reply.action         = last_control_.request.action;
+            reply.calibration    = last_control_.calibration;
+            reply.control_detail = last_control_.detail;
+        }
+        return;
+    }
+    if (id == newest_.request_id) {
+        if (repeatable(request.op) && sameRequest(request, newest_)) {
+            execute(reply, request, true);
+        } else {
+            reply.result = gatr2::kResultInvalidArgument;
+        }
+        return;
+    }
+    reply.result = gatr2::kResultStale;
+}
+
+void FakePi::setPose(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+    if (!localizing()) {
+        reply.result   = gatr2::kResultNotReady;
+        last_set_pose_ = Record{true, request, gatr2::kResultNotReady, 0, 0};
+        return;
+    }
+    init_sequence_ += 1;
+    placement_.pending   = true;
+    placement_.session   = session_;
+    placement_.sequence  = init_sequence_;
+    placement_.x_mm      = request.x_mm;
+    placement_.y_mm      = request.y_mm;
+    placement_.heading   = request.heading_cdeg;
+    placement_.countdown = apply_delay_;
+    last_set_pose_       = Record{true, request, gatr2::kResultPending, 0, init_sequence_};
+    if (apply_delay_ == 0) {
+        applyPlacement();
+    }
+    answerPlacement(reply, init_sequence_);
 }
 
 void FakePi::answerPlacement(gatr2::BrainReply& reply, uint32_t sequence) const {
@@ -206,52 +463,255 @@ void FakePi::answerPlacement(gatr2::BrainReply& reply, uint32_t sequence) const 
     reply.anchor_revision = robot_.anchor_revision;
 }
 
-void FakePi::answerSelect(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) const {
-    const bool selecting = (request.select_flags & gatr2::kSelectFlagSelected) != 0;
-    if (selecting && world_noop_) {
-        reply.result = gatr2::kResultLandmarkUnsupported;
-    } else if (selecting && landmarks_.count(request.landmark_id) == 0) {
-        reply.result = gatr2::kResultUnknownLandmark;
-    } else {
-        reply.result       = gatr2::kResultOk;
-        reply.landmark_id  = request.landmark_id;
-        reply.select_flags = request.select_flags;
-    }
-}
-
 void FakePi::answerState(gatr2::BrainReply& reply) const {
-    reply.result                = gatr2::kResultOk;
-    reply.state                 = robot_;
-    reply.state.landmark_id     = object_requested_ ? object_wire_id_ : 0;
-    reply.state.landmark_source = gatr2::kLandmarkSourceNone;
-    reply.state.lm_x_mm         = 0;
-    reply.state.lm_y_mm         = 0;
-    reply.state.lm_heading_cdeg = 0;
-    reply.state.landmark_age_ms = 0;
-    if (!object_requested_ || world_noop_) {
+    reply.result = gatr2::kResultOk;
+    reply.state  = robot_;
+    if (!localizing()) {
+        reply.state.robot_flags  = 0;
+        reply.state.x_mm         = 0;
+        reply.state.y_mm         = 0;
+        reply.state.heading_cdeg = 0;
+        reply.state.robot_age_ms = 0;
+    }
+    reply.state.profile_state  = profile_state_;
+    reply.state.profile_id     = profile_id_;
+    reply.state.profile_reason = profile_reason_;
+    reply.state.profile_detail = profile_detail_;
+    reply.state.map_id         = map_id_;
+    reply.state.estimate_id    = newestEstimate();
+}
+
+void FakePi::profileWrite(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+    const bool same = staging_total_ != 0 && request.profile_id == staging_id_ &&
+                      request.total_len == staging_total_;
+    const uint16_t held = same ? staging_received_ : 0;
+    if (request.offset > held) {
+        reply.result = gatr2::kResultInvalidArgument; // a gap
         return;
     }
-    const auto it = landmarks_.find(object_wire_id_);
-    if (it == landmarks_.end()) {
+    const uint16_t end     = static_cast<uint16_t>(request.offset + request.data_len);
+    const uint16_t overlap = static_cast<uint16_t>(std::min(end, held) - request.offset);
+    if (std::memcmp(staging_ + request.offset, request.data, overlap) != 0) {
+        reply.result = gatr2::kResultInvalidArgument; // a resend with other bytes
         return;
     }
-    const FakeLandmark& lm      = it->second;
-    reply.state.landmark_source = lm.source;
-    reply.state.lm_x_mm         = lm.x_mm;
-    reply.state.lm_y_mm         = lm.y_mm;
-    reply.state.lm_heading_cdeg = lm.heading_cdeg;
-    if (lm.source == gatr2::kLandmarkSourceObserved) {
-        reply.state.landmark_age_ms = lm.age_ms;
+    if (!same) {
+        staging_id_       = request.profile_id;
+        staging_total_    = request.total_len;
+        staging_received_ = 0;
+    }
+    if (end > staging_received_) {
+        std::memcpy(staging_ + staging_received_, request.data + overlap,
+                    end - staging_received_);
+        staging_received_ = end;
+    }
+    ++profile_writes_;
+    reply.profile_id = staging_id_;
+    reply.received   = staging_received_;
+}
+
+void FakePi::profileApply(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+    const uint32_t id = request.profile_id;
+    if (staging_total_ == 0 || staging_id_ != id || staging_total_ != request.total_len ||
+        staging_received_ != staging_total_ || gatr2::crc32(staging_, staging_total_) != id) {
+        reply.result = gatr2::kResultInvalidArgument; // staging incomplete or corrupt
+        return;
+    }
+    reply.profile_id = id;
+    if (id == applied_profile_) {
+        profile_state_       = gatr2::kProfileApplied;
+        profile_id_          = id;
+        profile_reason_      = gatr2::kProfileReasonNone;
+        profile_detail_      = 0;
+        reply.profile_state  = gatr2::kProfileApplied;
+        return; // idempotent, nothing resets
+    }
+    if (profile_state_ == gatr2::kProfileApplying && profile_id_ == id) {
+        reply.result        = gatr2::kResultPending;
+        reply.profile_state = gatr2::kProfileApplying;
+        return;
+    }
+    for (const Rejection& seen : rejected_) {
+        if (seen.id == id) {
+            rejectProfile(reply, id, seen.reason, seen.detail);
+            return;
+        }
+    }
+    if (!profile_mode_) {
+        rejectProfile(reply, id, gatr2::kProfileReasonNotAccepted, 0);
+        return;
+    }
+    gatr2::RobotProfileDoc profile;
+    if (!gatr2::decodeRobotProfile(staging_, staging_total_, profile)) {
+        rejectProfile(reply, id, gatr2::kProfileReasonFormat, 0);
+        return;
+    }
+    uint8_t reason = gatr2::kProfileReasonNone;
+    uint8_t detail = 0;
+    if (!gatr2::validateRobotProfile(profile, reason, detail)) {
+        rejectProfile(reply, id, reason, detail);
+        return;
+    }
+    if (capability_reason_ != gatr2::kProfileReasonNone) {
+        rejectProfile(reply, id, capability_reason_, capability_detail_);
+        return;
+    }
+    profile_state_      = gatr2::kProfileApplying;
+    profile_id_         = id;
+    profile_reason_     = gatr2::kProfileReasonNone;
+    profile_detail_     = 0;
+    applying_profile_   = id;
+    applying_countdown_ = profile_delay_;
+    reply.result        = gatr2::kResultPending;
+    reply.profile_state = gatr2::kProfileApplying;
+}
+
+// A running profile keeps running; only the report names the refused id.
+void FakePi::rejectProfile(gatr2::BrainReply& reply, uint32_t id, uint8_t reason,
+                           uint8_t detail) {
+    rejected_.erase(std::remove_if(rejected_.begin(), rejected_.end(),
+                                   [id](const Rejection& r) { return r.id == id; }),
+                    rejected_.end());
+    rejected_.push_back(Rejection{id, reason, detail});
+    if (rejected_.size() > 4) {
+        rejected_.erase(rejected_.begin());
+    }
+    profile_state_        = gatr2::kProfileRejected;
+    profile_id_           = id;
+    profile_reason_       = reason;
+    profile_detail_       = detail;
+    reply.result          = gatr2::kResultProfileRejected;
+    reply.profile_id      = id;
+    reply.profile_state   = gatr2::kProfileRejected;
+    reply.profile_reason  = reason;
+    reply.profile_detail  = detail;
+}
+
+void FakePi::readDoc(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+    const std::vector<uint8_t>* doc = nullptr;
+    uint32_t                    id  = 0;
+    if (request.doc_kind == gatr2::kDocFieldMap) {
+        if (map_doc_.empty()) {
+            reply.result = gatr2::kResultUnavailable;
+            return;
+        }
+        if (request.doc_id != 0 && request.doc_id != map_id_) {
+            reply.result = gatr2::kResultStale;
+            return;
+        }
+        doc = &map_doc_;
+        id  = map_id_;
+    } else {
+        if (estimates_.empty()) {
+            reply.result = gatr2::kResultUnavailable;
+            return;
+        }
+        for (const Estimate& e : estimates_) {
+            if (request.doc_id == 0 ? &e == &estimates_.back() : e.id == request.doc_id) {
+                doc = &e.doc;
+                id  = e.id;
+            }
+        }
+        if (doc == nullptr) {
+            reply.result = gatr2::kResultStale;
+            return;
+        }
+    }
+    if (request.doc_offset >= doc->size()) {
+        reply.result = gatr2::kResultInvalidArgument;
+        return;
+    }
+    const std::size_t left = doc->size() - request.doc_offset;
+    const std::size_t n =
+        std::min<std::size_t>({left, request.max_len, std::size_t{gatr2::kDocChunkMax}});
+    reply.doc_kind      = request.doc_kind;
+    reply.doc_id        = id;
+    reply.doc_total_len = static_cast<uint16_t>(doc->size());
+    reply.doc_crc32     = gatr2::crc32(doc->data(), static_cast<uint32_t>(doc->size()));
+    reply.doc_offset    = request.doc_offset;
+    reply.data_len      = static_cast<uint8_t>(n);
+    std::memcpy(reply.data, doc->data() + request.doc_offset, n);
+    if (doc_hook) {
+        doc_hook(reply);
     }
 }
 
-void FakePi::tickPlacement() {
-    if (!placement_.pending || placement_.countdown <= 0) {
+void FakePi::control(gatr2::BrainReply& reply, const gatr2::BrainRequest& request) {
+    reply.action  = request.action;
+    last_control_ = Record{true, request, gatr2::kResultOk, 0, 0, gatr2::kControlDetailNone};
+    if (profile_mode_ && applied_profile_ == 0) {
+        last_control_.result = gatr2::kResultNotReady;
+    } else if (moving_) {
+        last_control_.result = gatr2::kResultNotStationary;
+    } else {
+        ++controls_executed_;
+        if (control_delay_ > 0) {
+            last_control_.result = gatr2::kResultPending;
+            control_left_        = control_delay_;
+        } else {
+            finishControl();
+        }
+    }
+    last_control_.calibration = robot_.calibration;
+    reply.result              = last_control_.result;
+    reply.calibration         = last_control_.calibration;
+    reply.control_detail      = last_control_.detail;
+}
+
+// Completes the recorded control; its duplicates see the outcome.
+void FakePi::finishControl() {
+    control_left_ = 0;
+    if (control_failure_ != gatr2::kControlDetailNone) {
+        last_control_.result = gatr2::kResultFailed;
+        last_control_.detail = control_failure_;
         return;
     }
-    placement_.countdown -= 1;
-    if (placement_.countdown == 0) {
-        applyPlacement();
+    const uint8_t action = last_control_.request.action;
+    if (action == gatr2::kControlReinitialize) {
+        loseContinuity();
+    }
+    if (action != gatr2::kControlRestartAcquisition) {
+        robot_.calibration = gatr2::kCalibrationRunning;
+        calibration_left_  = calibration_requests_;
+    }
+    last_control_.result      = gatr2::kResultOk;
+    last_control_.calibration = robot_.calibration;
+}
+
+void FakePi::readWheels(gatr2::BrainReply& reply) const {
+    if (profile_mode_ && applied_profile_ == 0) {
+        reply.result = gatr2::kResultNotReady;
+        return;
+    }
+    reply.wheel_count = static_cast<uint8_t>(
+        std::min<std::size_t>(wheels_.size(), gatr2::kWheelReadingsMax));
+    for (uint8_t i = 0; i < reply.wheel_count; ++i) {
+        reply.wheels[i] = wheels_[i];
+    }
+}
+
+void FakePi::tick() {
+    if (placement_.pending && placement_.countdown > 0) {
+        placement_.countdown -= 1;
+        if (placement_.countdown == 0) {
+            applyPlacement();
+        }
+    }
+    if (applying_profile_ != 0) {
+        if (applying_countdown_ <= 0) {
+            applyProfile();
+        } else {
+            applying_countdown_ -= 1;
+        }
+    }
+    if (control_left_ > 0 && --control_left_ == 0) {
+        finishControl();
+    }
+    if (robot_.calibration == gatr2::kCalibrationRunning && calibration_left_ > 0) {
+        calibration_left_ -= 1;
+        if (calibration_left_ == 0) {
+            robot_.calibration = gatr2::kCalibrationDone;
+        }
     }
 }
 
@@ -267,6 +727,29 @@ void FakePi::applyPlacement() {
     applied_sequence_  = placement_.sequence;
     placement_.pending = false;
     ++placements_applied_;
+}
+
+// Controlled boundary. A different profile loses continuity; the same one
+// changes nothing.
+void FakePi::applyProfile() {
+    const bool changed = applying_profile_ != applied_profile_;
+    applied_profile_   = applying_profile_;
+    applying_profile_  = 0;
+    profile_state_     = gatr2::kProfileApplied;
+    profile_id_        = applied_profile_;
+    profile_reason_    = gatr2::kProfileReasonNone;
+    profile_detail_    = 0;
+    ++profiles_applied_;
+    if (changed) {
+        loseContinuity();
+    }
+}
+
+// New odometry epoch, unplaced, placement requests withdrawn.
+void FakePi::loseContinuity() {
+    robot_.odometry_epoch += 1;
+    robot_.robot_flags = gatr2::kRobotPoseValid | gatr2::kRobotAgeKnown;
+    placement_         = Placement{};
 }
 
 uint32_t FakePi::nextSession() {

@@ -115,7 +115,7 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
 
     const auto addWheel = [&](const SensorId& sensor_id, const std::string& label,
                               double radius_m, double x, double y, double angle_deg,
-                              bool positive, const std::string& where) {
+                              bool positive, double scale, const std::string& where) {
         for (const Wheel& seen : model->wheels_) {
             if (seen.binding.id == sensor_id) {
                 err = where + ": sensor " + sensor_id.value +
@@ -132,8 +132,13 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
             err = where + ": radius_m must be positive";
             return false;
         }
+        if (scale <= 0.0) {
+            err = where + ": travel_scale must be positive";
+            return false;
+        }
         wheel.radius_m     = radius_m;
         wheel.sign         = positive ? 1.0 : -1.0;
+        wheel.scale        = scale;
         const double angle = degToRad(angle_deg);
         wheel.ux           = std::cos(angle);
         wheel.uy           = std::sin(angle);
@@ -155,13 +160,14 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
             return;
         }
         // calibration-critical geometry: every value measured, none defaulted
-        double      radius_m = 0.0, x = 0.0, y = 0.0, angle_deg = 0.0;
+        double      radius_m = 0.0, x = 0.0, y = 0.0, angle_deg = 0.0, scale = 1.0;
         std::string direction;
         if (!w.requireDouble("radius_m", radius_m, err) ||
             !w.requireDouble("position_x_m", x, err) ||
             !w.requireDouble("position_y_m", y, err) ||
             !w.requireDouble("measurement_angle_deg", angle_deg, err) ||
-            !w.requireAttr("direction", direction, err)) {
+            !w.requireAttr("direction", direction, err) ||
+            !w.getDouble("travel_scale", 1.0, scale, err)) {
             ok = false;
             return;
         }
@@ -171,7 +177,7 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
             return;
         }
         ok = addWheel(sensor_id, w.attr("label"), radius_m, x, y, angle_deg,
-                      direction == "positive", w.path());
+                      direction == "positive", scale, w.path());
     });
     if (!ok) {
         return nullptr;
@@ -223,7 +229,7 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
             ok  = addWheel(decl->sensor, decl->label.empty() ? decl->id : decl->label,
                            decl->radius_m, decl->position_x_m, decl->position_y_m,
                            decl->measurement_angle_deg, decl->direction_positive,
-                           u.path());
+                           decl->travel_scale, u.path());
         });
         if (!ok) {
             return nullptr;
@@ -254,14 +260,15 @@ TrackingWheelMotion::create(const ConfigNode& node, RobotObservationInitializati
         }
         if (!constraint.getInt("bias_samples", 200, model->heading_.bias_samples, err) ||
             !constraint.getInt("max_gap_ms", 250, model->heading_.max_gap_ms, err) ||
+            !constraint.getInt("window_ms", 0, model->heading_.window_ms, err) ||
             !constraint.getDouble("max_calibration_travel_m", 0.005,
                                   model->heading_.max_calibration_travel_m, err)) {
             return nullptr;
         }
         if (model->heading_.bias_samples < 0 || model->heading_.max_gap_ms <= 0 ||
-            model->heading_.max_calibration_travel_m <= 0.0) {
-            err = constraint.path() + ": bias_samples cannot be negative; max_gap_ms "
-                  "and max_calibration_travel_m must be positive";
+            model->heading_.window_ms < 0 || model->heading_.max_calibration_travel_m <= 0.0) {
+            err = constraint.path() + ": bias_samples and window_ms cannot be negative; "
+                  "max_gap_ms and max_calibration_travel_m must be positive";
             return nullptr;
         }
         model->heading_.calibrated = model->heading_.bias_samples == 0;
@@ -436,6 +443,27 @@ void TrackingWheelMotion::restartCalibration() {
     heading_.cal_travel_m   = 0.0;
 }
 
+bool TrackingWheelMotion::recalibrate() {
+    if (!heading_.configured) {
+        return false;
+    }
+    // nothing spans the calibration: pending travel goes and the gyro
+    // reseeds, while the wheels keep rebasing, so their travel still gates
+    // the bias window
+    for (Wheel& w : wheels_) {
+        w.pending          = false;
+        w.pending_travel_m = 0.0;
+    }
+    heading_.pending        = false;
+    heading_.pending_dtheta = 0.0;
+    heading_.have_prev      = false;
+    heading_.calibrated     = heading_.bias_samples == 0;
+    awaiting_baselines_     = false;   // calibration rebases every wheel
+    last_drop_reason_       = "gyro bias recalibration";
+    restartCalibration();
+    return true;
+}
+
 FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
                                         RobotObservationMap&         out) {
     bool progressed = false;
@@ -500,6 +528,16 @@ FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
             w.baselined = true;
             continue;
         }
+        if (calibrating) {
+            // rebase only; travel during calibration is not motion data, but
+            // it gates the bias window, also right after a dropped window
+            heading_.cal_travel_m +=
+                std::fabs((sample->angle_rad - w.prev_angle_rad) * w.radius_m * w.scale);
+            w.prev_angle_rad = sample->angle_rad;
+            w.prev_stamp     = stored->measuredAt;
+            w.baselined      = true;
+            continue;
+        }
         if (awaiting_baselines_) {
             // baseline only: travel before this sample may span an
             // invalid stretch
@@ -508,18 +546,12 @@ FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
             w.baselined      = true;
             continue;
         }
-        if (calibrating) {
-            heading_.cal_travel_m +=
-                std::fabs((sample->angle_rad - w.prev_angle_rad) * w.radius_m);
-            w.prev_angle_rad = sample->angle_rad;
-            w.prev_stamp     = stored->measuredAt;
-            continue;   // rebase only; travel during calibration is not motion data
-        }
         if (!w.pending) {
             w.pending_start    = w.prev_stamp;
             w.pending_travel_m = 0.0;
         }
-        w.pending_travel_m += (sample->angle_rad - w.prev_angle_rad) * w.radius_m * w.sign;
+        w.pending_travel_m +=
+            (sample->angle_rad - w.prev_angle_rad) * w.radius_m * w.scale * w.sign;
         w.pending_end    = stored->measuredAt;
         w.pending        = true;
         w.prev_angle_rad = sample->angle_rad;
@@ -548,7 +580,8 @@ FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
 
             if (!heading_.calibrated) {
                 // Bias collection is valid only while stationary; motion
-                // restarts it.
+                // restarts it. The first sample after it reseeds.
+                heading_.baselined = true;
                 if (heading_.cal_travel_m > heading_.max_calibration_travel_m) {
                     restartCalibration();
                 }
@@ -557,9 +590,15 @@ FunctionStatus TrackingWheelMotion::run(const RobotObservationInput& in,
                     heading_.cal_accum_start       = sample->accumulated_angle_rad;
                     heading_.cal_accum_start_stamp = stored->measuredAt;
                 }
+                if (heading_.cal_count == 0) {
+                    heading_.cal_start_stamp = stored->measuredAt;
+                }
                 heading_.cal_sum += sample->yaw_rate_rad_s;
                 ++heading_.cal_count;
-                if (heading_.cal_count >= heading_.bias_samples) {
+                const bool spans = sameDomain(stored->measuredAt, heading_.cal_start_stamp) &&
+                                   (stored->measuredAt - heading_.cal_start_stamp) >=
+                                       heading_.window_ms;
+                if (heading_.cal_count >= heading_.bias_samples && spans) {
                     const double elapsed =
                         heading_.cal_have_accum
                             ? secondsBetween(stored->measuredAt,

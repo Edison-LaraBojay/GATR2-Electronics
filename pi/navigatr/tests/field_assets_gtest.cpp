@@ -3,23 +3,31 @@
 // perimeter and display data parse, the nine nominal goal centers sit on
 // the manual's A10 grid, the layout has the manual's symmetry, every tag
 // mount points outward at a plausible height, and the display-only
-// features stay inside the walls. Also the live camera profile: it
-// resolves, fails on this host only for the missing libcamera backend,
-// and its pipeline runs on the synthetic rig.
+// features stay inside the walls. The planning data: the boundary is the
+// perimeter, every box stays inside it, goal boxes cover the goal base,
+// loaders and toggles are obstacles and tape is not, wire ids are unique,
+// the parser is strict, and the checked-in Brain reference header is
+// current. Also the live camera profile: it resolves, fails on this host
+// only for the missing libcamera backend, and its pipeline runs on the
+// synthetic rig.
 
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "config/composition.h"
 #include "config/config_node.h"
 #include "config/field_map.h"
+#include "impl/publishing/field_documents.h"
+#include "math/angles.h"
 #include "payloads/tag_observations.h"
 #include "runtime/register_all.h"
 #include "runtime/system.h"
@@ -76,6 +84,25 @@ const FieldFeatureDecl* featureById(const FieldMap& map, const char* id) {
         }
     }
     return nullptr;
+}
+
+struct Point {
+    double x = 0.0;
+    double y = 0.0;
+};
+
+// Box corners in the field frame for a box declared in owner's frame.
+std::vector<Point> boxCorners(const Pose2D& owner, const CollisionBoxDecl& box) {
+    const Pose2D center = compose(owner, box.center);
+    const double c = std::cos(center.heading_rad), s = std::sin(center.heading_rad);
+    std::vector<Point> out;
+    for (const int sx : {-1, 1}) {
+        for (const int sy : {-1, 1}) {
+            const double dx = sx * box.size_x_m / 2.0, dy = sy * box.size_y_m / 2.0;
+            out.push_back({center.x_m + c * dx - s * dy, center.y_m + s * dx + c * dy});
+        }
+    }
+    return out;
 }
 
 } // namespace
@@ -355,6 +382,210 @@ TEST(FieldAssets, FeaturesParseAndStayInsideThePerimeter) {
         // the strip runs perpendicular to its radial direction
         EXPECT_NEAR(std::cos(f->yaw_rad) * rx + std::sin(f->yaw_rad) * ry, 0.0, 1e-4) << id;
     }
+}
+
+TEST(FieldAssets, BoundaryIsTheDimensionsInsideAndRevisionIsDeclared) {
+    FieldMap    map;
+    std::string err;
+    ASSERT_TRUE(loadOverrideField(map, err)) << err;
+    EXPECT_GE(map.revision, 1u);
+    ASSERT_TRUE(map.boundary.declared);
+    EXPECT_DOUBLE_EQ(map.boundary.min_x_m, 0.0);
+    EXPECT_DOUBLE_EQ(map.boundary.min_y_m, 0.0);
+    EXPECT_DOUBLE_EQ(map.boundary.max_x_m, map.dimensions.inside_x_m);
+    EXPECT_DOUBLE_EQ(map.boundary.max_y_m, map.dimensions.inside_y_m);
+    EXPECT_FALSE(map.boundary.note.empty());
+}
+
+TEST(FieldAssets, EveryCollisionBoxStaysInsideTheBoundaryAndCitesItsSource) {
+    FieldMap    map;
+    std::string err;
+    ASSERT_TRUE(loadOverrideField(map, err)) << err;
+    const FieldBoundaryDecl& b     = map.boundary;
+    std::size_t              boxes = 0;
+    const auto inside = [&](const Pose2D& owner, const CollisionBoxDecl& box,
+                            const std::string& id) {
+        ASSERT_TRUE(box.declared) << id;
+        EXPECT_FALSE(box.note.empty()) << id;
+        ++boxes;
+        for (const Point& p : boxCorners(owner, box)) {
+            EXPECT_GE(p.x, b.min_x_m - 1e-9) << id;
+            EXPECT_LE(p.x, b.max_x_m + 1e-9) << id;
+            EXPECT_GE(p.y, b.min_y_m - 1e-9) << id;
+            EXPECT_LE(p.y, b.max_y_m + 1e-9) << id;
+        }
+    };
+    for (const LandmarkDecl& l : map.landmarks) {
+        inside(l.nominal, l.box, l.id.value);
+    }
+    for (const ObstacleDecl& o : map.obstacles) {
+        EXPECT_FALSE(o.note.empty()) << o.id;
+        inside(o.pose, o.box, o.id);
+    }
+    EXPECT_EQ(boxes, 17u);
+}
+
+TEST(FieldAssets, GoalBoxesContainTheGoalBaseAtAnyOrientation) {
+    FieldMap    map;
+    std::string err;
+    ASSERT_TRUE(loadOverrideField(map, err)) << err;
+    for (const LandmarkDecl& l : map.landmarks) {
+        ASSERT_EQ(l.visual.shape, "octagonal_prism") << l.id.value;
+        ASSERT_TRUE(l.box.declared) << l.id.value;
+        // the Visual never fixes the octagon's rotation, so its whole
+        // circumscribed circle must fit
+        const double r  = l.visual.base_across_flats_m / (2.0 * std::cos(kPi / 8.0));
+        const double c  = std::cos(-l.box.center.heading_rad);
+        const double s  = std::sin(-l.box.center.heading_rad);
+        const double px = c * -l.box.center.x_m - s * -l.box.center.y_m;
+        const double py = s * -l.box.center.x_m + c * -l.box.center.y_m;
+        EXPECT_LE(std::fabs(px) + r, l.box.size_x_m / 2.0) << l.id.value;
+        EXPECT_LE(std::fabs(py) + r, l.box.size_y_m / 2.0) << l.id.value;
+        // and no more than a millimeter beyond it on any side
+        EXPECT_LE(l.box.size_x_m / 2.0 - r, 0.001) << l.id.value;
+    }
+}
+
+TEST(FieldAssets, WireIdsAreUniqueAndNameEveryObject) {
+    FieldMap    map;
+    std::string err;
+    ASSERT_TRUE(loadOverrideField(map, err)) << err;
+    std::set<uint16_t> ids;
+    for (const LandmarkDecl& l : map.landmarks) {
+        EXPECT_GE(l.wire_id, 1u) << l.id.value;
+        EXPECT_TRUE(ids.insert(l.wire_id).second) << l.id.value;
+    }
+    for (const ObstacleDecl& o : map.obstacles) {
+        EXPECT_GE(o.wire_id, 1u) << o.id;
+        EXPECT_TRUE(ids.insert(o.wire_id).second) << o.id;
+    }
+    EXPECT_EQ(ids.size(), 17u);
+    // the semantic id, not the printed tag id: ids 1-4 each print on two goals
+    EXPECT_EQ(map.find(FieldObjectId{"neutral_goal_0_center"})->wire_id, 5u);
+}
+
+TEST(FieldAssets, LoadersAndTogglesAreObstaclesAndTapeIsNot) {
+    FieldMap    map;
+    std::string err;
+    ASSERT_TRUE(loadOverrideField(map, err)) << err;
+    ASSERT_EQ(map.obstacles.size(), 8u);
+    for (const FieldFeatureDecl& f : map.features) {
+        const ObstacleDecl* o = map.findObstacle(f.id);
+        if (f.kind == "tape") {
+            EXPECT_EQ(o, nullptr) << f.id << " is driven over";
+            continue;
+        }
+        // each box is the plan footprint of its Feature
+        ASSERT_NE(o, nullptr) << f.id;
+        ASSERT_TRUE(o->box.declared) << f.id;
+        const Pose2D center = compose(o->pose, o->box.center);
+        EXPECT_NEAR(center.x_m, f.x_m, 1e-9) << f.id;
+        EXPECT_NEAR(center.y_m, f.y_m, 1e-9) << f.id;
+        EXPECT_NEAR(wrapAngle(center.heading_rad - f.yaw_rad), 0.0, 1e-9) << f.id;
+        EXPECT_NEAR(o->box.size_x_m, f.size_x_m, 1e-9) << f.id;
+        EXPECT_NEAR(o->box.size_y_m, f.size_y_m, 1e-9) << f.id;
+    }
+    for (const ObstacleDecl& o : map.obstacles) {
+        EXPECT_NE(featureById(map, o.id.c_str()), nullptr) << o.id;
+    }
+}
+
+TEST(FieldAssets, CheckedInFieldReferencesMatchTheField) {
+    FieldMap         map;
+    FieldMapDocument doc;
+    std::string      header;
+    std::string      err;
+    ASSERT_TRUE(loadFieldMapFile(kConfigDir + "/override/field.xml", map, err)) << err;
+    ASSERT_TRUE(buildFieldMapDocument(map, doc, err)) << err;
+    ASSERT_TRUE(fieldReferencesHeader(doc, "pi/navigatr/config/override/field.xml", header, err))
+        << err;
+
+    std::ifstream in(NAVIGATR_FIELD_REFERENCES_H, std::ios::binary);
+    ASSERT_TRUE(in) << "missing " << NAVIGATR_FIELD_REFERENCES_H;
+    const std::string checked_in((std::istreambuf_iterator<char>(in)),
+                                 std::istreambuf_iterator<char>());
+    EXPECT_EQ(header, checked_in)
+        << "brain/testing/include/field_references.h is stale; run "
+           "cmake --build <build dir> --target field_references";
+
+    for (const LandmarkDecl& l : map.landmarks) {
+        EXPECT_NE(checked_in.find("Reference::object(" + std::to_string(l.wire_id) + ", kMapId)"),
+                  std::string::npos)
+            << l.id.value;
+    }
+    EXPECT_NE(checked_in.find("NeutralGoal0Center"), std::string::npos);
+    EXPECT_EQ(checked_in.find("Loader"), std::string::npos);   // obstacles are not references
+}
+
+TEST(FieldAssets, PlanningElementsAreStrict) {
+    const auto refused = [](const std::string& body, const char* expect,
+                            const std::string& root = "revision=\"1\"") {
+        FieldMap          map;
+        std::string       err;
+        const std::string xml =
+            "<Resource id=\"f\" type=\"field_map\" " + root + ">" + body + "</Resource>";
+        EXPECT_FALSE(parseInline(xml.c_str(), map, err)) << body;
+        EXPECT_NE(err.find(expect), std::string::npos) << err;
+    };
+    const std::string pose = R"(<NominalPose x_m="1" y_m="1" heading_deg="0"/>)";
+
+    refused("<Colision/>", "unknown element Colision");
+    refused("", "unknown attribute map_id", "map_id=\"x\"");
+    refused("", "revision must be 1..65535", "revision=\"0\"");
+    refused("", "revision must be 1..65535", "revision=\"65536\"");
+    refused(R"(<Boundary min_x_m="0" min_y_m="0" max_x_m="1"/>)", "max_y_m");
+    refused(R"(<Boundary min_x_m="1" min_y_m="0" max_x_m="1" max_y_m="1"/>)", "min must be below");
+    refused(R"(<Boundary min_x_m="0" min_y_m="0" max_x_m="1" max_y_m="1" pad="1"/>)",
+            "unknown attribute pad");
+    refused(R"(<Boundary min_x_m="0" min_y_m="0" max_x_m="1" max_y_m="1"/>
+               <Boundary min_x_m="0" min_y_m="0" max_x_m="1" max_y_m="1"/>)",
+            "more than one Boundary");
+    refused(R"(<Landmark id="g" wire_id="1" tag="4">)" + pose + "</Landmark>",
+            "unknown attribute tag");
+    refused(R"(<Landmark id="g" wire_id="1">)" + pose + "<Colision/></Landmark>",
+            "unknown element Colision");
+    refused(R"(<Landmark id="g" wire_id="0">)" + pose + "</Landmark>", "wire_id must be 1..65535");
+    refused(R"(<Landmark id="g" wire_id="70000">)" + pose + "</Landmark>",
+            "wire_id must be 1..65535");
+    refused(R"(<Landmark id="g" wire_id="1">)" + pose +
+                R"(<CollisionBox x_m="0" y_m="0" size_x_m="0.1" size_y_m="0.1"/>
+                   <CollisionBox x_m="0" y_m="0" size_x_m="0.1" size_y_m="0.1"/></Landmark>)",
+            "more than one CollisionBox");
+    refused(R"(<Landmark id="g" wire_id="1">)" + pose +
+                R"(<CollisionBox x_m="0" y_m="0" size_x_m="0" size_y_m="0.1"/></Landmark>)",
+            "sizes must be positive");
+    refused(R"(<Landmark id="g" wire_id="1">)" + pose +
+                R"(<CollisionBox x_m="0" size_x_m="0.1" size_y_m="0.1"/></Landmark>)",
+            "y_m");
+    refused(R"(<Landmark id="g" wire_id="1">)" + pose +
+                R"(<CollisionBox x_m="0" y_m="0" size_x_m="0.1" size_y_m="0.1" z_m="0"/></Landmark>)",
+            "unknown attribute z_m");
+    refused(R"(<Obstacle id="o" wire_id="2" x_m="0" y_m="0"/>)", "heading_deg");
+    refused(R"(<Obstacle id="o" x_m="0" y_m="0" heading_deg="0"/>)", "wire_id");
+    refused(R"(<Obstacle id="o" wire_id="2" x_m="0" y_m="0" heading_deg="0"><Visual/></Obstacle>)",
+            "unknown element Visual");
+    refused(R"(<Obstacle id="o" wire_id="2" x_m="0" y_m="0" heading_deg="0"/>
+               <Obstacle id="o" wire_id="3" x_m="0" y_m="0" heading_deg="0"/>)",
+            "duplicate Obstacle id o");
+    refused(R"(<Obstacle id="g" wire_id="2" x_m="0" y_m="0" heading_deg="0"/>
+               <Landmark id="g" wire_id="1">)" + pose + "</Landmark>",
+            "also an Obstacle id");
+    refused(R"(<Obstacle id="o" wire_id="1" x_m="0" y_m="0" heading_deg="0"/>
+               <Landmark id="g" wire_id="1">)" + pose + "</Landmark>",
+            "wire_id 1 used by both o and g");
+
+    // a landmark may leave out wire_id and CollisionBox; annotations pass
+    FieldMap    map;
+    std::string err;
+    EXPECT_TRUE(parseInline((R"(<Resource id="f" type="field_map" calibration_status="x">
+        <Landmark id="g" calibration_status="provisional">)" + pose + "</Landmark></Resource>")
+                                .c_str(),
+                            map, err))
+        << err;
+    ASSERT_EQ(map.landmarks.size(), 1u);
+    EXPECT_EQ(map.landmarks[0].wire_id, 0u);
+    EXPECT_FALSE(map.landmarks[0].box.declared);
+    EXPECT_EQ(map.revision, 0u);
 }
 
 TEST(FieldAssets, UnknownVisualShapeAndBadFeatureColorFailNamingTheAttribute) {

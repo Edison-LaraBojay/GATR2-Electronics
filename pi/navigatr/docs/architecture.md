@@ -198,13 +198,15 @@ and status. It is an immutable published snapshot. See
 ## Commands, target resolution, and publishing
 
 Command collection produces `CommandState`: the current Brain session, the
-newest placement (`init_pose`, `init_session`, `init_sequence`), the landmark
-selection (`object_requested`, `object_wire_id`, `object_sequence`), and the
-reply owed for this cycle's request (`BrainReplyContext`). Implementations are
+newest placement (`init_pose`, `init_session`, `init_sequence`), the robot
+profile status, the latest reported path, a target selection that only
+in-process callers set (`object_requested`, `object_wire_id`,
+`object_sequence`), and the reply owed for this cycle's request
+(`BrainReplyContext`). Implementations are
 `brain_link` and `noop`; `noop` keeps the Pi standalone on a bench.
 
 The Brain talks to the Pi with the request/reply protocol in
-[Brain link v3](../../../docs/interfaces.md#brain-link-v3): the Brain asks,
+[Brain link v4](../../../docs/interfaces.md): the Brain asks,
 the Pi answers each request at most once, and nothing is sent unasked. The
 `brain_link` pair implements the Pi side:
 
@@ -214,14 +216,14 @@ the Pi answers each request at most once, and nothing is sent unasked. The
   nonzero session per HELLO, a HELLO retry answered with the same session
   until another request is accepted, the last four opening nonces rejected as
   stale, per-session request_id dedupe with 16-bit wraparound, and SET_POSE
-  and SELECT_LANDMARK records so a retry is answered, never applied twice. It
+  and CONTROL records so a retry is answered, never applied twice. It
   also holds `pi_instance`, a random nonzero id that is new for every process
   start and every `reset()`. It computes the reply window from its read
   timestamps; see [Bus ownership and timing](../../../docs/interfaces.md#bus-ownership-and-timing).
-- A new session clears only client state: the selection is released and
-  `object_sequence` advances, which cancels a configured target latch. It
-  never touches `init_*` or localization, so a new session alone never
-  relocates the robot.
+- A new session clears only client state: the dedupe records, the bench IMU
+  mailbox and the reported path. It never touches `init_*`, localization,
+  the profile or the field documents, so a new session alone never relocates
+  the robot.
 - `System::requestsFrom` passes the command placement to localization only
   while `init_session` equals the current session, so a new session withdraws
   a placement not applied yet. `PlacementEdge` applies a placement once per
@@ -232,25 +234,26 @@ the Pi answers each request at most once, and nothing is sent unasked. The
 - `brain_link` publishing writes only when the command slot left a reply
   pending, once, through the link's windowed write. SET_POSE is `Ok` only
   when `RobotState` reports that exact placement applied, otherwise
-  `Pending`. SELECT_LANDMARK is `Ok` for a release,
-  `LandmarkUnsupported` when world estimation is `noop`, `UnknownLandmark`
-  for a wire id with no `FieldObject` mapping, otherwise `Ok`. GET_STATE
-  carries the robot pose and flags, the robot measurement age, health bits,
-  and the selected landmark's physical pose (see [landmarks](landmarks.md#brain-output)).
+  `Pending`. GET_STATE carries the robot pose and flags, the robot
+  measurement age, health bits, the profile status, and the ids of the
+  current field documents. With a `Field`, READ_DOC serves the field map
+  and field estimate documents in chunks: every configured object, nominal
+  or observed (see [landmarks](landmarks.md#field-documents)).
 
 Construction enforces the pairing: `brain_link` command collection needs
 `brain_link` publishing, and that publisher needs `brain_link` command
 collection on the same `Serial` resource. A profile with `brain_link`
 command collection must also satisfy `1000 / Loop rate_hz <= window_ms / 2`.
 The factories read the loop rate, the command type and its serial resource,
-and whether world estimation is `noop` from `SlotInitializationContext`.
+and the Brain profile host from `SlotInitializationContext`.
 Publishing receives the diagnostics through `PublishingInput` and counts its
 writes in the link's `LinkStats`.
 
 `configured_targets` resolves targets from `target_set`. It can latch a desired
 robot pose from a relative movement, a landmark estimate, or an `acquire_once`
-visual acquisition. A Brain selection activates the target whose `wire_id`
-equals the selected landmark wire id. Targets are Pi internal: inspection shows
+visual acquisition. A selection activates the target with that target
+`wire_id`; brain link v4 has no selection op, so only in-process callers
+select today. Targets are Pi internal: inspection shows
 them, the brain link never sends them. This stage owns target lifecycle; it
 does not alter the field estimate. The Brain remains responsible for motor
 control.

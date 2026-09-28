@@ -25,4 +25,22 @@ Pose compose(const Pose& a, const Pose& b) {
     return out;
 }
 
+Pose inverse(const Pose& p) {
+    const double c = std::cos(p.heading);
+    const double s = std::sin(p.heading);
+    Pose         out;
+    out.x       = -c * p.x - s * p.y;
+    out.y       = s * p.x - c * p.y;
+    out.heading = wrapAngle(-p.heading);
+    return out;
+}
+
+Pose between(const Pose& a, const Pose& b) {
+    return compose(inverse(a), b);
+}
+
+bool finite(const Pose& p) {
+    return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.heading);
+}
+
 } // namespace investigatr

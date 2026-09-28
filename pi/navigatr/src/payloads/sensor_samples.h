@@ -16,8 +16,8 @@ constexpr const char* kEncoderSample = "sensor.encoder_sample";
 constexpr const char* kImuSample     = "sensor.imu_sample";
 } // namespace payload_names
 
-// Accumulated, unwrapped shaft angle. Counts-per-revolution and electrical
-// sign are already applied by the sensor. discontinuity_epoch bumps when
+// Accumulated, unwrapped wheel angle. Counts per revolution, gearing and
+// polarity are already applied by the sensor. discontinuity_epoch bumps when
 // the sensor rebased its count baseline on a source restart; the angle
 // stays continuous, but the interval spanning the bump measured nothing
 // and consumers must not difference across it.

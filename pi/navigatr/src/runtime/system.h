@@ -44,6 +44,20 @@
 // dependency order. reset() while running stops both workers, resets every
 // stage exactly once, and restarts them, so two workers never race to reset
 // one configured resource.
+//
+// A Brain-profiled configuration (<BrainProfile> under Localization) starts
+// waiting: noop localization while resources, commands, world estimation,
+// publishing and inspection run. The brain_link commands slot hands a
+// validated profile to the System, which checks this Pi's capabilities and
+// builds the candidate sensors and localization at once on the estimation
+// worker. The swap happens at a controlled boundary, in the reset()
+// pattern: applyPendingProfile() on the thread that owns start() in worker
+// mode (workers stop, the candidate moves in, workers restart), or the top
+// of step() inline. Resources, the commands slot with its session and
+// pi_instance, world estimation, publishing and inspection survive. A new
+// profile advances the odometry epoch, clears history, leaves the robot
+// unplaced and withdraws every earlier placement request; re-applying the
+// running profile changes nothing.
 
 #pragma once
 #include <atomic>
@@ -55,6 +69,7 @@
 #include <thread>
 #include <vector>
 
+#include "contracts/brain_profile.h"
 #include "contracts/commands.h"
 #include "contracts/field_estimation.h"
 #include "contracts/localization.h"
@@ -64,6 +79,7 @@
 #include "core/function_registry.h"
 #include "core/records.h"
 #include "resources/resource_store.h"
+#include "runtime/brain_profile_builder.h"
 #include "runtime/build_options.h"
 #include "runtime/handoff.h"
 #include "runtime/inspection_config.h"
@@ -72,6 +88,7 @@
 #include "runtime/resource_stage.h"
 #include "runtime/sensor_catalog.h"
 #include "runtime/sensor_stage.h"
+#include "runtime/stationary_precheck.h"
 #include "runtime/world_estimation_stage.h"
 #include "state/command_state.h"
 #include "state/field_state.h"
@@ -101,6 +118,23 @@ struct ReportingSnapshot {
     TargetState   target;
     MonotonicTime at;
     uint64_t      cycle = 0;
+};
+
+// What the running configuration binds, for readers on any thread. Replaced
+// as a whole at a profile boundary.
+struct BindingView {
+    SensorCatalog                         sensors;
+    std::string                           estimator_type;
+    std::vector<std::string>              warnings;   // build, then the running profile's
+    bool                                  brain_profile = false;   // takes a Brain profile
+    std::shared_ptr<const ProfileBinding> profile;   // running profile, null when none
+};
+
+// A lifecycle event worth a line in a log or the inspection page.
+struct RuntimeEvent {
+    uint64_t      sequence = 0;   // counts every event since build
+    MonotonicTime at;             // host clock
+    std::string   text;
 };
 
 class System
@@ -143,8 +177,21 @@ public:
     // Back to power-on: implementations reset, states cleared, counters
     // kept. Safe while running: workers stop, everything resets once,
     // workers restart. Counted in resetCount() so readers can discard
-    // incompatible history.
+    // incompatible history. A Brain-profiled System waits for a profile
+    // again.
     void reset();
+
+    // Worker mode profile boundary, called periodically by the thread that
+    // owns start(): swaps in a prepared profile (workers stop, the candidate
+    // moves in, workers restart). False when nothing was pending. Inline,
+    // step() does this itself.
+    bool applyPendingProfile();
+
+    // The running Brain profile, null when none; any thread.
+    std::shared_ptr<const ProfileBinding> profileBinding() const;
+
+    // Newest lifecycle events, oldest first, bounded; any thread.
+    std::vector<RuntimeEvent> events() const;
 
     double   loopRateHz() const { return loop_rate_hz_; }
     uint64_t cycle() const { return cycle_.load(); }
@@ -177,8 +224,11 @@ public:
     Diagnostics&        diagnostics() { return diagnostics_; }
     Diagnostics&        fieldDiagnostics() { return field_diagnostics_; }
 
-    // Thread-safe readers, for the other worker and inspection.
-    std::shared_ptr<RobotStateFeed> robotFeed() const { return execute_localization_.feed(); }
+    // Thread-safe readers, for the other worker and inspection. The feed
+    // outlives profile boundaries.
+    std::shared_ptr<RobotStateFeed>    robotFeed() const { return feed_; }
+    std::shared_ptr<const BindingView> bindingView() const;
+    // Inline mode or stopped workers only: a profile boundary replaces it.
     const LocalizationExecutor&     localization() const { return execute_localization_; }
     const WorldEstimationExecutor&  worldEstimation() const { return execute_world_; }
     std::shared_ptr<const FieldSnapshot>       fieldSnapshot() const;
@@ -192,20 +242,48 @@ public:
     const InspectionConfig& inspection() const { return inspection_; }
 
     // Non-fatal build notes, e.g. a serial device that failed to open.
+    // Warnings of the running profile are in bindingView().
     const std::vector<std::string>& warnings() const { return warnings_; }
 
     // Initialized objects and declared outputs, for tests and tooling.
+    // sensorCatalog() is inline mode or stopped workers only.
     const ResourceStore&   resources() const { return resources_; }
     const ResourceCatalog& resourceCatalog() const { return execute_resources_.outputs(); }
     const SensorCatalog&   sensorCatalog() const { return execute_sensors_.outputs(); }
 
 private:
-    System() = default;
+    class ProfileHost;
+
+    // A built profile waiting for the boundary.
+    struct ProfileCandidate {
+        std::shared_ptr<ProfileBinding> binding;
+        SensorExecutor                  sensors;
+        LocalizationExecutor            localization;
+        std::vector<std::string>        warnings;
+    };
+
+    System();
 
     bool build(const char* xml, const FunctionRegistry& functions,
                const BuildOptions& options, std::string& err);
+    bool buildProfileHost(const ConfigNode& pipeline, const ConfigNode& profile,
+                          const FunctionRegistry& functions, std::string& err);
+    std::optional<LocalizationExecutor> buildWaitingLocalization(std::string& err);
 
     LocalizationRequests requestsFrom(const CommandState& command) const;
+
+    // BrainProfileHost, on the estimation worker.
+    bool    prepareProfile(const gatr2::RobotProfileDoc& profile, uint32_t id, uint8_t& reason,
+                           uint8_t& detail);
+    uint8_t controlProfile(uint8_t action, uint8_t arg, MonotonicTime now, uint8_t& detail);
+
+    // Boundary work: workers stopped or inline.
+    void swapProfile();
+    void swapToWaiting();
+    bool pauseWorkers();   // lifecycle mutex held; true when they were running
+    void resumeWorkers(bool was_running);
+    void publishBindingView();
+    void noteEvent(MonotonicTime at, std::string text);
 
     void resetStages();
     bool startWorkers(std::string& err);   // lifecycle mutex held
@@ -229,6 +307,13 @@ private:
     ResourceStore            resources_;
     std::vector<std::string> warnings_;
 
+    // Brain profile: fixed at build
+    bool                         profiled_ = false;
+    BrainProfileConfig           profile_config_;
+    FunctionRegistry             profile_functions_;   // factories for candidates
+    SensorCatalog                base_catalog_;        // configured sensors only
+    std::unique_ptr<ProfileHost> profile_host_;
+
     ResourceExecutor        execute_resources_;
     SensorExecutor          execute_sensors_;
     LocalizationExecutor    execute_localization_;
@@ -240,12 +325,25 @@ private:
     std::string                       slot_labels_[3];   // commands, targets, publishing
     FunctionKey                       commands_type_;
 
+    std::shared_ptr<RobotStateFeed> feed_;   // the one feed, kept across profile boundaries
+
     // estimation worker state
-    std::atomic<uint64_t> cycle_{0};
-    RobotState            robot_;
-    CommandState          command_;
-    TargetState           target_;
-    Diagnostics           diagnostics_;
+    std::atomic<uint64_t>    cycle_{0};
+    RobotState               robot_;
+    CommandState             command_;
+    TargetState              target_;
+    Diagnostics              diagnostics_;
+    MonotonicTime            last_now_;              // host clock of the latest cycle
+    uint64_t                 placement_floor_ = 0;   // init_sequence withdrawn up to here
+    StationaryPrecheck       precheck_;
+    std::vector<std::string> profile_warnings_;
+
+    // a prepared profile, handed from the estimation worker to the boundary
+    mutable std::mutex                    profile_mutex_;
+    std::unique_ptr<ProfileCandidate>     candidate_;
+    std::shared_ptr<const ProfileBinding> applied_;
+    std::atomic<bool>                     profile_pending_{false};
+    uint64_t                              profile_applies_ = 0;
 
     // field worker state
     Diagnostics field_diagnostics_;
@@ -258,6 +356,9 @@ private:
     std::shared_ptr<const SourceHealthSnapshot> source_health_;
     std::shared_ptr<const DiagnosticsSnapshot>  diagnostics_snapshot_;
     std::map<SensorId, std::shared_ptr<const DetectionFrameSnapshot>> detection_frames_;
+    std::shared_ptr<const BindingView>                                binding_view_;
+    std::vector<RuntimeEvent>                                         events_;
+    uint64_t                                                          event_count_ = 0;
 
     // workers
     struct FieldWork {

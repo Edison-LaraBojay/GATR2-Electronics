@@ -372,7 +372,9 @@ void detectionFrame(JsonWriter& w, const System& system, const DetectionFrameSna
 } // namespace
 
 std::string helloDocument(const System& system, MonotonicTime now) {
-    JsonWriter w;
+    // one consistent binding, safe while a profile boundary runs
+    const std::shared_ptr<const BindingView> binding = system.bindingView();
+    JsonWriter                               w;
     w.beginObject();
     w.field("type", "hello");
     w.field("contract", kInspectionContract);
@@ -553,7 +555,7 @@ std::string helloDocument(const System& system, MonotonicTime now) {
     w.endArray();
     w.key("camera_sensors");
     w.beginArray();
-    for (const auto& e : system.sensorCatalog().entries()) {
+    for (const auto& e : binding->sensors.entries()) {
         if (e.payload.stable_name == payload_names::kCameraFrame) {
             w.value(e.id.value);
         }
@@ -562,7 +564,7 @@ std::string helloDocument(const System& system, MonotonicTime now) {
 
     w.key("localization");
     w.beginObject();
-    w.field("estimator_type", system.localization().estimatorType());
+    w.field("estimator_type", binding->estimator_type);
     w.key("functions");
     w.beginArray();
     for (const ObservationFunctionStatus& f : system.robotFeed()->status().functions) {
@@ -584,7 +586,7 @@ std::string helloDocument(const System& system, MonotonicTime now) {
 
     w.key("warnings");
     w.beginArray();
-    for (const std::string& s : system.warnings()) {
+    for (const std::string& s : binding->warnings) {
         w.value(s);
     }
     w.endArray();

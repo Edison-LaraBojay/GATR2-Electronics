@@ -76,6 +76,8 @@
                 <Encoder sensor_id="tracking_encoder_a"/>
                 <Encoder sensor_id="tracking_encoder_b"/>
             </Health>
+            <!-- field map and estimate documents for Brain planning -->
+            <Field resource_id="override_field" estimate_period_ms="200"/>
         </Publishing>
     </Pipeline>
 </Configuration>

@@ -37,7 +37,7 @@ public:
     bool    inputPending() override;   // FIONREAD
     int     writeSome(const uint8_t* data, std::size_t size) override;
     bool    waitWritable(int64_t timeout_us) override;
-    int     transmitterEmpty() override;   // TIOCSERGETLSR, tcdrain fallback
+    int     transmitterEmpty() override;   // TIOCSERGETLSR, else TIOCOUTQ, never blocks
     void    discardOutput() override;      // tcflush TCOFLUSH
 
 private:

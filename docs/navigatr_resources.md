@@ -155,10 +155,15 @@ executable configuration and there is no monolithic robot config header.
 - Schema:
 
 ```xml
-<Resource id="game_field" type="field_map">
-    <Landmark id="center_goal">
+<Resource id="game_field" type="field_map" revision="1">
+    <Boundary min_x_m="0" min_y_m="0" max_x_m="3.5664" max_y_m="3.5664"/>
+    <Obstacle id="post" wire_id="101" x_m="0.05" y_m="0.3" heading_deg="0">
+        <CollisionBox x_m="0" y_m="0" size_x_m="0.1" size_y_m="0.1"/>
+    </Obstacle>
+    <Landmark id="center_goal" wire_id="5">
         <NominalPose calibration_status="verified"
                      x_m="1.7832" y_m="1.7832" heading_deg="0"/>
+        <CollisionBox x_m="0" y_m="0" size_x_m="0.1543" size_y_m="0.1543"/>
         <ApproachFrame id="center_goal_west_face" calibration_status="verified">
             <PoseOfApproachFrameInLandmark x_m="-0.14" y_m="0" z_m="0"
                 roll_deg="0" pitch_deg="0" yaw_deg="180"/>
@@ -180,10 +185,26 @@ executable configuration and there is no monolithic robot config header.
   which mount produced an observation is association's decision, by full
   pose, never forced). `detection_size_m` is the edge of the detector's
   pose-estimation corners, not the sticker. Every geometry attribute is
-  parsed and numerically validated. `calibration_status` is a reader annotation
-  with no runtime effect. Meters and degrees in, meters and radians in memory.
-  No brain wire ids here. Optional Dimensions, Feature, and Visual metadata
-  supplies viewer geometry only.
+  parsed and numerically validated. `calibration_status` and `note` are reader
+  annotations with no runtime effect. Meters and degrees in, meters and radians
+  in memory.
+- Planning data, explicit:
+  - `revision` on the root (1..65535, human bumped);
+  - one `Boundary`;
+  - a `wire_id` per `Landmark` and `Obstacle` (1..65535, unique over both; the
+    stable object id the Brain names, not a printed tag id);
+  - at most one `CollisionBox` per `Landmark` or `Obstacle`, in the owner's
+    frame (`yaw_deg` optional, default 0).
+
+  Only an element with a `CollisionBox` is an obstacle. Unknown children and
+  attributes on the root, `Landmark`, `Obstacle`, `Boundary` and
+  `CollisionBox` are errors. The `brain_link` publisher's `Field` turns this
+  data into the Brain's map document; that needs `revision`, `Boundary` and a
+  `wire_id` on every landmark (see
+  [landmarks](../pi/navigatr/docs/landmarks.md#field-documents) and
+  [field assets](../pi/navigatr/docs/field_assets.md#planning-data)).
+- Optional Dimensions, Feature, and Visual metadata supplies viewer geometry
+  only; it never becomes an obstacle.
 - Thread safety: immutable after construction.
 
 ## robot_frame_map

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Brain-profiled localization, Brain link over RS-485 on a V5 Smart
+     Port (Pi UART5, /dev/ttyAMA5, DE on GPIO 6 as on the RS-485 bench). The robot is configured on the Brain: after it connects it
+     sends its typed robot profile (wheel ports, geometry, encoder
+     calibration, IMU source, footprint) and the Pi builds the matching
+     models. Nothing below describes robot geometry. Until a profile is
+     applied localization waits (no pose) while the Pico link, the Brain link
+     and inspection run.
+
+     Supported profiles: two wheels + IMU, two forward wheels + IMU (Pico IMU
+     port 0 or the Brain VEX IMU), three wheels (no IMU, or the Pico IMU fused
+     through weighted_planar_fusion).
+
+     Transport: USB needs brain_profile_usb.xml; USB versus RS-485 is Pi
+     configuration and does not change localization. -->
+<Configuration id="brain_profile_rs485">
+    <ConfigurationName>Brain profile: RS-485 Brain link, Pico encoders, Pico or Brain VEX IMU</ConfigurationName>
+    <Loop rate_hz="100"/>
+    <Inspection enabled="true" bind="127.0.0.1" port="8765" snapshot_hz="20"/>
+    <Field file="field.xml"/>
+    <Robot>
+        <Resources>
+            <Resource id="pico_uart" type="linux_serial_link">
+                <Device path="/dev/ttyAMA0" required="true"/>
+                <Baud value="115200"/>
+            </Resource>
+            <!-- every Pico channel, so a profile only selects ports -->
+            <Resource id="pico_telemetry" type="pico_telemetry">
+                <Serial resource_id="pico_uart"/>
+                <Output id="encoder_0" channel="0"/>
+                <Output id="encoder_1" channel="1"/>
+                <Output id="encoder_2" channel="2"/>
+                <Output id="imu_0" channel="imu"/>
+            </Resource>
+            <Resource id="brain_uart" type="linux_serial_link">
+                <Device path="/dev/ttyAMA5" required="true"/>
+                <Baud value="115200"/>
+                <DriverEnable gpio="6"/>
+            </Resource>
+            <Resource id="brain_imu" type="brain_imu_bench"/>
+        </Resources>
+    </Robot>
+    <Pipeline>
+        <CommandCollection type="brain_link">
+            <Serial resource_id="brain_uart"/>
+            <BenchImu resource_id="brain_imu"/>
+        </CommandCollection>
+        <Localization>
+            <BrainProfile>
+                <!-- HAT v2: port 0 is J2 (A0/B0), port 1 J3 (A1/B1), port 2 J4 (A2/B2) -->
+                <Encoders resource_id="pico_telemetry" stale_after_ms="250">
+                    <Port index="0" output_id="encoder_0"/>
+                    <Port index="1" output_id="encoder_1"/>
+                    <Port index="2" output_id="encoder_2"/>
+                </Encoders>
+                <!-- the one external IMU on SPI1/J7; its chip is fixed by the
+                     Pico firmware build, never by the profile -->
+                <Imu port="0" resource_id="pico_telemetry" output_id="imu_0" stale_after_ms="250"/>
+                <BrainImu resource_id="brain_imu"/>
+                <!-- Pi defaults for gyro bias calibration; the profile's
+                     calibration window and still travel replace them when set -->
+                <Calibration bias_samples="20" window_ms="2000" max_gap_ms="250"
+                             still_travel_m="0.001"/>
+                <Timing interval_tolerance_ms="20" max_pending_ms="500"/>
+                <!-- three wheels with the Pico IMU. PLACEHOLDER noise, one sigma,
+                     assumptions rather than measurements; replace them from
+                     stationary and known-path recordings -->
+                <Fusion max_wait_ms="100">
+                    <MotionNoise translation_floor_m="0.0005" translation_per_m="0.02"
+                                 rotation_floor_rad="0.001" rotation_per_rad="0.02"
+                                 rotation_per_m="0.01"/>
+                    <HeadingNoise angle_random_walk_rad_per_sqrt_s="0.002" bias_rad_per_s="0.0005"/>
+                </Fusion>
+                <History retention_s="5" capacity="1024" max_interpolation_gap_ms="150"/>
+            </BrainProfile>
+        </Localization>
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
+        <TargetResolution type="noop"/>
+        <Publishing type="brain_link">
+            <Serial resource_id="brain_uart"/>
+            <!-- the encoders and IMU it reports on follow the profile -->
+            <Health fresh_ms="150"/>
+            <!-- field map and estimate documents for Brain planning -->
+            <Field resource_id="override_field" estimate_period_ms="200"/>
+        </Publishing>
+    </Pipeline>
+</Configuration>

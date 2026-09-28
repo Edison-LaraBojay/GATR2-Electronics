@@ -12,8 +12,7 @@ independent contribution from the same gyro.
 Vision updates the retained landmark estimates; it does not correct the
 robot pose. Association gate values are initial tuning values, not measured
 calibration. The brain link answers Brain requests on brain_uart; the Pi never
-sends unasked. No FieldObject wire mappings or targets are configured here, so
-a Brain landmark selection is answered unknown; the viewer shows all field
+sends unasked. No targets are configured here; the viewer shows all field
 objects.
 -->
 <Pipeline>
@@ -83,6 +82,8 @@ objects.
             <Encoder sensor_id="tracking_encoder_c"/>
             <Gyro sensor_id="robot_imu"/>
         </Health>
+        <!-- field map and estimate documents for Brain planning -->
+        <Field resource_id="override_field" estimate_period_ms="200"/>
     </Publishing>
 
 </Pipeline>

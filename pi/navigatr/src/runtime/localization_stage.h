@@ -56,6 +56,16 @@ public:
     // odometry epoch moves on.
     void reset();
 
+    // Takes over from the executor this one replaces at a profile boundary:
+    // the same feed and counters, the odometry epoch past the previous one,
+    // the anchor revision continued, nothing placed. History clears with the
+    // epoch. Estimation worker stopped or inline only.
+    void continueFrom(const LocalizationExecutor& previous);
+
+    // Restarts IMU bias calibration in every function that has one; the pose
+    // holds. False when none does.
+    bool recalibrate();
+
     // Readers on any thread.
     std::shared_ptr<RobotStateFeed> feed() const { return feed_; }
 

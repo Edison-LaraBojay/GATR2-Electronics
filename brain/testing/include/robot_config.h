@@ -1,79 +1,150 @@
 // robot_config.h
-// Robot specific values for the testing application. Every value marked
-// PLACEHOLDER is not measured on the robot; set it before driving.
-// Units: meters, radians, seconds, heading CCW from +x, robot +x forward, +y left.
+// Testing program settings: drivetrain, movement limits and gains, test
+// destinations and controls. The robot's localization description (tracking
+// wheels, IMU, footprint, Pi link, start pose) is shared by every program:
+// brain/robot/gatr2_robot.h.
+//
+// PLACEHOLDER: depends on how the robot is built; set before driving.
+// Units: meters, radians, seconds. Field frame +x right, +y up on the field
+// diagram, heading CCW from +x. Robot frame +x forward, +y left.
 
 #pragma once
 #include <cstdint>
 
+#include "actugatr/drive.h"
+#include "actugatr/drive_owner.h"
+#include "actugatr/drivetrain.h"
+#include "actugatr/follower.h"
+#include "actugatr/motion.h"
 #include "api.h"
-#include "investigatr/geometry.h"
-#include "investigatr/input.h"
-#include "investigatr/navigator.h"
+#include "communigatr/startup_placement.h"
+#include "field_references.h"
+#include "gatr2_robot.h"
 
 namespace robot_config
 {
 
-// Drivetrain. Smart ports, negative port = reversed motor (PROS convention).
-// PLACEHOLDER: set so +forward drives the robot toward +x on both sides.
-constexpr int8_t kLeftMotorPorts[]  = {-1, -2, -3};
-constexpr int8_t kRightMotorPorts[] = {4, 5, 6};
+constexpr double kDeg = investigatr::kPi / 180.0;
 
-// PLACEHOLDER: motor cartridge and behavior at zero demand.
-constexpr pros::MotorGears kGearset   = pros::MotorGears::blue;
-constexpr pros::MotorBrake kBrakeMode = pros::MotorBrake::brake;
+// ---------------------------------------------------------------------------
+// Drivetrain. Tank is the current robot; the mecanum settings are a complete
+// example for a mecanum chassis.
+// ---------------------------------------------------------------------------
+enum class Drivetrain : uint8_t { kTank, kMecanum };
+constexpr Drivetrain kDrivetrain = Drivetrain::kTank;
 
-// PLACEHOLDER: full drive demand maps to this voltage, mV.
-constexpr int32_t kMaxVoltageMv = 8000;
-static_assert(kMaxVoltageMv > 0 && kMaxVoltageMv <= 12000, "V5 motor range is 12000 mV");
-
-// Navigatr link. PLACEHOLDER: smart port wired to the RS-485 adapter. Baud
-// must match the Pi serial resource <Baud> (Pi default 115200).
-constexpr uint8_t kNavigatrPort = 10;
-constexpr int32_t kNavigatrBaud = 115200;
-
-// PLACEHOLDER: robot pose sent to the Pi as the starting placement.
-constexpr investigatr::Pose kStartPose{0.0, 0.0, 0.0};
-
-// Navigator tuning. PLACEHOLDER: library defaults, not tuned on the robot.
-// Fields not set here keep the NavigatorConfig defaults.
-inline investigatr::NavigatorConfig navigatorConfig() {
-    investigatr::NavigatorConfig config;
-    config.position_tolerance = 0.03;
-    config.heading_tolerance  = 0.035;
-    config.max_forward        = 0.8;
-    config.max_turn           = 0.7;
-    config.min_forward        = 0.0;
-    config.min_turn           = 0.0;
-    config.drive_pid          = {2.0, 0.0, 0.1, 0.0, 1.0};
-    config.heading_pid        = {1.5, 0.0, 0.05, 0.0, 1.0};
-    config.turn_pid           = {1.2, 0.0, 0.06, 0.0, 1.0};
-    return config;
+// PLACEHOLDER ports. Smart Port 1 is the VEX IMU; the port check at startup
+// refuses to drive if a motor shares a port with any active device.
+inline actugatr::TankConfig tank() {
+    actugatr::TankConfig c;
+    c.left.count             = 3;
+    c.left.motors[0]         = {11, true};
+    c.left.motors[1]         = {12, true};
+    c.left.motors[2]         = {13, true};
+    c.right.count            = 3;
+    c.right.motors[0]        = {18, false};
+    c.right.motors[1]        = {19, false};
+    c.right.motors[2]        = {20, false};
+    c.track_width            = 0.30;   // PLACEHOLDER, driven wheel contact spacing
+    c.wheels.wheel_diameter  = 0.1016; // PLACEHOLDER, 4 in driven wheels
+    c.wheels.gear_ratio      = 0.6;    // PLACEHOLDER, 36:60, wheel turns per motor turn
+    c.wheels.cartridge       = actugatr::Cartridge::kBlue;
+    c.wheels.usable_fraction = 0.9;
+    c.stop_mode              = actugatr::StopMode::kBrake;
+    return c;
 }
 
-// Demo destinations, field frame. PLACEHOLDER: pick clear floor space. The
-// path runs from the goal back to the start; only its last point stops.
-constexpr investigatr::Pose kDemoGoal{0.6, 0.0, 0.0};
-constexpr investigatr::Pose kDemoPath[] = {
-    {0.6, 0.6, 0.0},
-    {0.0, 0.6, 0.0},
-    {0.0, 0.0, 0.0},
-};
+inline actugatr::MecanumConfig mecanum() {
+    actugatr::MecanumConfig c;
+    c.front_left.count        = 1;
+    c.front_left.motors[0]    = {11, true};
+    c.front_right.count       = 1;
+    c.front_right.motors[0]   = {18, false};
+    c.rear_left.count         = 1;
+    c.rear_left.motors[0]     = {12, true};
+    c.rear_right.count        = 1;
+    c.rear_right.motors[0]    = {19, false};
+    c.track_width             = 0.30; // PLACEHOLDER
+    c.wheelbase               = 0.28; // PLACEHOLDER
+    c.wheels.wheel_diameter   = 0.1016;
+    c.wheels.gear_ratio       = 1.0;
+    c.wheels.cartridge        = actugatr::Cartridge::kBlue;
+    c.wheels.usable_fraction  = 0.9;
+    c.stop_mode               = actugatr::StopMode::kBrake;
+    return c;
+}
 
-// Landmark for the relative demo. PLACEHOLDER: wire id of a <FieldObject>
-// mapping on the Pi (1..255), and the wanted robot pose in the landmark frame.
-constexpr investigatr::LandmarkId kDemoLandmarkId = 1;
-constexpr investigatr::Pose       kDemoLandmarkOffset{-0.5, 0.0, 0.0};
+// ---------------------------------------------------------------------------
+// Movement. Clearance is added around the footprint for obstacle avoidance;
+// keep the follower tracking_tolerance below it.
+// ---------------------------------------------------------------------------
+constexpr double kClearance = 0.06;
 
-// false also accepts the Pi's nominal (map) landmark pose.
-constexpr bool kDemoRequireObserved = true;
+inline investigatr::MotionLimits limits() {
+    investigatr::MotionLimits l;
+    l.max_speed = 0.8; // m/s
+    l.max_accel = 1.5; // m/s^2
+    l.max_omega = 3.0; // rad/s
+    l.max_alpha = 6.0; // rad/s^2
+    return l;
+}
 
-// Motion timeout per demo step.
-constexpr investigatr::Seconds kDemoTimeout = 15.0;
+// Tuning: see docs/actugatr.md. PLACEHOLDER, not tuned on the robot.
+inline actugatr::FollowerConfig follower() {
+    actugatr::FollowerConfig f;
+    f.position_tolerance = 0.02;
+    f.heading_tolerance  = 0.03;
+    f.settle_time        = 0.2;
+    f.tracking_tolerance = 0.04;
+    f.along              = {3.0, 0.0, 0.0, 0.0, 100.0};  // (m/s) per m remaining
+    f.cross              = {3.0, 0.0, 0.0, 0.0, 100.0};  // tank (rad/s) per m, mecanum (m/s) per m
+    f.heading            = {4.0, 0.0, 0.1, 0.0, 100.0};  // (rad/s) per rad
+    f.turn               = {4.0, 0.0, 0.2, 0.0, 100.0};  // (rad/s) per rad
+    f.min_speed          = 0.0;
+    f.min_omega          = 0.0;
+    return f;
+}
 
-// Controller: left stick Y forward, right stick X turn.
-constexpr pros::controller_digital_e_t kDemoButton    = pros::E_CONTROLLER_DIGITAL_A;
-constexpr pros::controller_digital_e_t kCancelButton  = pros::E_CONTROLLER_DIGITAL_B;
-constexpr int32_t                      kStickDeadband = 5; // of 127
+inline actugatr::MotionConfig motion(const investigatr::MotionModel& model) {
+    actugatr::MotionConfig m;
+    m.model           = model;
+    m.default_timeout = 15.0;
+    return m;
+}
+
+// Manual driving: full stick in physical units.
+inline actugatr::DriveOwnerConfig manual() {
+    actugatr::DriveOwnerConfig c;
+    c.manual_speed   = 1.0; // m/s
+    c.manual_omega   = 3.0; // rad/s
+    c.manual_timeout = 0.25;
+    return c;
+}
+
+// ---------------------------------------------------------------------------
+// Tests. PLACEHOLDER destinations: pick clear floor space on your field.
+// ---------------------------------------------------------------------------
+// Direct: field origin reference, no obstacles checked.
+constexpr investigatr::Pose kDirectGoal{1.4, 0.6, 0.0};
+// Avoiding: field origin reference, routes around the field's obstacles.
+constexpr investigatr::Pose kAvoidGoal{1.4, 1.2, 90.0 * kDeg};
+// Landmark relative: 0.45 m on the landmark's +x side, facing it.
+constexpr investigatr::Pose kLandmarkOffset{0.45, 0.0, 180.0 * kDeg};
+inline investigatr::Reference landmark() { return Field::RedGoal2West; }
+// Without a camera the landmark pose is the nominal map pose.
+constexpr bool kRequireObservedLandmark = false;
+
+constexpr double kSpeedScale = 0.5; // test runs start slow; LEFT/RIGHT change it
+
+// Place at gatr2_robot::kStartPose once at program start, when the link,
+// profile and sensors are ready; UP places explicitly after that.
+constexpr communigatr::StartupPolicy kStartupPolicy = communigatr::StartupPolicy::kAlways;
+constexpr double kStartupWaitSeconds = 90.0; // covers a cold Pi boot
+
+// Controller: left stick Y forward, right stick X turn, left stick X strafe
+// (mecanum). A direct test, X avoiding test, Y landmark test, B cancel,
+// UP place at the start pose, DOWN recalibrate (robot still, drive idle),
+// LEFT/RIGHT speed scale.
+constexpr int32_t kStickDeadband = 5; // of 127
 
 } // namespace robot_config

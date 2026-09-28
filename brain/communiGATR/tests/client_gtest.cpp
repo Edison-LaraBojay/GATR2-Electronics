@@ -1,6 +1,7 @@
 // client_gtest.cpp
 // Client against the fake Pi on the fake bus: sessions, correlation,
-// retries, placement acknowledgement, selection, restarts and faults.
+// retries, placement acknowledgement, calibration control, bench IMU
+// samples, path reports, restarts and faults.
 
 #include "communigatr/client.h"
 
@@ -103,6 +104,21 @@ private:
     std::deque<uint8_t> rx_;
 };
 
+// Opens a session on a scripted port: HELLO, then one state poll.
+void openScripted(Client& client, ScriptedPort& port, FakePi& pi, Seconds& now) {
+    client.poll(now);
+    port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
+    now += 0.001;
+    client.poll(now);
+    now += 0.006;
+    client.poll(now);
+    ASSERT_EQ(decoded(port.writes.back()).op, gatr2::kOpGetState);
+    port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
+    now += 0.001;
+    client.poll(now);
+    ASSERT_TRUE(client.ready());
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -148,7 +164,7 @@ TEST(Client, ReadyOnlyAfterCorrelatedState) {
     EXPECT_EQ(rig.pi.sessionsOpened(), 1);
 }
 
-TEST(Client, PollsStateWithFreshIds) {
+TEST(Client, PollsStateWithFreshIdsAndNoImuBlockByDefault) {
     LinkRig rig;
     openSession(rig);
     rig.run(0.5);
@@ -157,19 +173,27 @@ TEST(Client, PollsStateWithFreshIds) {
     for (std::size_t i = 1; i < polls.size(); ++i) {
         EXPECT_NE(decoded(polls[i]).request_id, decoded(polls[i - 1]).request_id);
     }
+    for (const auto& poll : polls) {
+        EXPECT_EQ(decoded(poll).imu_flags, 0);
+        EXPECT_EQ(poll.size(), 23u); // 8 header + 9 IMU block + 6 envelope
+    }
     EXPECT_EQ(rig.client().stats().resends, 0u);
     EXPECT_EQ(rig.client().stats().timeouts, 0u);
+    EXPECT_EQ(rig.pi.imuSamples(), 0);
 }
 
-TEST(ClientBenchImu, OptionalCallbackReplacesOnlyStatePollAndPreservesSampleStamp) {
+// ---------------------------------------------------------------------------
+// Bench IMU block
+// ---------------------------------------------------------------------------
+
+TEST(ClientBenchImu, EveryStatePollCarriesTheSampleAsGiven) {
     BenchImuSample sample{true, 1234, -450123};
-    ClientConfig config;
+    ClientConfig   config;
     config.bench_imu = [&] { return sample; };
     LinkRig rig(config);
     openSession(rig);
     rig.run(0.08);
-    EXPECT_TRUE(sent(rig.bus, gatr2::kOpGetState).empty());
-    const auto polls = sent(rig.bus, gatr2::kOpGetStateWithImu);
+    const auto polls = sent(rig.bus, gatr2::kOpGetState);
     ASSERT_GE(polls.size(), 2u);
     for (const auto& bytes : polls) {
         const auto request = decoded(bytes);
@@ -177,42 +201,69 @@ TEST(ClientBenchImu, OptionalCallbackReplacesOnlyStatePollAndPreservesSampleStam
         EXPECT_EQ(request.imu_stamp_ms, 1234u);
         EXPECT_EQ(request.imu_rotation_mdeg, -450123);
     }
+    EXPECT_EQ(rig.pi.imuSamples(), static_cast<int>(polls.size()));
     sample = {false, 1234, -450123};
-    runUntilSent(rig, gatr2::kOpGetStateWithImu);
+    runUntilSent(rig, gatr2::kOpGetState);
     EXPECT_EQ(rig.bus.brainRequests().back().imu_flags, 0);
     EXPECT_EQ(rig.bus.brainRequests().back().imu_stamp_ms, 1234u);
 }
 
-TEST(ClientBenchImu, PendingPlacementAlwaysInterleavesImuPollBeforeRetry) {
+TEST(ClientBenchImu, PendingPlacementInterleavesStatePollBeforeRetry) {
     ClientConfig config;
     config.pending_retry = 0;
-    config.bench_imu = [] { return BenchImuSample{true, 1234, 90000}; };
+    config.bench_imu     = [] { return BenchImuSample{true, 1234, 90000}; };
     LinkRig rig(config);
     openSession(rig);
     rig.pi.setApplyDelay(5);
     const auto ticket = rig.client().submitPlacement(610, -457, -9000);
     ASSERT_TRUE(rig.runUntil(
         [&] { return rig.client().placementResult(ticket) == PlacementResult::kApplied; }, kLimit));
-    bool placement_seen = false;
+    bool placement_seen      = false;
     bool imu_since_placement = false;
     for (const auto& request : rig.bus.brainRequests()) {
-        if (request.op == gatr2::kOpGetStateWithImu) {
+        if (request.op == gatr2::kOpGetState) {
             imu_since_placement = true;
         } else if (request.op == gatr2::kOpSetPose) {
             if (placement_seen) {
                 EXPECT_TRUE(imu_since_placement);
             }
-            placement_seen = true;
+            placement_seen      = true;
             imu_since_placement = false;
         }
     }
     const auto placements = sent(rig.bus, gatr2::kOpSetPose);
     ASSERT_GE(placements.size(), 2u);
-    for (const auto& bytes : placements) EXPECT_EQ(bytes, placements.front());
+    for (const auto& bytes : placements) {
+        EXPECT_EQ(bytes, placements.front());
+    }
     EXPECT_EQ(rig.pi.placementsApplied(), 1);
 }
 
-TEST(ClientBenchImu, DroppedPlacementReplyPollsImuThenResendsIdenticalPlacement) {
+// Review finding B: a SET_POSE the Pi may never have seen is resent before
+// any newer request id, or the Pi would answer the resend Stale.
+TEST(ClientBenchImu, TimedOutPlacementIsResentBeforeAnyStatePoll) {
+    ClientConfig config;
+    config.bench_imu = [] { return BenchImuSample{true, 1234, 90000}; };
+    LinkRig rig(config);
+    openSession(rig);
+    const auto ticket = rig.client().submitPlacement(610, -457, -9000);
+    runUntilSent(rig, gatr2::kOpSetPose);
+    rig.bus.fault(BusFault::kDropRequest);
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return rig.client().placementResult(ticket) == PlacementResult::kApplied; }, kLimit));
+    const auto requests = rig.bus.brainRequests();
+    std::size_t first   = 0;
+    while (requests[first].op != gatr2::kOpSetPose) {
+        ++first;
+    }
+    ASSERT_LT(first + 1, requests.size());
+    EXPECT_EQ(requests[first + 1].op, gatr2::kOpSetPose);
+    EXPECT_EQ(requests[first + 1].request_id, requests[first].request_id);
+    EXPECT_EQ(rig.pi.placementsApplied(), 1);
+    EXPECT_EQ(rig.client().placementStatus(ticket).result, gatr2::kResultOk);
+}
+
+TEST(ClientBenchImu, DroppedPlacementReplyResendsIdenticalPlacementNext) {
     ClientConfig config;
     config.bench_imu = [] { return BenchImuSample{true, 1234, 90000}; };
     LinkRig rig(config);
@@ -225,30 +276,7 @@ TEST(ClientBenchImu, DroppedPlacementReplyPollsImuThenResendsIdenticalPlacement)
     const auto frames = sent(rig.bus, gatr2::kOpSetPose);
     ASSERT_EQ(frames.size(), 2u);
     EXPECT_EQ(frames[0], frames[1]);
-    bool after_placement = false;
-    bool saw_imu = false;
-    for (const auto& request : rig.bus.brainRequests()) {
-        if (request.op == gatr2::kOpSetPose) {
-            if (after_placement) {
-                EXPECT_TRUE(saw_imu);
-            }
-            after_placement = true;
-        } else if (after_placement && request.op == gatr2::kOpGetStateWithImu) {
-            saw_imu = true;
-        }
-    }
     EXPECT_EQ(rig.pi.placementsApplied(), 1);
-}
-
-TEST(ClientBenchImu, UnsupportedPeerReportsErrorRatherThanPretendingImuWasSent) {
-    ClientConfig config;
-    config.bench_imu = [] { return BenchImuSample{true, 1234, 0}; };
-    LinkRig rig(config);
-    rig.pi.setUnsupportedOp(gatr2::kOpGetStateWithImu);
-    ASSERT_TRUE(rig.runUntil(
-        [&] { return rig.client().error() == LinkError::kUnsupportedOp; }, kLimit));
-    EXPECT_FALSE(rig.client().ready());
-    EXPECT_TRUE(sent(rig.bus, gatr2::kOpGetState).empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -518,19 +546,12 @@ TEST(Client, RepeatedNonceIsReplaced) {
     EXPECT_NE(decoded(hellos[2]).nonce, 0u);
 }
 
-TEST(Client, BrainRebootIgnoresOldSession) {
+TEST(Client, BrainRebootIgnoresOldSessionReplies) {
     FakeBusConfig bus;
     bus.reply_delay = 0.010;
-    LinkRig      rig({}, bus);
-    FakeLandmark landmark;
-    rig.pi.setLandmark(3, landmark);
+    LinkRig rig({}, bus);
     rig.nonces = {0xA0A0A0A0};
-
-    // Session A selects a landmark.
     openSession(rig);
-    rig.client().selectLandmark(3);
-    ASSERT_TRUE(
-        rig.runUntil([&] { return rig.client().selection() == SelectionState::kActive; }, kLimit));
     const uint32_t session_a = rig.client().session();
 
     gatr2::BrainReply old_hello;
@@ -550,7 +571,6 @@ TEST(Client, BrainRebootIgnoresOldSession) {
     // Session B: request ids restart at 1; A's replies arrive late.
     rig.rebootBrain();
     Client& client = rig.client();
-    EXPECT_EQ(client.selection(), SelectionState::kNotRequested);
     runUntilSent(rig, gatr2::kOpHello);
     EXPECT_EQ(rig.bus.brainRequests().back().request_id, 1);
     rig.bus.sendToBrain(encode(old_hello), rig.now());
@@ -560,7 +580,6 @@ TEST(Client, BrainRebootIgnoresOldSession) {
 
     ASSERT_TRUE(rig.runUntil([&] { return client.session() != 0; }, kLimit));
     EXPECT_NE(client.session(), session_a);
-    EXPECT_FALSE(rig.pi.landmarkRequested());
     runUntilSent(rig, gatr2::kOpGetState);
     EXPECT_EQ(rig.bus.brainRequests().back().request_id, 2);
     rig.bus.sendToBrain(encode(old_state), rig.now());
@@ -569,15 +588,13 @@ TEST(Client, BrainRebootIgnoresOldSession) {
     EXPECT_EQ(client.stats().uncorrelated, 2u);
 
     // A delayed session A request changes nothing on the Pi.
-    gatr2::BrainRequest old_select;
-    old_select.op           = gatr2::kOpSelectLandmark;
-    old_select.session      = session_a;
-    old_select.request_id   = 9;
-    old_select.landmark_id  = 3;
-    old_select.select_flags = gatr2::kSelectFlagSelected;
-    EXPECT_EQ(rig.pi.answer(old_select).result, gatr2::kResultUnknownSession);
-    EXPECT_FALSE(rig.pi.landmarkRequested());
-    EXPECT_EQ(client.selection(), SelectionState::kNotRequested);
+    gatr2::BrainRequest old_pose;
+    old_pose.op         = gatr2::kOpSetPose;
+    old_pose.session    = session_a;
+    old_pose.request_id = 9;
+    old_pose.x_mm       = 77;
+    EXPECT_EQ(rig.pi.answer(old_pose).result, gatr2::kResultUnknownSession);
+    EXPECT_EQ(rig.pi.placementsApplied(), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -646,7 +663,7 @@ TEST(Client, PlacementNeverAppliedTimesOut) {
     EXPECT_TRUE(client.connected(rig.now()));
 }
 
-TEST(Client, SilentPiPlacementTimesOut) {
+TEST(Client, SilentPiPlacementTimesOutWithBackToBackResends) {
     LinkRig rig;
     openSession(rig);
     rig.bus.setPiPresent(false);
@@ -654,10 +671,43 @@ TEST(Client, SilentPiPlacementTimesOut) {
     ASSERT_TRUE(rig.runUntil([&] { return !rig.client().placementPending(); }, kLimit));
     EXPECT_EQ(rig.client().placementResult(ticket), PlacementResult::kTimedOut);
     const auto frames = sent(rig.bus, gatr2::kOpSetPose);
-    EXPECT_EQ(frames.size(), static_cast<std::size_t>(rig.client().config().placement_attempts));
+    ASSERT_GE(frames.size(), 2u);
     for (const auto& frame : frames) {
         EXPECT_EQ(frame, frames[0]);
     }
+    // Nothing between the resends while the outcome is unknown.
+    const auto requests = rig.bus.brainRequests();
+    bool       inside   = false;
+    std::size_t seen    = 0;
+    for (const auto& r : requests) {
+        if (r.op == gatr2::kOpSetPose) {
+            inside = ++seen < frames.size();
+        } else {
+            EXPECT_FALSE(inside) << "op " << int(r.op);
+        }
+    }
+}
+
+TEST(Client, PlacementRefusedWithoutSession) {
+    LinkRig               rig;
+    Client&               client = rig.client();
+    EXPECT_EQ(client.submitPlacement(1, 2, 3), 0u);
+    EXPECT_FALSE(client.placementPending());
+    openSession(rig);
+    const PlacementTicket first = client.submitPlacement(1, 2, 3);
+    EXPECT_NE(first, 0u);
+    EXPECT_EQ(client.submitPlacement(4, 5, 6), 0u); // one at a time
+    EXPECT_EQ(client.placementResult(0), PlacementResult::kNone);
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return client.placementResult(first) == PlacementResult::kApplied; }, kLimit));
+    EXPECT_EQ(rig.pi.robot().x_mm, 1);
+
+    const PlacementTicket second = client.submitPlacement(4, 5, 6);
+    EXPECT_EQ(second, first + 1);
+    EXPECT_EQ(client.placementResult(first), PlacementResult::kNone);
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return client.placementResult(second) == PlacementResult::kApplied; }, kLimit));
+    EXPECT_EQ(rig.pi.placementsApplied(), 2);
 }
 
 TEST(Client, PlacementAckWithoutStateExpiresAndAllowsNewPlacement) {
@@ -666,8 +716,8 @@ TEST(Client, PlacementAckWithoutStateExpiresAndAllowsNewPlacement) {
     config.placement_attempts = 1;
     LinkRig rig(config);
     openSession(rig);
-    Client& client = rig.client();
-    const PlacementTicket first = client.submitPlacement(100, 200, 300);
+    Client&               client = rig.client();
+    const PlacementTicket first  = client.submitPlacement(100, 200, 300);
     ASSERT_TRUE(rig.runUntil(
         [&] { return client.placementStatus(first).anchor_revision != 0; }, kLimit));
     ASSERT_EQ(client.placementResult(first), PlacementResult::kPending);
@@ -695,7 +745,7 @@ TEST(Client, LateConfirmingStateDoesNotReviveExpiredPlacement) {
     config.placement_deadline = 0.08;
     LinkRig rig(config);
     openSession(rig);
-    Client& client = rig.client();
+    Client&               client = rig.client();
     const PlacementTicket ticket = client.submitPlacement(100, 200, 300);
     ASSERT_TRUE(rig.runUntil(
         [&] { return client.placementStatus(ticket).anchor_revision != 0; }, kLimit));
@@ -714,37 +764,45 @@ TEST(Client, LatePlacementAckCannotAcknowledgeQueuedReplacement) {
     ClientConfig config;
     config.placement_deadline = 0.020;
     ScriptedPort port;
-    FakePi pi;
-    Client client(port, [] { return 7u; }, config);
-    client.poll(0.0);
-    port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
-    client.poll(0.001);
+    FakePi       pi;
+    Client       client(port, [] { return 7u; }, config);
+    Seconds      now = 0;
+    openScripted(client, port, pi, now);
 
     const PlacementTicket first = client.submitPlacement(100, 200, 300);
-    client.poll(0.006);
+    now += 0.006;
+    client.poll(now);
+    ASSERT_EQ(decoded(port.writes.back()).op, gatr2::kOpSetPose);
     const auto old_reply = encode(pi.answer(decoded(port.writes.back())));
-    client.poll(0.027);
+    now += 0.021;
+    client.poll(now);
     ASSERT_EQ(client.placementResult(first), PlacementResult::kTimedOut);
     const PlacementTicket second = client.submitPlacement(400, 500, 600);
     ASSERT_NE(second, 0u);
 
     // The first request still owns the bus response window. Its late Ok
     // must release that window without acknowledging the unsent second one.
+    const std::size_t writes = port.writes.size();
     port.reads.push_back(old_reply);
-    client.poll(0.028);
+    now += 0.001;
+    client.poll(now);
     EXPECT_EQ(client.placementResult(second), PlacementResult::kPending);
     EXPECT_EQ(client.placementStatus(second).anchor_revision, 0u);
-    ASSERT_EQ(port.writes.size(), 2u);
+    ASSERT_EQ(port.writes.size(), writes);
 
-    client.poll(0.034);
-    ASSERT_EQ(port.writes.size(), 3u);
+    now += 0.006;
+    client.poll(now);
+    ASSERT_EQ(port.writes.size(), writes + 1);
     ASSERT_EQ(decoded(port.writes.back()).x_mm, 400);
     port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
-    client.poll(0.035);
-    client.poll(0.041);
+    now += 0.001;
+    client.poll(now);
+    now += 0.006;
+    client.poll(now);
     ASSERT_EQ(decoded(port.writes.back()).op, gatr2::kOpGetState);
     port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
-    client.poll(0.042);
+    now += 0.001;
+    client.poll(now);
     EXPECT_EQ(client.placementResult(second), PlacementResult::kApplied);
     EXPECT_EQ(client.state().state.x_mm, 400);
 }
@@ -753,57 +811,270 @@ TEST(Client, ExpiredRequestTimeoutDoesNotExpireQueuedReplacement) {
     ClientConfig config;
     config.placement_deadline = 0.020;
     ScriptedPort port;
-    FakePi pi;
-    Client client(port, [] { return 7u; }, config);
-    client.poll(0.0);
-    port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
-    client.poll(0.001);
+    FakePi       pi;
+    Client       client(port, [] { return 7u; }, config);
+    Seconds      now = 0;
+    openScripted(client, port, pi, now);
 
     const PlacementTicket first = client.submitPlacement(100, 200, 300);
-    client.poll(0.006);
-    client.poll(0.027);
+    now += 0.006;
+    client.poll(now);
+    const Seconds sent_at = now;
+    now += 0.021;
+    client.poll(now);
     ASSERT_EQ(client.placementResult(first), PlacementResult::kTimedOut);
     const PlacementTicket second = client.submitPlacement(400, 500, 600);
     ASSERT_NE(second, 0u);
 
     // Keep the original response window open until its transport timeout;
     // that timeout belongs to the old ticket, not the queued replacement.
-    client.poll(0.040);
-    ASSERT_EQ(port.writes.size(), 2u);
-    client.poll(0.067);
+    const std::size_t writes = port.writes.size();
+    client.poll(sent_at + 0.059);
+    ASSERT_EQ(port.writes.size(), writes);
+    client.poll(sent_at + 0.061);
     EXPECT_EQ(client.placementResult(second), PlacementResult::kPending);
-    ASSERT_EQ(port.writes.size(), 2u);
-    client.poll(0.073);
-    ASSERT_EQ(port.writes.size(), 3u);
+    ASSERT_EQ(port.writes.size(), writes);
+    client.poll(sent_at + 0.067);
+    ASSERT_EQ(port.writes.size(), writes + 1);
     ASSERT_EQ(decoded(port.writes.back()).x_mm, 400);
     port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
-    client.poll(0.074);
-    client.poll(0.080);
+    client.poll(sent_at + 0.068);
+    client.poll(sent_at + 0.074);
     ASSERT_EQ(decoded(port.writes.back()).op, gatr2::kOpGetState);
     port.reads.push_back(encode(pi.answer(decoded(port.writes.back()))));
-    client.poll(0.081);
+    client.poll(sent_at + 0.075);
     EXPECT_EQ(client.placementResult(second), PlacementResult::kApplied);
 }
 
-TEST(Client, OnePlacementAtATime) {
-    LinkRig               rig;
-    Client&               client = rig.client();
-    const PlacementTicket first  = client.submitPlacement(1, 2, 3);
-    EXPECT_NE(first, 0u);
-    EXPECT_EQ(client.submitPlacement(4, 5, 6), 0u);
-    EXPECT_EQ(client.placementResult(0), PlacementResult::kNone);
+// ---------------------------------------------------------------------------
+// Calibration control
+// ---------------------------------------------------------------------------
 
-    // Submitted before any session: sent once one opens.
-    ASSERT_TRUE(rig.runUntil(
-        [&] { return client.placementResult(first) == PlacementResult::kApplied; }, kLimit));
-    EXPECT_EQ(rig.pi.robot().x_mm, 1);
+TEST(ClientControl, RecalibrateAndReinitializeTickets) {
+    LinkRig rig;
+    Client& client = rig.client();
+    EXPECT_EQ(client.recalibrate(), 0u); // no session
+    openSession(rig);
+    const ControlTicket recal = client.recalibrate();
+    ASSERT_NE(recal, 0u);
+    EXPECT_EQ(client.reinitialize(), 0u); // one at a time
+    EXPECT_EQ(client.controlStatus(recal).state, ControlResult::kPending);
+    EXPECT_EQ(client.controlStatus(recal).action, gatr2::kControlRecalibrate);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(recal).state, ControlResult::kOk);
+    EXPECT_EQ(client.controlStatus(recal).calibration, gatr2::kCalibrationRunning);
 
-    const PlacementTicket second = client.submitPlacement(4, 5, 6);
-    EXPECT_EQ(second, first + 1);
-    EXPECT_EQ(client.placementResult(first), PlacementResult::kNone);
+    rig.pi.setMoving(true);
+    const ControlTicket moving = client.reinitialize();
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(moving).state, ControlResult::kNotStationary);
+    EXPECT_EQ(client.controlStatus(moving).result, gatr2::kResultNotStationary);
+    EXPECT_EQ(client.controlStatus(recal).state, ControlResult::kNone); // not the latest
+    EXPECT_EQ(rig.pi.controlsExecuted(), 1);
+}
+
+TEST(ClientControl, DroppedRequestIsResentFirstWithSameBytesAndExecutesOnce) {
+    LinkRig rig;
+    openSession(rig);
+    Client&             client = rig.client();
+    const ControlTicket ticket = client.reinitialize();
+    runUntilSent(rig, gatr2::kOpControl);
+    rig.bus.fault(BusFault::kDropRequest);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kOk);
+    const auto frames = sent(rig.bus, gatr2::kOpControl);
+    ASSERT_EQ(frames.size(), 2u);
+    EXPECT_EQ(frames[0], frames[1]);
+    const auto requests = rig.bus.brainRequests();
+    for (std::size_t i = 0; i + 1 < requests.size(); ++i) {
+        if (requests[i].op == gatr2::kOpControl) {
+            EXPECT_EQ(requests[i + 1].op, gatr2::kOpControl);
+            break;
+        }
+    }
+    EXPECT_EQ(rig.pi.controlsExecuted(), 1);
+
+    // Dropped reply: the resend is a duplicate, answered from the record.
+    const ControlTicket again = client.recalibrate();
+    runUntilSent(rig, gatr2::kOpControl);
+    rig.bus.fault(BusFault::kDropReply);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(again).state, ControlResult::kOk);
+    EXPECT_EQ(rig.pi.controlsExecuted(), 2);
+}
+
+// A placement outranks a control, but not a control's resend after a
+// timeout: its newer request id would make the resend Stale.
+TEST(ClientControl, TimedOutControlIsResentBeforeAWaitingPlacement) {
+    LinkRig rig;
+    openSession(rig);
+    Client&             client = rig.client();
+    const ControlTicket ticket = client.reinitialize();
+    runUntilSent(rig, gatr2::kOpControl);
+    rig.bus.fault(BusFault::kDropRequest);
+    const PlacementTicket placement = client.submitPlacement(10, 20, 30);
+    ASSERT_NE(placement, 0u);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kOk);
+    EXPECT_EQ(rig.pi.controlsExecuted(), 1);
     ASSERT_TRUE(rig.runUntil(
-        [&] { return client.placementResult(second) == PlacementResult::kApplied; }, kLimit));
-    EXPECT_EQ(rig.pi.placementsApplied(), 2);
+        [&] { return client.placementResult(placement) == PlacementResult::kApplied; }, kLimit));
+}
+
+TEST(ClientControl, SilentPiTimesOutAndSessionLossSettles) {
+    LinkRig rig;
+    openSession(rig);
+    Client& client = rig.client();
+    rig.bus.setPiPresent(false);
+    const ControlTicket ticket = client.recalibrate();
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kTimedOut);
+    EXPECT_LE(sent(rig.bus, gatr2::kOpControl).size(),
+              static_cast<std::size_t>(client.config().control_attempts));
+
+    rig.bus.setPiPresent(true);
+    rig.pi.setApplyDelay(-1);
+    ASSERT_TRUE(rig.runUntil([&] { return client.connected(rig.now()); }, kLimit));
+    rig.pi.setMoving(false);
+    const ControlTicket lost = client.recalibrate();
+    rig.pi.restart(0x4242);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(lost).state, ControlResult::kSessionLost);
+}
+
+TEST(ClientControl, PendingIsAskedAgainWithTheSameBytesUntilItCompletes) {
+    ClientConfig config;
+    config.control_retry = 0.05;
+    LinkRig rig(config);
+    rig.pi.setControlPendingRequests(12);
+    openSession(rig);
+    Client&             client = rig.client();
+    const ControlTicket ticket = client.reinitImu();
+    ASSERT_NE(ticket, 0u);
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return client.controlStatus(ticket).result == gatr2::kResultPending; }, kLimit));
+    EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kPending);
+    EXPECT_EQ(client.reinitialize(), 0u);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kOk);
+    EXPECT_EQ(client.controlStatus(ticket).action, gatr2::kControlReinitImu);
+    EXPECT_EQ(client.controlStatus(ticket).calibration, gatr2::kCalibrationRunning);
+    const auto frames = sent(rig.bus, gatr2::kOpControl);
+    ASSERT_GE(frames.size(), 2u);
+    for (const auto& frame : frames) {
+        EXPECT_EQ(frame, frames.front());
+    }
+    EXPECT_EQ(rig.pi.controlsExecuted(), 1);
+    // State polls keep flowing while the Pi works.
+    EXPECT_GT(sent(rig.bus, gatr2::kOpGetState).size(), frames.size());
+}
+
+TEST(ClientControl, FailedCarriesItsDetail) {
+    LinkRig rig;
+    rig.pi.setControlPendingRequests(3);
+    rig.pi.setControlFailure(gatr2::kControlDetailImuAbsent);
+    openSession(rig);
+    Client&             client = rig.client();
+    const ControlTicket ticket = client.reinitImu();
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kFailed);
+    EXPECT_EQ(client.controlStatus(ticket).result, gatr2::kResultFailed);
+    EXPECT_EQ(client.controlStatus(ticket).detail, gatr2::kControlDetailImuAbsent);
+}
+
+TEST(ClientControl, PendingControlGivesUpAfterControlWait) {
+    ClientConfig config;
+    config.control_wait = 0.5;
+    LinkRig rig(config);
+    rig.pi.setControlPendingRequests(1000000);
+    openSession(rig);
+    Client&             client = rig.client();
+    const Seconds       start  = rig.now();
+    const ControlTicket ticket = client.restartAcquisition();
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kTimedOut);
+    EXPECT_EQ(client.controlStatus(ticket).result, gatr2::kResultPending);
+    EXPECT_NEAR(rig.now() - start, 0.5, 0.05);
+}
+
+// ---------------------------------------------------------------------------
+// Wheel readings
+// ---------------------------------------------------------------------------
+
+TEST(ClientWheels, RequestedReadingsArriveOnceWithTheirAges) {
+    LinkRig rig;
+    Client& client = rig.client();
+    EXPECT_FALSE(client.requestWheels()); // no session
+    gatr2::WheelReading forward;
+    forward.port      = 0;
+    forward.flags     = gatr2::kWheelFresh | gatr2::kWheelValid;
+    forward.counts    = 12345;
+    forward.travel_um = 456789;
+    forward.age_ms    = 7;
+    gatr2::WheelReading sideways = forward;
+    sideways.port                = 1;
+    sideways.counts              = -2000;
+    sideways.travel_um           = -73631;
+    sideways.discontinuity       = 3;
+    rig.pi.setWheels({forward, sideways});
+    openSession(rig);
+
+    EXPECT_TRUE(client.requestWheels());
+    ASSERT_TRUE(rig.runUntil([&] { return client.wheelReadings().sequence == 1; }, kLimit));
+    const WheelReadings& r = client.wheelReadings();
+    EXPECT_EQ(r.result, gatr2::kResultOk);
+    ASSERT_EQ(r.count, 2);
+    EXPECT_EQ(r.wheels[0].counts, 12345);
+    EXPECT_EQ(r.wheels[0].travel_um, 456789);
+    EXPECT_EQ(r.wheels[0].age_ms, 7);
+    EXPECT_EQ(r.wheels[1].port, 1);
+    EXPECT_EQ(r.wheels[1].travel_um, -73631);
+    EXPECT_EQ(r.wheels[1].discontinuity, 3);
+    EXPECT_GT(r.round_trip, 0.0);
+    EXPECT_LE(r.received_at, rig.now());
+    rig.run(0.3);
+    EXPECT_EQ(client.wheelReadings().sequence, 1u);
+    EXPECT_EQ(sent(rig.bus, gatr2::kOpReadWheels).size(), 1u);
+}
+
+// ---------------------------------------------------------------------------
+// Path report
+// ---------------------------------------------------------------------------
+
+TEST(ClientPath, LatestWinsOneAttemptAndThinsToThirteen) {
+    LinkRig rig;
+    Client& client = rig.client();
+    const gatr2::PathPoint one[1] = {{1, 2}};
+    EXPECT_FALSE(client.reportPath(1, gatr2::kPathDirect, one, 1)); // no session
+    openSession(rig);
+
+    std::vector<gatr2::PathPoint> many;
+    for (int i = 0; i < 40; ++i) {
+        many.push_back({i * 100, -i});
+    }
+    EXPECT_TRUE(client.reportPath(7, gatr2::kPathDirect, one, 1));
+    EXPECT_TRUE(client.reportPath(8, gatr2::kPathAvoiding, many.data(), many.size()));
+    EXPECT_EQ(client.stats().paths_dropped, 2u); // no session, then replaced
+    ASSERT_TRUE(rig.runUntil([&] { return rig.pi.path().have; }, kLimit));
+    const FakePath& path = rig.pi.path();
+    EXPECT_EQ(path.command_id, 8u);
+    EXPECT_EQ(path.mode, gatr2::kPathAvoiding);
+    ASSERT_EQ(path.points.size(), 13u);
+    EXPECT_EQ(path.points.front().x_mm, 0);
+    EXPECT_EQ(path.points.back().x_mm, 3900);
+    for (std::size_t i = 1; i < path.points.size(); ++i) {
+        EXPECT_GT(path.points[i].x_mm, path.points[i - 1].x_mm);
+    }
+    EXPECT_EQ(sent(rig.bus, gatr2::kOpPathReport).size(), 1u);
+
+    // Clearing, and a lost report is not resent.
+    EXPECT_TRUE(client.reportPath(8, gatr2::kPathNone, nullptr, 0));
+    runUntilSent(rig, gatr2::kOpPathReport);
+    rig.bus.fault(BusFault::kDropRequest);
+    rig.run(0.3);
+    EXPECT_EQ(sent(rig.bus, gatr2::kOpPathReport).size(), 2u);
+    EXPECT_TRUE(rig.pi.path().have);
+    EXPECT_FALSE(client.reportPath(8, 3, nullptr, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -834,16 +1105,17 @@ TEST(Client, RequestIdWrapsToOne) {
     }
     EXPECT_TRUE(wrapped);
     EXPECT_EQ(client.stats().timeouts, 0u);
+    EXPECT_EQ(client.stats().unexpected, 0u);
     EXPECT_TRUE(client.connected(now));
 }
 
 TEST(Client, UnsupportedVersionIsTerminalWithSlowHello) {
     LinkRig rig;
-    rig.pi.setVersion(4);
+    rig.pi.setVersion(3);
     rig.run(5.0);
     Client& client = rig.client();
     EXPECT_EQ(client.error(), LinkError::kUnsupportedVersion);
-    EXPECT_EQ(client.peerVersion(), 4);
+    EXPECT_EQ(client.peerVersion(), 3);
     EXPECT_FALSE(client.ready());
     EXPECT_EQ(client.session(), 0u);
     const std::size_t hellos = sent(rig.bus, gatr2::kOpHello).size();
@@ -894,102 +1166,4 @@ TEST(Client, WriteFailuresAreCountedAndRetried) {
     rig.bus.failWrites(2);
     openSession(rig);
     EXPECT_EQ(rig.client().stats().write_errors, 2u);
-}
-
-// ---------------------------------------------------------------------------
-// Landmark selection
-// ---------------------------------------------------------------------------
-
-TEST(Client, SelectionStatuses) {
-    LinkRig      rig;
-    FakeLandmark landmark;
-    landmark.x_mm         = 2000;
-    landmark.y_mm         = 1000;
-    landmark.heading_cdeg = -4500;
-    landmark.age_ms       = 120;
-    rig.pi.setLandmark(3, landmark);
-    openSession(rig);
-    Client& client = rig.client();
-    EXPECT_EQ(client.selection(), SelectionState::kNotRequested);
-
-    client.selectLandmark(3);
-    EXPECT_EQ(client.selection(), SelectionState::kPending);
-    ASSERT_TRUE(
-        rig.runUntil([&] { return client.selection() == SelectionState::kActive; }, kLimit));
-    EXPECT_EQ(client.state().state.landmark_id, 3);
-    EXPECT_EQ(client.state().state.landmark_source, gatr2::kLandmarkSourceObserved);
-    EXPECT_EQ(client.state().state.lm_x_mm, 2000);
-    EXPECT_EQ(client.state().state.landmark_age_ms, 120);
-
-    // Unknown id: settled, not resent.
-    client.selectLandmark(9);
-    ASSERT_TRUE(rig.runUntil([&] { return client.selection() == SelectionState::kUnknownLandmark; },
-                             kLimit));
-    const std::size_t selects = sent(rig.bus, gatr2::kOpSelectLandmark).size();
-    rig.run(1.0);
-    EXPECT_EQ(sent(rig.bus, gatr2::kOpSelectLandmark).size(), selects);
-    EXPECT_EQ(client.selection(), SelectionState::kUnknownLandmark);
-
-    // Release.
-    client.selectLandmark(0);
-    EXPECT_EQ(client.selection(), SelectionState::kNotRequested);
-    ASSERT_TRUE(rig.runUntil([&] { return !rig.pi.landmarkRequested(); }, kLimit));
-    EXPECT_EQ(decoded(sent(rig.bus, gatr2::kOpSelectLandmark).back()).select_flags, 0);
-
-    // World estimation noop.
-    rig.pi.setWorldEstimationNoop(true);
-    client.selectLandmark(3);
-    ASSERT_TRUE(
-        rig.runUntil([&] { return client.selection() == SelectionState::kUnsupported; }, kLimit));
-}
-
-TEST(Client, SelectionRetriesSameBytes) {
-    LinkRig rig;
-    rig.pi.setLandmark(3, FakeLandmark{});
-    openSession(rig);
-    rig.client().selectLandmark(3);
-    runUntilSent(rig, gatr2::kOpSelectLandmark);
-    rig.bus.fault(BusFault::kDropReply);
-    ASSERT_TRUE(
-        rig.runUntil([&] { return rig.client().selection() == SelectionState::kActive; }, kLimit));
-    const auto frames = sent(rig.bus, gatr2::kOpSelectLandmark);
-    ASSERT_EQ(frames.size(), 2u);
-    EXPECT_EQ(frames[0], frames[1]);
-}
-
-TEST(Client, SilentSelectBacksOffThenRetries) {
-    LinkRig rig;
-    rig.pi.setLandmark(3, FakeLandmark{});
-    openSession(rig);
-    Client& client = rig.client();
-    rig.bus.setPiPresent(false);
-    client.selectLandmark(3);
-    rig.run(0.6);
-    const std::size_t first = sent(rig.bus, gatr2::kOpSelectLandmark).size();
-    EXPECT_EQ(first, static_cast<std::size_t>(client.config().select_attempts));
-
-    rig.bus.setPiPresent(true);
-    ASSERT_TRUE(
-        rig.runUntil([&] { return client.selection() == SelectionState::kActive; }, kLimit));
-    const auto frames = sent(rig.bus, gatr2::kOpSelectLandmark);
-    EXPECT_NE(decoded(frames.back()).request_id, decoded(frames.front()).request_id);
-}
-
-TEST(Client, SessionChangeClearsSelectionAndSelectsAgain) {
-    LinkRig rig;
-    rig.pi.setLandmark(3, FakeLandmark{});
-    openSession(rig);
-    Client& client = rig.client();
-    client.selectLandmark(3);
-    ASSERT_TRUE(
-        rig.runUntil([&] { return client.selection() == SelectionState::kActive; }, kLimit));
-
-    rig.pi.restart(0x99);
-    ASSERT_TRUE(rig.runUntil([&] { return client.stats().pi_restarts == 1; }, kLimit));
-    EXPECT_EQ(client.selection(), SelectionState::kPending);
-    EXPECT_FALSE(rig.pi.landmarkRequested());
-    ASSERT_TRUE(
-        rig.runUntil([&] { return client.selection() == SelectionState::kActive; }, kLimit));
-    EXPECT_TRUE(rig.pi.landmarkRequested());
-    EXPECT_EQ(rig.pi.landmarkWireId(), 3);
 }

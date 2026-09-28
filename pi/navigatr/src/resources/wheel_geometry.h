@@ -6,6 +6,8 @@
 //
 // Angles stay in degrees here because this is configuration data; the
 // consuming tracking-motion observation model converts once when it builds its solve.
+// travel_scale is the optional empirical distance correction (default 1);
+// the consuming model applies it once: travel = d(wheel angle) * radius * scale.
 
 #pragma once
 #include <string>
@@ -25,6 +27,7 @@ struct WheelDecl {
     double      position_y_m          = 0.0;
     double      measurement_angle_deg = 0.0;
     bool        direction_positive    = true;
+    double      travel_scale          = 1.0;   // measured distance correction, 1 = none
 };
 
 struct WheelGeometryMap {

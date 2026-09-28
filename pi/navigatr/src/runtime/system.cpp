@@ -58,7 +58,60 @@ double elapsedMs(std::chrono::steady_clock::time_point since) {
         .count();
 }
 
+constexpr std::size_t kEventsKept = 32;
+
+std::string hexId(uint32_t id) {
+    char buf[12];
+    std::snprintf(buf, sizeof(buf), "%08x", static_cast<unsigned>(id));
+    return buf;
+}
+
+const char* reasonName(uint8_t reason) {
+    switch (reason) {
+    case gatr2::kProfileReasonFormat: return "format";
+    case gatr2::kProfileReasonTopology: return "topology";
+    case gatr2::kProfileReasonWheelCount: return "wheel count";
+    case gatr2::kProfileReasonEncoderPort: return "encoder port";
+    case gatr2::kProfileReasonWheelGeometry: return "wheel geometry";
+    case gatr2::kProfileReasonObservability: return "observability";
+    case gatr2::kProfileReasonImuSource: return "IMU source";
+    case gatr2::kProfileReasonImuPort: return "IMU port";
+    case gatr2::kProfileReasonImuCombination: return "IMU combination";
+    case gatr2::kProfileReasonCamera: return "camera";
+    case gatr2::kProfileReasonFootprint: return "footprint";
+    case gatr2::kProfileReasonBuild: return "build";
+    case gatr2::kProfileReasonNotAccepted: return "not accepted";
+    case gatr2::kProfileReasonCalibration: return "calibration";
+    default: return "unknown";
+    }
+}
+
 } // namespace
+
+// The System as the brain_link commands slot sees it.
+class System::ProfileHost : public BrainProfileHost
+{
+public:
+    explicit ProfileHost(System& system) : system_(system) {}
+
+    bool prepare(const gatr2::RobotProfileDoc& profile, uint32_t profile_id, uint8_t& reason,
+                 uint8_t& detail) override {
+        return system_.prepareProfile(profile, profile_id, reason, detail);
+    }
+
+    std::shared_ptr<const ProfileBinding> applied() const override {
+        return system_.profileBinding();
+    }
+
+    uint8_t control(uint8_t action, uint8_t arg, MonotonicTime now, uint8_t& detail) override {
+        return system_.controlProfile(action, arg, now, detail);
+    }
+
+private:
+    System& system_;
+};
+
+System::System() = default;
 
 std::unique_ptr<System> System::buildFromFile(const std::string& path,
                                               const FunctionRegistry& functions,
@@ -165,6 +218,16 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     slot_context.warnings     = &warnings_;
     slot_context.loop_rate_hz = loop_rate_hz_;
 
+    // A Brain-profiled Localization: the host exists before Command
+    // Collection, which hands it every validated profile.
+    const ConfigNode profile_node = pipeline.child("Localization").child("BrainProfile");
+    if (profile_node.valid()) {
+        if (!buildProfileHost(pipeline, profile_node, functions, err)) {
+            return false;
+        }
+        slot_context.brain_profile = profile_host_.get();
+    }
+
     // Every slot must be present exactly once and explicitly typed. An
     // intentionally unused slot selects its category noop; omission is an
     // error, never an implicit default.
@@ -219,13 +282,15 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
         return false;
     }
     std::optional<LocalizationExecutor> localization =
-        make_localization(localization_node, functions, execute_sensors_.outputs(),
-                          resources_, &warnings_, err);
+        profiled_ ? buildWaitingLocalization(err)
+                  : make_localization(localization_node, functions, execute_sensors_.outputs(),
+                                      resources_, &warnings_, err);
     if (!localization.has_value()) {
         return false;
     }
     execute_localization_ = std::move(*localization);
     robot_                = execute_localization_.state();
+    feed_                 = execute_localization_.feed();
     for (const ObservationFunctionStatus& f : execute_localization_.functionStatus()) {
         slot_context.observation_functions.push_back(f.id);
     }
@@ -247,9 +312,8 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     execute_world_ = std::move(*world);
     // Later slots reference only what the estimator declares it publishes
     // across the boundary, never an implementation detail.
-    slot_context.observations          = execute_world_.observationOutputs();
-    slot_context.associations          = execute_world_.associationOutputs();
-    slot_context.world_estimation_noop = execute_world_.estimatorType() == "noop";
+    slot_context.observations = execute_world_.observationOutputs();
+    slot_context.associations = execute_world_.associationOutputs();
 
     FunctionKey target_type;
     if (!buildSlot("TargetResolution", target_resolution_,
@@ -269,14 +333,64 @@ bool System::build(const char* xml, const FunctionRegistry& functions,
     }
 
     estimation_stats_.setPeriodTarget(1000.0 / loop_rate_hz_);
+    publishBindingView();
     return true;
+}
+
+bool System::buildProfileHost(const ConfigNode& pipeline, const ConfigNode& profile,
+                              const FunctionRegistry& functions, std::string& err) {
+    const ConfigNode localization = pipeline.child("Localization");
+    if (!localization.onlyChildren({"BrainProfile"}, err) ||
+        !localization.atMostOne("BrainProfile", err)) {
+        err += "; a Brain-profiled Localization holds only BrainProfile, the models come from "
+               "the Brain robot profile";
+        return false;
+    }
+    const ConfigNode commands = pipeline.child("CommandCollection");
+    if (commands.attr("type") != "brain_link") {
+        err = profile.path() + ": needs a brain_link CommandCollection; the profile arrives "
+                               "over the Brain link";
+        return false;
+    }
+    if (!parseBrainProfileConfig(profile, resources_, execute_resources_.outputs(),
+                                 profile_config_, err)) {
+        return false;
+    }
+    const std::string bench = commands.child("BenchImu").attr("resource_id");
+    if (!profile_config_.brain_imu.empty() && bench != profile_config_.brain_imu.value) {
+        err = profile.path() + ": BrainImu " + profile_config_.brain_imu.value +
+              " needs <BenchImu resource_id=\"" + profile_config_.brain_imu.value +
+              "\"/> on the brain_link CommandCollection";
+        return false;
+    }
+    const std::string prefix = kProfileSensorPrefix;
+    for (const SensorCatalog::Entry& e : execute_sensors_.outputs().entries()) {
+        if (e.id.value.compare(0, prefix.size(), prefix) == 0) {
+            err = profile.path() + ": sensor id " + e.id.value + " uses the prefix " + prefix +
+                  " reserved for sensors built from the Brain profile";
+            return false;
+        }
+    }
+    profiled_          = true;
+    profile_functions_ = functions;
+    base_catalog_      = execute_sensors_.outputs();
+    profile_host_      = std::make_unique<ProfileHost>(*this);
+    return true;
+}
+
+std::optional<LocalizationExecutor> System::buildWaitingLocalization(std::string& err) {
+    tinyxml2::XMLDocument doc;
+    writeWaitingLocalization(profile_config_, doc);
+    return make_localization(ConfigNode{doc.RootElement()}, profile_functions_, base_catalog_,
+                             resources_, &warnings_, err);
 }
 
 LocalizationRequests System::requestsFrom(const CommandState& command) const {
     LocalizationRequests requests;
     // A new brain session withdraws a placement not applied yet; an applied
-    // one stays recorded in the robot state and never re-applies.
-    if (command.init_sequence != 0 && command.init_session == command.session) {
+    // one stays recorded in the robot state and never re-applies. A profile
+    // boundary or a reinitialize withdraws every request up to its floor.
+    if (command.init_sequence > placement_floor_ && command.init_session == command.session) {
         requests.placement.requested = true;
         requests.placement.origin    = "command";
         requests.placement.session   = command.init_session;
@@ -284,6 +398,229 @@ LocalizationRequests System::requestsFrom(const CommandState& command) const {
         requests.placement.pose      = command.init_pose;
     }
     return requests;
+}
+
+// ---- Brain profile ---------------------------------------------------------
+
+bool System::prepareProfile(const gatr2::RobotProfileDoc& profile, uint32_t id, uint8_t& reason,
+                            uint8_t& detail) {
+    if (!checkProfileCapabilities(profile_config_, profile, reason, detail)) {
+        noteEvent(last_now_, "profile " + hexId(id) + " refused: " + reasonName(reason) +
+                                 " (index " + std::to_string(detail) + ")");
+        return false;
+    }
+    auto binding     = std::make_shared<ProfileBinding>();
+    binding->id      = id;
+    binding->profile = profile;
+    tinyxml2::XMLDocument doc;
+    writeProfileSubtrees(profile_config_, profile, doc, *binding);
+    const ConfigNode root{doc.RootElement()};
+
+    // the ordinary factories, from typed data; nothing running is touched
+    std::string                         err;
+    std::vector<std::string>            warnings;
+    std::optional<LocalizationExecutor> localization;
+    std::optional<SensorExecutor>       sensors =
+        make_sensors(root.child("Sensors"), profile_functions_, resources_,
+                     execute_resources_.outputs(), &warnings, err);
+    if (sensors.has_value()) {
+        SensorCatalog catalog = base_catalog_;
+        for (const SensorCatalog::Entry& e : sensors->outputs().entries()) {
+            catalog.add(e.id, e.payload);
+        }
+        localization = make_localization(root.child("Localization"), profile_functions_, catalog,
+                                         resources_, &warnings, err);
+    }
+    if (!profile_config_.brain_imu.empty() && profile.imu_source == gatr2::kImuSourceBrainVex) {
+        binding->bench_imu = resources_.require<BrainImuBench>(profile_config_.brain_imu, err);
+    }
+    if (!sensors.has_value() || !localization.has_value() ||
+        (profile.imu_source == gatr2::kImuSourceBrainVex && binding->bench_imu == nullptr)) {
+        reason = gatr2::kProfileReasonBuild;
+        detail = 0;
+        noteEvent(last_now_, "profile " + hexId(id) + " not built: " + err);
+        return false;
+    }
+
+    auto candidate          = std::make_unique<ProfileCandidate>();
+    candidate->binding      = std::move(binding);
+    candidate->sensors      = std::move(*sensors);
+    candidate->localization = std::move(*localization);
+    candidate->warnings     = std::move(warnings);
+    {
+        std::lock_guard<std::mutex> lock(profile_mutex_);
+        candidate_ = std::move(candidate);
+        profile_pending_.store(true);
+    }
+    noteEvent(last_now_, "profile " + hexId(id) + " built; applies at the next boundary");
+    return true;
+}
+
+uint8_t System::controlProfile(uint8_t action, uint8_t, MonotonicTime now, uint8_t& detail) {
+    detail = gatr2::kControlDetailNone;
+    if (profileBinding() == nullptr) {
+        return gatr2::kResultNotReady;
+    }
+    if (action != gatr2::kControlRecalibrate && action != gatr2::kControlReinitialize) {
+        return gatr2::kResultNotReady;   // Pico commands arrive with the Pico link
+    }
+    const char* name = action == gatr2::kControlRecalibrate ? "recalibrate" : "reinitialize";
+    std::string why;
+    if (!precheck_.still(now, &why)) {
+        noteEvent(now, std::string(name) + " refused, not stationary: " + why);
+        return gatr2::kResultNotStationary;
+    }
+    if (action == gatr2::kControlRecalibrate) {
+        const bool any = execute_localization_.recalibrate();
+        noteEvent(now, any ? "IMU bias recalibration started; pose holds"
+                           : "recalibrate: nothing to calibrate on the Pi for this profile");
+        return gatr2::kResultOk;
+    }
+    execute_localization_.reset();
+    placement_floor_ = command_.init_sequence;
+    noteEvent(now, "localization reinitialized: odometry epoch " +
+                       std::to_string(execute_localization_.state().odometry_epoch) +
+                       ", placement withdrawn, bias recalibrating");
+    return gatr2::kResultOk;
+}
+
+bool System::applyPendingProfile() {
+    if (!profile_pending_.load()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mutex_);
+    const bool                  was_running = pauseWorkers();
+    swapProfile();
+    resumeWorkers(was_running);
+    return true;
+}
+
+void System::swapProfile() {
+    std::unique_ptr<ProfileCandidate> c;
+    {
+        std::lock_guard<std::mutex> lock(profile_mutex_);
+        c = std::move(candidate_);
+        profile_pending_.store(false);
+    }
+    if (c == nullptr) {
+        return;
+    }
+    execute_sensors_.replaceProfile(std::move(c->sensors));
+    c->localization.continueFrom(execute_localization_);
+    execute_localization_ = std::move(c->localization);
+    robot_                = execute_localization_.state();
+    // placement requests made under the previous odometry never re-apply
+    placement_floor_ = command_.init_sequence;
+
+    ProfileStatus& status = command_.profile;
+    status.applied_id     = c->binding->id;
+    if (status.id == c->binding->id) {
+        status.state  = gatr2::kProfileApplied;
+        status.reason = gatr2::kProfileReasonNone;
+        status.detail = 0;
+    }
+    c->binding->generation = ++profile_applies_;
+
+    std::vector<StationaryPrecheck::Wheel> wheels;
+    for (uint8_t i = 0; i < c->binding->profile.wheel_count; ++i) {
+        wheels.push_back({c->binding->encoders[i], c->binding->profile.wheels[i].radius_um * 1e-6});
+    }
+    precheck_.configure(wheels, c->binding->imu);
+    field_handoff_.clear();
+    profile_warnings_ = std::move(c->warnings);
+    {
+        std::lock_guard<std::mutex> lock(profile_mutex_);
+        applied_ = c->binding;
+    }
+    publishBindingView();
+    noteEvent(last_now_, "profile " + hexId(c->binding->id) + " applied (" +
+                             c->binding->summary + "); odometry epoch " +
+                             std::to_string(robot_.odometry_epoch) + ", placement required");
+}
+
+void System::swapToWaiting() {
+    {
+        std::lock_guard<std::mutex> lock(profile_mutex_);
+        candidate_.reset();
+        applied_.reset();
+        profile_pending_.store(false);
+    }
+    execute_sensors_.replaceProfile(SensorExecutor{});
+    std::string                         err;
+    std::optional<LocalizationExecutor> waiting = buildWaitingLocalization(err);
+    if (waiting.has_value()) {   // built once at startup already
+        waiting->continueFrom(execute_localization_);
+        execute_localization_ = std::move(*waiting);
+    }
+    robot_           = execute_localization_.state();
+    placement_floor_ = 0;
+    precheck_.configure({}, SensorId{});
+    profile_warnings_.clear();
+    publishBindingView();
+}
+
+bool System::pauseWorkers() {
+    const bool was_running = running_.load();
+    if (was_running) {
+        // join both workers so exactly one thread touches every stage
+        requestStop();
+        if (estimation_thread_.joinable()) {
+            estimation_thread_.join();
+        }
+        if (field_thread_.joinable()) {
+            field_thread_.join();
+        }
+        running_.store(false);
+    }
+    estimation_stats_.setRunning(false);
+    field_stats_.setRunning(false);
+    return was_running;
+}
+
+void System::resumeWorkers(bool was_running) {
+    if (!was_running) {
+        return;
+    }
+    std::string err;
+    if (!startWorkers(err)) {
+        throw std::runtime_error(err);
+    }
+}
+
+std::shared_ptr<const ProfileBinding> System::profileBinding() const {
+    std::lock_guard<std::mutex> lock(profile_mutex_);
+    return applied_;
+}
+
+void System::publishBindingView() {
+    auto view            = std::make_shared<BindingView>();
+    view->sensors        = execute_sensors_.outputs();
+    view->estimator_type = execute_localization_.estimatorType();
+    view->warnings       = warnings_;
+    view->warnings.insert(view->warnings.end(), profile_warnings_.begin(),
+                          profile_warnings_.end());
+    view->brain_profile = profiled_;
+    view->profile       = profileBinding();
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    binding_view_ = std::move(view);
+}
+
+std::shared_ptr<const BindingView> System::bindingView() const {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    return binding_view_;
+}
+
+void System::noteEvent(MonotonicTime at, std::string text) {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    events_.push_back(RuntimeEvent{++event_count_, at, std::move(text)});
+    if (events_.size() > kEventsKept) {
+        events_.erase(events_.begin());
+    }
+}
+
+std::vector<RuntimeEvent> System::events() const {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    return events_;
 }
 
 // ---- snapshot readers --------------------------------------------------
@@ -317,6 +654,9 @@ System::detectionFrames() const {
 // ---- cycles --------------------------------------------------------------
 
 void System::step(MonotonicTime now) {
+    if (profile_pending_.load()) {
+        swapProfile();   // the inline boundary
+    }
     estimationCycle(now);
     // the inline cycle lets the same cycle's evidence reach target
     // resolution and publishing, as the synchronous tests expect
@@ -327,10 +667,14 @@ void System::step(MonotonicTime now) {
 void System::estimationCycle(MonotonicTime now) {
     const uint64_t cycle = cycle_.fetch_add(1) + 1;
     ++diagnostics_.cycles;
+    last_now_ = now;
     const ExecutionContext context{now, cycle, &diagnostics_};
 
     const ResourceMap& resource_map = execute_resources_(context);
     const SensorMap&   sensor_map   = execute_sensors_(resource_map, context);
+    if (profiled_) {
+        precheck_.update(sensor_map, now);
+    }
 
     CommandsOutput commands_out = commands_->run({command_, now, &diagnostics_});
     command_                    = commands_out.command;
@@ -343,10 +687,10 @@ void System::estimationCycle(MonotonicTime now) {
 
 void System::reportingCycle(MonotonicTime now) {
     std::shared_ptr<const FieldSnapshot> field  = fieldSnapshot();
-    const LocalizationStatus             status = execute_localization_.feed()->status();
+    const LocalizationStatus             status = feed_->status();
     TargetResolutionOutput               target_out = target_resolution_->run(
-        {command_, robot_, *execute_localization_.feed(), field->field, field->observations,
-         field->associations, target_, now});
+        {command_, robot_, *feed_, field->field, field->observations, field->associations,
+         target_, now});
     target_ = target_out.target;
     diagnostics_.note(slot_labels_[1], target_out.status);
 
@@ -375,7 +719,7 @@ void System::reportingCycle(MonotonicTime now) {
 void System::fieldCycle(const SensorMap& sensors, MonotonicTime now) {
     std::shared_ptr<const FieldSnapshot> previous = fieldSnapshot();
     auto                                 next     = std::make_shared<FieldSnapshot>();
-    const RobotState                     robot    = execute_localization_.feed()->latest();
+    const RobotState                     robot    = feed_->latest();
     ++field_diagnostics_.cycles;
     const uint64_t         invocation = ++field_invocations_;
     const ExecutionContext context{now, invocation, &field_diagnostics_};
@@ -383,8 +727,8 @@ void System::fieldCycle(const SensorMap& sensors, MonotonicTime now) {
     // One standard call: the whole sensor snapshot, the latest robot state,
     // history lookups, the previous field and the context; the executor
     // owns declared-output enforcement and diagnostics.
-    FieldEstimationOutput field_out = execute_world_(
-        {sensors, robot, *execute_localization_.feed(), previous->field, context});
+    FieldEstimationOutput field_out =
+        execute_world_({sensors, robot, *feed_, previous->field, context});
 
     next->field        = std::move(field_out.field);
     next->observations = std::move(field_out.observations);
@@ -523,7 +867,7 @@ void System::publishDetectionFrames(const SensorMap& sensors, const FieldSnapsho
             d->field_from_odom      = d->trace.field_from_odom;
             d->anchor_revision      = d->trace.anchor_revision;
         } else {
-            const auto exposure = execute_localization_.feed()->sampleSnapshotAt(set->exposureAt);
+            const auto exposure     = feed_->sampleSnapshotAt(set->exposureAt);
             d->pose_at_exposure     = exposure.sample.pose;
             d->attitude_at_exposure = exposure.sample.attitude;
             d->field_from_odom      = exposure.current.robot.field_from_odom;
@@ -554,7 +898,7 @@ void System::publishDetectionFrames(const SensorMap& sensors, const FieldSnapsho
             }
         }
         auto       d        = frameSnapshot(kv.first, *frame);
-        const auto exposure = execute_localization_.feed()->sampleSnapshotAt(frame->frame.exposureAt);
+        const auto exposure     = feed_->sampleSnapshotAt(frame->frame.exposureAt);
         d->pose_at_exposure     = exposure.sample.pose;
         d->attitude_at_exposure = exposure.sample.attitude;
         d->field_from_odom      = exposure.current.robot.field_from_odom;
@@ -586,6 +930,10 @@ void System::resetStages() {
     target_  = TargetState{};
     field_invocations_ = 0;
     field_handoff_.clear();
+    placement_floor_   = 0;
+    if (profiled_) {
+        swapToWaiting();   // power-on: no profile
+    }
 
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
     field_ = std::make_shared<FieldSnapshot>();
@@ -596,30 +944,14 @@ void System::resetStages() {
 
 void System::reset() {
     std::lock_guard<std::mutex> lifecycle(lifecycle_mutex_);
-    const bool                  was_running = running_.load();
-    if (was_running) {
-        // join both workers so exactly one thread touches every stage
-        requestStop();
-        if (estimation_thread_.joinable()) {
-            estimation_thread_.join();
-        }
-        if (field_thread_.joinable()) {
-            field_thread_.join();
-        }
-        running_.store(false);
-    }
-    estimation_stats_.setRunning(false);
-    field_stats_.setRunning(false);
+    const bool                  was_running = pauseWorkers();
     resetStages();
     reset_count_.fetch_add(1);
     if (was_running) {
         estimation_stats_.resetCounters();
         field_stats_.resetCounters();
-        std::string err;
-        if (!startWorkers(err)) {
-            throw std::runtime_error(err);
-        }
     }
+    resumeWorkers(was_running);
 }
 
 bool System::start(std::string& err) {

@@ -1,5 +1,5 @@
 // brain_link_commands.h
-// Brain link v3 requests in, command state and the reply owed out. The Pi
+// Brain link v4 requests in, command state and the reply owed out. The Pi
 // side of the session rules: Pi-assigned sessions, per-session request_id
 // dedupe, a recent HELLO nonce ring, and pi_instance, new per construction
 // and per reset. The brain_link publisher sends the reply in the same cycle.
@@ -7,6 +7,7 @@
 //   <CommandCollection type="brain_link">
 //       <Serial resource_id="brain_uart"/>
 //       <Reply window_ms="40" turnaround_guard_us="1000"/>   optional
+//       <BenchImu resource_id="brain_imu"/>                   optional
 //   </CommandCollection>
 //
 // Each run drains the link until a read returns nothing, stamping every read
@@ -17,8 +18,30 @@
 // reset, or followed by more bytes in the same drain; it is still applied.
 // A drain with no bytes discards a partial frame. The loop period must be at
 // most half the window.
+//
+// Dedupe: a request id that is not newer is never applied again. The last
+// SET_POSE and CONTROL are answered from their records; the newest id of a
+// read-only or idempotent op with the same body is answered again (GET_STATE
+// without re-accepting its IMU sample); any other reuse is InvalidArgument,
+// anything older Stale.
+//
+// Robot profile: PROFILE_WRITE stages one document, keyed by profile_id and
+// kept across sessions. PROFILE_APPLY checks the staged bytes, decodes and
+// validates them, then hands them to the System's BrainProfileHost; without
+// one the configuration takes no profile and APPLY is ProfileRejected
+// (kProfileReasonNotAccepted). With a host, SET_POSE is NotReady until a
+// profile is applied. Rejections are remembered per id.
+//
+// BenchImu: GET_STATE samples go to this mailbox; without it they are
+// ignored.
+//
+// CONTROL goes to the profile host (NotReady without one) and is recorded
+// like SET_POSE: a duplicate reports the recorded result and never runs
+// again. READ_WHEELS is Unavailable without a profile host and NotReady with
+// one until wheel readings are served.
 
 #pragma once
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <random>
@@ -26,9 +49,11 @@
 #include <vector>
 
 #include "common/frame_codec.h"
+#include "common/link_documents.h"
+#include "contracts/brain_profile.h"
 #include "contracts/commands.h"
-#include "resources/serial_link.h"
 #include "resources/brain_imu_bench.h"
+#include "resources/serial_link.h"
 
 namespace navigatr
 {
@@ -51,15 +76,23 @@ public:
 private:
     void     process(const gatr2::BrainRequest& req, CommandState& c, LinkStats* stats,
                      MonotonicTime now);
+    void     execute(const gatr2::BrainRequest& req, CommandState& c, MonotonicTime now,
+                     bool repeat);
     void     hello(const gatr2::BrainRequest& req, CommandState& c, LinkStats* stats);
-    void     repeat(const gatr2::BrainRequest& req, BrainReplyContext& r, LinkStats* stats);
+    void     repeat(const gatr2::BrainRequest& req, CommandState& c, LinkStats* stats,
+                    MonotonicTime now);
+    void     setPose(const gatr2::BrainRequest& req, CommandState& c);
+    void     profileWrite(const gatr2::BrainRequest& req, BrainReplyContext& r);
+    void     profileApply(const gatr2::BrainRequest& req, CommandState& c);
+    void     rejectProfile(uint32_t id, uint8_t reason, uint8_t detail, CommandState& c);
     uint32_t randomNonzero(uint32_t differs_from);
 
-    std::shared_ptr<SerialLink> link_;
+    std::shared_ptr<SerialLink>    link_;
     std::shared_ptr<BrainImuBench> bench_imu_;
-    std::string                 diagnostics_id_;
-    int64_t                     window_us_ = 40000;
-    int64_t                     guard_us_  = 1000;
+    BrainProfileHost*              profile_host_ = nullptr;
+    std::string                    diagnostics_id_;
+    int64_t                        window_us_ = 40000;
+    int64_t                        guard_us_  = 1000;
 
     gatr2::FrameReader reader_;
     bool               have_last_read_ = false;   // a previous drain exists
@@ -74,8 +107,8 @@ private:
     bool                  accepted_      = false;   // a non-HELLO request in this session
     std::vector<uint32_t> recent_nonces_;           // last opening nonces, newest last
 
-    bool     have_newest_ = false;
-    uint16_t newest_rid_  = 0;
+    bool                have_newest_ = false;
+    gatr2::BrainRequest newest_;   // the newest processed request
 
     struct SetPoseRecord {
         bool     valid        = false;
@@ -83,16 +116,33 @@ private:
         int32_t  x_mm         = 0;
         int32_t  y_mm         = 0;
         int32_t  heading_cdeg = 0;
+        uint8_t  result       = 0;   // Pending or NotReady
         uint64_t sequence     = 0;   // init_sequence it was recorded under
     };
-    struct SelectRecord {
-        bool     valid       = false;
-        uint16_t rid         = 0;
-        uint8_t  landmark_id = 0;
-        uint8_t  flags       = 0;
+    struct ControlRecord {
+        bool     valid  = false;
+        uint16_t rid    = 0;
+        uint8_t  action = 0;
+        uint8_t  arg    = 0;
+        uint8_t  result = 0;
+        uint8_t  detail = 0;
     };
     SetPoseRecord set_pose_;
-    SelectRecord  select_;
+    ControlRecord control_;
+
+    struct Staging {
+        uint32_t id        = 0;
+        uint16_t total_len = 0;   // 0 = nothing staged
+        uint16_t received  = 0;   // contiguous from offset 0
+        std::array<uint8_t, gatr2::kProfileMaxLen> bytes{};
+    };
+    struct Rejection {
+        uint32_t id     = 0;
+        uint8_t  reason = 0;
+        uint8_t  detail = 0;
+    };
+    Staging                staging_;
+    std::vector<Rejection> rejected_;   // newest last
 };
 
 } // namespace navigatr

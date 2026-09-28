@@ -1,18 +1,23 @@
 // brain_io_gtest.cpp
-// The brain link v3 slots. LinkHarness drives brain_link commands and
+// The brain link v4 slots. LinkHarness drives brain_link commands and
 // publishing directly over one memory link with a fake link clock and
-// hand-built robot and field state: sessions, dedupe, the reply window and
-// reply bodies. PiRig builds a whole System with real localization for
-// placement acknowledgements, target latches, pi_instance and build checks.
+// hand-built robot and command state: sessions, dedupe, the reply window,
+// reply bodies, profile staging and apply, path reports. PiRig builds a
+// whole System with real localization for placement acknowledgements,
+// pi_instance and build checks.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "common/frame_codec.h"
+#include "common/link_documents.h"
+#include "contracts/brain_profile.h"
 #include "impl/resources/serial_links.h"
 #include "inspection/inspection_document.h"
 #include "math/angles.h"
@@ -36,42 +41,107 @@ std::vector<uint8_t> requestBytes(const gatr2::BrainRequest& r) {
     return buf;
 }
 
-gatr2::BrainRequest helloRequest(uint16_t rid, uint32_t nonce) {
+gatr2::BrainRequest request(uint8_t op, uint32_t session, uint16_t rid) {
     gatr2::BrainRequest r;
-    r.op         = gatr2::kOpHello;
+    r.op         = op;
+    r.session    = session;
     r.request_id = rid;
-    r.nonce      = nonce;
+    return r;
+}
+
+gatr2::BrainRequest helloRequest(uint16_t rid, uint32_t nonce) {
+    gatr2::BrainRequest r = request(gatr2::kOpHello, 0, rid);
+    r.nonce               = nonce;
     return r;
 }
 
 gatr2::BrainRequest setPoseRequest(uint32_t session, uint16_t rid, int32_t x_mm, int32_t y_mm,
                                    int32_t heading_cdeg) {
-    gatr2::BrainRequest r;
-    r.op           = gatr2::kOpSetPose;
-    r.session      = session;
-    r.request_id   = rid;
-    r.x_mm         = x_mm;
-    r.y_mm         = y_mm;
-    r.heading_cdeg = heading_cdeg;
-    return r;
-}
-
-gatr2::BrainRequest selectRequest(uint32_t session, uint16_t rid, uint8_t id, bool selected) {
-    gatr2::BrainRequest r;
-    r.op           = gatr2::kOpSelectLandmark;
-    r.session      = session;
-    r.request_id   = rid;
-    r.landmark_id  = id;
-    r.select_flags = selected ? gatr2::kSelectFlagSelected : 0;
+    gatr2::BrainRequest r = request(gatr2::kOpSetPose, session, rid);
+    r.x_mm                = x_mm;
+    r.y_mm                = y_mm;
+    r.heading_cdeg        = heading_cdeg;
     return r;
 }
 
 gatr2::BrainRequest getStateRequest(uint32_t session, uint16_t rid) {
-    gatr2::BrainRequest r;
-    r.op         = gatr2::kOpGetState;
-    r.session    = session;
-    r.request_id = rid;
+    return request(gatr2::kOpGetState, session, rid);
+}
+
+gatr2::BrainRequest pathRequest(uint32_t session, uint16_t rid, uint32_t command_id,
+                                uint8_t mode, const std::vector<gatr2::PathPoint>& points) {
+    gatr2::BrainRequest r = request(gatr2::kOpPathReport, session, rid);
+    r.command_id          = command_id;
+    r.path_mode           = mode;
+    r.point_count         = static_cast<uint8_t>(points.size());
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        r.points[i] = points[i];
+    }
     return r;
+}
+
+gatr2::BrainRequest readDocRequest(uint32_t session, uint16_t rid, uint8_t kind) {
+    gatr2::BrainRequest r = request(gatr2::kOpReadDoc, session, rid);
+    r.doc_kind            = kind;
+    r.max_len             = gatr2::kDocChunkMax;
+    return r;
+}
+
+gatr2::BrainRequest controlRequest(uint32_t session, uint16_t rid, uint8_t action) {
+    gatr2::BrainRequest r = request(gatr2::kOpControl, session, rid);
+    r.action              = action;
+    return r;
+}
+
+gatr2::BrainRequest writeRequest(uint32_t session, uint16_t rid, uint32_t profile_id,
+                                 const std::vector<uint8_t>& doc, uint16_t offset,
+                                 uint16_t length) {
+    gatr2::BrainRequest r = request(gatr2::kOpProfileWrite, session, rid);
+    r.profile_id          = profile_id;
+    r.total_len           = static_cast<uint16_t>(doc.size());
+    r.offset              = offset;
+    r.data_len            = static_cast<uint8_t>(length);
+    std::memcpy(r.data, doc.data() + offset, length);
+    return r;
+}
+
+gatr2::BrainRequest applyRequest(uint32_t session, uint16_t rid, uint32_t profile_id,
+                                 uint16_t total_len) {
+    gatr2::BrainRequest r = request(gatr2::kOpProfileApply, session, rid);
+    r.profile_id          = profile_id;
+    r.total_len           = total_len;
+    return r;
+}
+
+// Two perpendicular wheels and the Brain VEX IMU. Test values only.
+gatr2::RobotProfileDoc benchProfile() {
+    gatr2::RobotProfileDoc p;
+    p.topology           = gatr2::kTopologyTwoWheelImu;
+    p.wheel_count        = 2;
+    p.imu_source         = gatr2::kImuSourceBrainVex;
+    p.vex_smart_port     = 1;
+    p.footprint_front_um = 200000;
+    p.footprint_back_um  = 200000;
+    p.footprint_left_um  = 200000;
+    p.footprint_right_um = 200000;
+    p.wheels[0]          = {0, 0, 4000, 24000, 0, 150000, 0};
+    p.wheels[1]          = {1, 0, 4000, 24000, 100000, 0, 90000};
+    return p;
+}
+
+// Profile document lengths for two and three wheels, no cameras.
+constexpr uint16_t kTwoWheelLen   = gatr2::kProfileHeaderLen + 2 * gatr2::kProfileWheelLen;
+constexpr uint16_t kThreeWheelLen = gatr2::kProfileHeaderLen + 3 * gatr2::kProfileWheelLen;
+
+std::vector<uint8_t> profileBytes(const gatr2::RobotProfileDoc& p) {
+    std::vector<uint8_t> bytes(gatr2::kProfileMaxLen);
+    bytes.resize(gatr2::encodeRobotProfile(p, bytes.data(), gatr2::kProfileMaxLen));
+    EXPECT_FALSE(bytes.empty());
+    return bytes;
+}
+
+uint32_t profileId(const std::vector<uint8_t>& doc) {
+    return gatr2::crc32(doc.data(), static_cast<uint32_t>(doc.size()));
 }
 
 // Every reply frame the Pi wrote since the last call.
@@ -92,6 +162,36 @@ std::vector<gatr2::BrainReply> takeReplies(MemoryLink& link) {
     return out;
 }
 
+// Stands in for the System: counts calls, accepts or refuses.
+struct FakeProfileHost : BrainProfileHost {
+    int      calls   = 0;
+    uint32_t last_id = 0;
+    bool     accept  = true;
+    uint8_t  reason  = gatr2::kProfileReasonNone;
+    uint8_t  detail  = 0;
+
+    bool prepare(const gatr2::RobotProfileDoc&, uint32_t profile_id, uint8_t& r,
+                 uint8_t& d) override {
+        ++calls;
+        last_id = profile_id;
+        if (!accept) {
+            r = reason;
+            d = detail;
+        }
+        return accept;
+    }
+
+    std::shared_ptr<const ProfileBinding> applied() const override { return nullptr; }
+
+    uint8_t control(uint8_t, uint8_t, MonotonicTime, uint8_t& d) override {
+        ++controls;
+        d = gatr2::kControlDetailNone;
+        return gatr2::kResultNotReady;
+    }
+
+    int controls = 0;
+};
+
 // ---- slot harness ----------------------------------------------------------
 
 const char* kCommandsXml = R"(<CommandCollection type="brain_link">
@@ -104,7 +204,12 @@ const char* kPublishingXml = R"(<Publishing type="brain_link">
         <Gyro sensor_id="imu"/>
         <BiasCal function_id="tracking_motion"/>
     </Health>
-    <FieldObject object_id="center_goal" wire_id="1"/>
+</Publishing>)";
+
+// With a profile host the health references follow the profile.
+const char* kHostedPublishingXml = R"(<Publishing type="brain_link">
+    <Serial resource_id="brain_uart"/>
+    <Health fresh_ms="150"/>
 </Publishing>)";
 
 struct LinkHarness {
@@ -131,7 +236,7 @@ struct LinkHarness {
     TargetState        target;
     Diagnostics        diagnostics;
 
-    explicit LinkHarness(bool world_noop = false, bool idle_first = true) {
+    explicit LinkHarness(BrainProfileHost* host = nullptr, bool idle_first = true) {
         register_resources(functions);
         register_commands(functions);
         register_publishers(functions);
@@ -166,19 +271,14 @@ struct LinkHarness {
         context.observation_functions = {"tracking_motion"};
         context.commands_type         = FunctionKey{"brain_link"};
         context.commands_serial       = ResourceId{"brain_uart"};
-        context.world_estimation_noop = world_noop;
+        context.brain_profile         = host;
 
         commands = make<CommandsMakeFunction>(kCommandsXml, "brain_link", err);
         EXPECT_NE(commands, nullptr) << err;
-        publisher = make<PublishingMakeFunction>(kPublishingXml, "brain_link", err);
+        publisher = make<PublishingMakeFunction>(host == nullptr ? kPublishingXml
+                                                                 : kHostedPublishingXml,
+                                                 "brain_link", err);
         EXPECT_NE(publisher, nullptr) << err;
-
-        FieldObjectState goal;
-        goal.valid         = true;
-        goal.source        = EstimateSource::kFieldMap;
-        goal.pose.pose.x_m = 1.8;
-        goal.pose.pose.y_m = 1.8;
-        field.objects[FieldObjectId{"center_goal"}] = goal;
 
         if (idle_first) {
             cycle();   // the first drain never replies
@@ -228,6 +328,20 @@ struct LinkHarness {
         return reply.session;
     }
 
+    // Whole document in chunks of at most chunk bytes; the last reply.
+    gatr2::BrainReply stage(uint32_t session, uint16_t& rid, const std::vector<uint8_t>& bytes,
+                            uint16_t chunk = gatr2::kProfileChunkMax) {
+        const uint32_t    id = profileId(bytes);
+        gatr2::BrainReply reply;
+        for (std::size_t offset = 0; offset < bytes.size(); offset += chunk) {
+            const std::size_t n = std::min<std::size_t>(chunk, bytes.size() - offset);
+            reply = one(writeRequest(session, rid++, id, bytes, static_cast<uint16_t>(offset),
+                                     static_cast<uint16_t>(n)));
+            EXPECT_EQ(reply.result, gatr2::kResultOk);
+        }
+        return reply;
+    }
+
     LinkStats& stats() { return diagnostics.links["brain_uart"]; }
 };
 
@@ -239,7 +353,6 @@ std::string piXml(const std::string& estimator = "planar_motion_integrator",
                   const std::string& rate_hz = "200",
                   const std::string& publishing = R"(<Publishing type="brain_link">
             <Serial resource_id="brain_uart"/>
-            <FieldObject object_id="center_goal" wire_id="1"/>
         </Publishing>)",
                   const std::string& commands = R"(<CommandCollection type="brain_link">
             <Serial resource_id="brain_uart"/>
@@ -377,11 +490,12 @@ struct PiRig {
 
 // ---- sessions ----------------------------------------------------------------
 
-TEST(BrainLinkSession, HelloOpensASessionAndClearsClientState) {
+TEST(BrainLinkSession, HelloOpensASessionAndKeepsThePiSideState) {
     LinkHarness f;
-    f.command.object_requested = true;   // left over from an earlier session
-    f.command.object_wire_id   = 1;
-    f.command.object_sequence  = 4;
+    f.command.path.mode          = gatr2::kPathDirect;   // left over from an earlier session
+    f.command.profile.state      = gatr2::kProfileApplied;
+    f.command.profile.id         = 0x1234;
+    f.command.profile.applied_id = 0x1234;
 
     const gatr2::BrainReply reply = f.one(helloRequest(1, 0xCAFE));
     EXPECT_EQ(reply.version, gatr2::kBrainLinkVersion);
@@ -392,21 +506,21 @@ TEST(BrainLinkSession, HelloOpensASessionAndClearsClientState) {
     EXPECT_NE(reply.session, 0u);
     EXPECT_NE(reply.pi_instance, 0u);
     EXPECT_EQ(f.command.session, reply.session);
-    EXPECT_FALSE(f.command.object_requested);
-    EXPECT_EQ(f.command.object_wire_id, 0u);
-    EXPECT_EQ(f.command.object_sequence, 5u);   // the edge releases a target latch
-    EXPECT_EQ(f.command.init_sequence, 0u);     // never touches placement
+    EXPECT_EQ(f.command.path.mode, gatr2::kPathNone);   // the old path is gone
+    EXPECT_EQ(f.command.init_sequence, 0u);             // never touches placement
+    EXPECT_EQ(f.command.profile.applied_id, 0x1234u);   // nor the profile
+    EXPECT_EQ(f.command.profile.state, gatr2::kProfileApplied);
 }
 
 TEST(BrainLinkSession, HelloRetryIsIdempotentUntilTheSessionIsUsed) {
     LinkHarness    f;
     const uint32_t session = f.open(1, 0xAB);
-    const uint64_t edge    = f.command.object_sequence;
+    f.command.path.mode    = gatr2::kPathDirect;
 
     const gatr2::BrainReply retry = f.one(helloRequest(1, 0xAB));
     EXPECT_EQ(retry.result, gatr2::kResultOk);
     EXPECT_EQ(retry.session, session);
-    EXPECT_EQ(f.command.object_sequence, edge);   // nothing changed
+    EXPECT_EQ(f.command.path.mode, gatr2::kPathDirect);   // nothing changed
 
     EXPECT_EQ(f.one(getStateRequest(session, 2)).result, gatr2::kResultOk);
     const gatr2::BrainReply late = f.one(helloRequest(1, 0xAB));   // used: no longer a retry
@@ -439,66 +553,153 @@ TEST(BrainLinkSession, UnknownSessionChangesNothing) {
     EXPECT_EQ(f.one(getStateRequest(0, 1)).result, gatr2::kResultUnknownSession);   // none open
 
     const uint32_t          session = f.open();
-    const gatr2::BrainReply reply   = f.one(selectRequest(session + 1, 2, 1, true));
+    const gatr2::BrainReply reply =
+        f.one(pathRequest(session + 1, 2, 5, gatr2::kPathDirect, {{0, 0}, {100, 0}}));
     EXPECT_EQ(reply.result, gatr2::kResultUnknownSession);
     EXPECT_EQ(reply.session, session + 1);   // echo
-    EXPECT_FALSE(f.command.object_requested);
+    EXPECT_EQ(f.command.path.mode, gatr2::kPathNone);
     EXPECT_EQ(f.stats().unknown_session, 2u);
 }
 
-TEST(BrainLinkSession, VersionAndOpErrors) {
+TEST(BrainLinkSession, VersionAndRetiredOpErrors) {
     LinkHarness    f;
     const uint32_t session = f.open();
 
-    gatr2::BrainRequest future = getStateRequest(session, 2);
-    future.version             = 4;
-    const gatr2::BrainReply v  = f.one(future);
+    gatr2::BrainRequest old   = getStateRequest(session, 2);
+    old.version               = 3;
+    const gatr2::BrainReply v = f.one(old);
     EXPECT_EQ(v.result, gatr2::kResultUnsupportedVersion);
     EXPECT_EQ(v.version, gatr2::kBrainLinkVersion);   // the Pi's version
 
-    gatr2::BrainRequest unknown = getStateRequest(session, 3);
-    unknown.op                  = 9;
-    const gatr2::BrainReply op  = f.one(unknown);
-    EXPECT_EQ(op.result, gatr2::kResultUnsupportedOp);
-    EXPECT_EQ(op.op, 9u);
+    // 3 and 5 are the retired v3 landmark select and IMU state ops; 12 is not defined
+    for (uint8_t op : {uint8_t{3}, uint8_t{5}, uint8_t{12}}) {
+        gatr2::BrainRequest unknown = getStateRequest(session, 3);
+        unknown.op                  = op;
+        const gatr2::BrainReply r   = f.one(unknown);
+        EXPECT_EQ(r.result, gatr2::kResultUnsupportedOp);
+        EXPECT_EQ(r.op, op);
+    }
 
     EXPECT_EQ(f.one(getStateRequest(session, 0)).result, gatr2::kResultInvalidArgument);
 }
 
+TEST(BrainLinkSession, MalformedBodiesAreInvalidAndConsumeNothing) {
+    LinkHarness                      f;
+    const uint32_t                   session = f.open();
+    const std::vector<uint8_t>       doc     = profileBytes(benchProfile());
+    std::vector<gatr2::BrainRequest> bad;
+
+    gatr2::BrainRequest state = getStateRequest(session, 2);
+    state.imu_flags           = 0x02;   // unknown bit
+    bad.push_back(state);
+    bad.push_back(readDocRequest(session, 2, 3));   // unknown kind
+    gatr2::BrainRequest empty = readDocRequest(session, 2, gatr2::kDocFieldMap);
+    empty.max_len             = 0;
+    bad.push_back(empty);
+    bad.push_back(controlRequest(session, 2, 0));
+    bad.push_back(controlRequest(session, 2, 5));
+    bad.push_back(pathRequest(session, 2, 1, 3, {}));
+    gatr2::BrainRequest past_end = writeRequest(session, 2, profileId(doc), doc, 40, 32);
+    past_end.total_len           = 60;   // offset + length over total_len
+    bad.push_back(past_end);
+    gatr2::BrainRequest too_long = writeRequest(session, 2, profileId(doc), doc, 0, 40);
+    too_long.total_len           = gatr2::kProfileMaxLen + 1;
+    bad.push_back(too_long);
+    bad.push_back(applyRequest(session, 2, 1, gatr2::kProfileHeaderLen - 1));
+
+    for (const gatr2::BrainRequest& r : bad) {
+        SCOPED_TRACE(static_cast<int>(r.op));
+        EXPECT_EQ(f.one(r).result, gatr2::kResultInvalidArgument);
+    }
+    // none of them was recorded as the newest request
+    EXPECT_EQ(f.one(getStateRequest(session, 2)).result, gatr2::kResultOk);
+}
+
+TEST(BrainLinkSession, WheelReadingsAndPicoControlWaitForTheProfileBoundary) {
+    LinkHarness    plain;   // no profile host: this configuration never serves readings
+    const uint32_t a = plain.open();
+    EXPECT_EQ(plain.one(request(gatr2::kOpReadWheels, a, 2)).result, gatr2::kResultUnavailable);
+    EXPECT_EQ(plain.one(request(gatr2::kOpReadWheels, a, 2)).result,
+              gatr2::kResultUnavailable);   // read-only: the newest id is answered again
+
+    FakeProfileHost host;
+    LinkHarness     hosted(&host);
+    const uint32_t  b   = hosted.open();
+    uint16_t        rid = 2;
+    EXPECT_EQ(hosted.one(request(gatr2::kOpReadWheels, b, rid++)).result,
+              gatr2::kResultNotReady);
+    for (uint8_t action : {gatr2::kControlReinitImu, gatr2::kControlRestartAcquisition}) {
+        const gatr2::BrainReply r = hosted.one(controlRequest(b, rid++, action));
+        EXPECT_EQ(r.result, gatr2::kResultNotReady);   // header only, no action echo
+        EXPECT_EQ(r.op, gatr2::kOpControl);
+    }
+}
+
 // ---- dedupe ------------------------------------------------------------------
 
-TEST(BrainLinkDedupe, DuplicatesAnsweredNeverReapplied) {
+TEST(BrainLinkDedupe, SetPoseDuplicatesAnsweredNeverReapplied) {
     LinkHarness    f;
     const uint32_t session = f.open();
 
-    EXPECT_EQ(f.one(selectRequest(session, 2, 1, true)).result, gatr2::kResultOk);
-    EXPECT_EQ(f.command.object_sequence, 2u);   // HELLO edge plus the select
-
-    const gatr2::BrainReply again = f.one(selectRequest(session, 2, 1, true));
-    EXPECT_EQ(again.result, gatr2::kResultOk);
-    EXPECT_EQ(again.landmark_id, 1u);
-    EXPECT_EQ(again.select_flags, gatr2::kSelectFlagSelected);
-    EXPECT_EQ(f.command.object_sequence, 2u);
-    EXPECT_EQ(f.stats().duplicates, 1u);
-
-    // same id, different body: not a retry
-    EXPECT_EQ(f.one(selectRequest(session, 2, 1, false)).result,
-              gatr2::kResultInvalidArgument);
-    EXPECT_EQ(f.one(getStateRequest(session, 2)).result, gatr2::kResultInvalidArgument);
-    EXPECT_TRUE(f.command.object_requested);
-
-    // SET_POSE retries answer from the record under the same sequence
     const gatr2::BrainReply pose = f.one(setPoseRequest(session, 3, 610, 457, 9000));
     EXPECT_EQ(pose.result, gatr2::kResultPending);   // nothing here applies placements
     EXPECT_EQ(f.command.init_sequence, 1u);
     EXPECT_EQ(f.command.init_session, session);
     EXPECT_NEAR(f.command.init_pose.x_m, 0.610, 1e-12);
     EXPECT_NEAR(f.command.init_pose.heading_rad, kPi / 2.0, 1e-9);
+
+    // a retry after newer state polls answers from the record
     EXPECT_EQ(f.one(getStateRequest(session, 4)).result, gatr2::kResultOk);
     EXPECT_EQ(f.one(setPoseRequest(session, 3, 610, 457, 9000)).result, gatr2::kResultPending);
     EXPECT_EQ(f.command.init_sequence, 1u);
+    EXPECT_EQ(f.stats().duplicates, 1u);
     EXPECT_EQ(f.one(setPoseRequest(session, 3, 611, 457, 9000)).result,
               gatr2::kResultInvalidArgument);
+    EXPECT_EQ(f.one(getStateRequest(session, 3)).result, gatr2::kResultInvalidArgument);
+    EXPECT_EQ(f.command.init_sequence, 1u);
+}
+
+TEST(BrainLinkDedupe, ControlIsAnsweredFromItsRecord) {
+    LinkHarness    f;
+    const uint32_t session = f.open();
+
+    const gatr2::BrainReply first = f.one(controlRequest(session, 2, gatr2::kControlRecalibrate));
+    EXPECT_EQ(first.result, gatr2::kResultNotReady);   // no calibration control yet
+    EXPECT_EQ(f.one(getStateRequest(session, 3)).result, gatr2::kResultOk);
+    EXPECT_EQ(f.one(controlRequest(session, 2, gatr2::kControlRecalibrate)).result,
+              gatr2::kResultNotReady);
+    EXPECT_EQ(f.stats().duplicates, 1u);
+    EXPECT_EQ(f.one(controlRequest(session, 2, gatr2::kControlReinitialize)).result,
+              gatr2::kResultInvalidArgument);
+}
+
+TEST(BrainLinkDedupe, NewestIdempotentRequestIsAnsweredAgain) {
+    LinkHarness    f;
+    const uint32_t session = f.open();
+
+    f.robot.odom_pose = Pose2D{1.0, 0.0, 0.0};
+    EXPECT_EQ(f.one(getStateRequest(session, 2)).state.x_mm, 1000);
+    f.robot.odom_pose = Pose2D{1.5, 0.0, 0.0};
+    const gatr2::BrainReply again = f.one(getStateRequest(session, 2));
+    EXPECT_EQ(again.result, gatr2::kResultOk);
+    EXPECT_EQ(again.state.x_mm, 1500);   // fresh state for the resend
+
+    gatr2::BrainRequest other_body = getStateRequest(session, 2);
+    other_body.imu_flags           = gatr2::kBenchImuValid;
+    EXPECT_EQ(f.one(other_body).result, gatr2::kResultInvalidArgument);
+    EXPECT_EQ(f.one(setPoseRequest(session, 2, 0, 0, 0)).result,
+              gatr2::kResultInvalidArgument);
+    EXPECT_EQ(f.command.init_sequence, 0u);
+
+    const gatr2::BrainRequest path = pathRequest(session, 3, 9, gatr2::kPathDirect, {{1, 2}});
+    EXPECT_EQ(f.one(path).result, gatr2::kResultOk);
+    f.command.path = PathReport{};
+    EXPECT_EQ(f.one(path).result, gatr2::kResultOk);   // stored again, same content
+    EXPECT_EQ(f.command.path.command_id, 9u);
+    EXPECT_EQ(f.one(pathRequest(session, 3, 9, gatr2::kPathDirect, {{1, 3}})).result,
+              gatr2::kResultInvalidArgument);
+    EXPECT_DOUBLE_EQ(f.command.path.points[0].y_m, 0.002);
+    EXPECT_EQ(f.stats().duplicates, 0u);   // resends of the newest are not records
 }
 
 TEST(BrainLinkDedupe, OlderIdIsStaleAndIdsWrap) {
@@ -507,10 +708,12 @@ TEST(BrainLinkDedupe, OlderIdIsStaleAndIdsWrap) {
 
     EXPECT_EQ(f.one(getStateRequest(session, 65535)).result, gatr2::kResultOk);
     EXPECT_EQ(f.one(getStateRequest(session, 1)).result, gatr2::kResultOk);   // wrapped
-    EXPECT_EQ(f.one(selectRequest(session, 2, 1, true)).result, gatr2::kResultOk);
+    EXPECT_EQ(f.one(pathRequest(session, 2, 1, gatr2::kPathDirect, {{0, 0}})).result,
+              gatr2::kResultOk);
     EXPECT_EQ(f.one(getStateRequest(session, 65535)).result, gatr2::kResultStale);
-    EXPECT_EQ(f.one(selectRequest(session, 1, 1, false)).result, gatr2::kResultStale);
-    EXPECT_TRUE(f.command.object_requested);   // the stale release never applied
+    EXPECT_EQ(f.one(pathRequest(session, 1, 1, gatr2::kPathNone, {})).result,
+              gatr2::kResultStale);
+    EXPECT_EQ(f.command.path.mode, gatr2::kPathDirect);   // the stale clear never applied
     EXPECT_EQ(f.one(getStateRequest(session, 2)).result, gatr2::kResultInvalidArgument);
     EXPECT_EQ(f.one(getStateRequest(session, 3)).result, gatr2::kResultOk);
     EXPECT_EQ(f.one(getStateRequest(session, 3)).result, gatr2::kResultOk);   // newest again
@@ -544,7 +747,7 @@ TEST(BrainLinkBus, NoOutputWithoutARequest) {
 }
 
 TEST(BrainLinkBus, FirstDrainAfterStartGetsNoReplyButApplies) {
-    LinkHarness f(false, false);
+    LinkHarness f(nullptr, false);
     f.brain->input().feed(requestBytes(helloRequest(1, 0x77)));
     EXPECT_TRUE(f.cycle().empty());
     EXPECT_NE(f.command.session, 0u);   // processed
@@ -560,14 +763,15 @@ TEST(BrainLinkBus, WindowFromThePreviousDrain) {
     const uint32_t session = f.open();
 
     // request completes 50 ms after the previous drain: too late to answer
-    f.brain->input().feed(requestBytes(selectRequest(session, 2, 1, true)));
+    f.brain->input().feed(requestBytes(setPoseRequest(session, 2, 610, 457, 9000)));
     EXPECT_TRUE(f.cycle(50000).empty());
     EXPECT_EQ(f.stats().expired, 1u);
-    EXPECT_TRUE(f.command.object_requested);   // applied; the retry is a duplicate
+    EXPECT_EQ(f.command.init_sequence, 1u);   // applied; the retry is a duplicate
 
-    const gatr2::BrainReply retry = f.one(selectRequest(session, 2, 1, true));
-    EXPECT_EQ(retry.result, gatr2::kResultOk);
+    const gatr2::BrainReply retry = f.one(setPoseRequest(session, 2, 610, 457, 9000));
+    EXPECT_EQ(retry.result, gatr2::kResultPending);
     EXPECT_EQ(f.stats().duplicates, 1u);
+    EXPECT_EQ(f.command.init_sequence, 1u);
 
     // the window the commands slot hands to the link
     f.brain->input().feed(requestBytes(getStateRequest(session, 3)));
@@ -599,17 +803,20 @@ TEST(BrainLinkBus, NewestRequestWins) {
     LinkHarness    f;
     const uint32_t session = f.open();
 
-    std::vector<uint8_t> bytes = requestBytes(selectRequest(session, 2, 1, true));
-    const std::vector<uint8_t> newer = requestBytes(selectRequest(session, 3, 7, true));
+    std::vector<uint8_t> bytes =
+        requestBytes(pathRequest(session, 2, 20, gatr2::kPathDirect, {{0, 0}}));
+    const std::vector<uint8_t> newer =
+        requestBytes(pathRequest(session, 3, 30, gatr2::kPathAvoiding, {{0, 0}, {5, 5}}));
     bytes.insert(bytes.end(), newer.begin(), newer.end());
     f.brain->input().feed(bytes);
     const std::vector<gatr2::BrainReply> replies = f.cycle();
     ASSERT_EQ(replies.size(), 1u);
     EXPECT_EQ(replies[0].request_id, 3u);
-    EXPECT_EQ(f.command.object_wire_id, 7u);
-    EXPECT_EQ(f.command.object_sequence, 2u);   // HELLO plus one select, never rid 2
+    EXPECT_EQ(f.command.path.command_id, 30u);   // never rid 2
     EXPECT_EQ(f.stats().superseded, 1u);
-    EXPECT_EQ(f.one(selectRequest(session, 2, 1, true)).result, gatr2::kResultStale);
+    EXPECT_EQ(f.one(pathRequest(session, 2, 20, gatr2::kPathDirect, {{0, 0}})).result,
+              gatr2::kResultStale);
+    EXPECT_EQ(f.command.path.command_id, 30u);
 }
 
 TEST(BrainLinkBus, SplitRequestAndDiscardedPartialFrame) {
@@ -645,68 +852,52 @@ TEST(BrainLinkBus, CorruptCrcChangesNothing) {
     EXPECT_EQ(f.one(setPoseRequest(session, 2, 610, 457, 9000)).result, gatr2::kResultPending);
 }
 
+TEST(BrainLinkBus, LargestRequestAndReplyFitTheFrame) {
+    LinkHarness                f;
+    const uint32_t             session = f.open();
+    const std::vector<uint8_t> path =
+        requestBytes(pathRequest(session, 2, 1, gatr2::kPathAvoiding,
+                                 std::vector<gatr2::PathPoint>(gatr2::kPathReportMaxPoints)));
+    EXPECT_EQ(path.size(), 6u + 8u + 6u + 8u * gatr2::kPathReportMaxPoints);
+    f.brain->input().feed(path);
+    ASSERT_EQ(f.cycle().size(), 1u);
+    EXPECT_EQ(f.command.path.count, gatr2::kPathReportMaxPoints);
+
+    std::vector<uint8_t> big(gatr2::kProfileMaxLen, 0);
+    big[0] = gatr2::kProfileFormat;
+    const gatr2::BrainRequest write =
+        writeRequest(session, 3, profileId(big), big, 0, gatr2::kProfileChunkMax);
+    EXPECT_EQ(requestBytes(write).size(), gatr2::kMaxFrameLen);
+    const gatr2::BrainReply   staged = f.one(write);
+    EXPECT_EQ(staged.result, gatr2::kResultOk);
+    EXPECT_EQ(staged.received, gatr2::kProfileChunkMax);
+}
+
 // ---- reply bodies ------------------------------------------------------------
 
-TEST(BrainLinkState, SelectResultsAndLandmarkSources) {
+TEST(BrainLinkState, ProfileStatusAndNoFieldDocuments) {
     LinkHarness    f;
     const uint32_t session = f.open();
 
-    EXPECT_EQ(f.one(selectRequest(session, 2, 1, true)).result, gatr2::kResultOk);
-    gatr2::BrainReply s = f.one(getStateRequest(session, 3));
-    EXPECT_EQ(s.state.landmark_id, 1u);
-    EXPECT_EQ(s.state.landmark_source, gatr2::kLandmarkSourceNominal);
-    EXPECT_EQ(s.state.lm_x_mm, 1800);
-    EXPECT_EQ(s.state.lm_y_mm, 1800);
-    EXPECT_EQ(s.state.landmark_age_ms, 0u);
+    gatr2::BrainReply s = f.one(getStateRequest(session, 2));
+    EXPECT_EQ(s.state.profile_state, gatr2::kProfileNone);
+    EXPECT_EQ(s.state.profile_id, 0u);
+    EXPECT_EQ(s.state.map_id, 0u);
+    EXPECT_EQ(s.state.estimate_id, 0u);
+    EXPECT_EQ(s.state.calibration, gatr2::kCalibrationNone);
 
-    // unmapped id: recorded, reported with source none
-    EXPECT_EQ(f.one(selectRequest(session, 4, 9, true)).result, gatr2::kResultUnknownLandmark);
-    s = f.one(getStateRequest(session, 5));
-    EXPECT_EQ(s.state.landmark_id, 9u);
-    EXPECT_EQ(s.state.landmark_source, gatr2::kLandmarkSourceNone);
+    f.command.profile = ProfileStatus{gatr2::kProfileRejected, gatr2::kProfileReasonEncoderPort,
+                                      1, 0xABCD, 0x1234};
+    s = f.one(getStateRequest(session, 3));
+    EXPECT_EQ(s.state.profile_state, gatr2::kProfileRejected);
+    EXPECT_EQ(s.state.profile_reason, gatr2::kProfileReasonEncoderPort);
+    EXPECT_EQ(s.state.profile_detail, 1u);
+    EXPECT_EQ(s.state.profile_id, 0xABCDu);   // the refused id, not the running one
 
-    EXPECT_EQ(f.one(selectRequest(session, 6, 9, false)).result, gatr2::kResultOk);   // release
-    s = f.one(getStateRequest(session, 7));
-    EXPECT_EQ(s.state.landmark_id, 0u);
-    EXPECT_EQ(s.state.landmark_source, gatr2::kLandmarkSourceNone);
-}
-
-TEST(BrainLinkState, WorldEstimationNoopIsUnsupported) {
-    LinkHarness    f(true);
-    const uint32_t session = f.open();
-    EXPECT_EQ(f.one(selectRequest(session, 2, 1, true)).result,
-              gatr2::kResultLandmarkUnsupported);
-    EXPECT_TRUE(f.command.object_requested);   // recorded either way
-    const gatr2::BrainReply s = f.one(getStateRequest(session, 3));
-    EXPECT_EQ(s.state.landmark_id, 1u);
-    EXPECT_EQ(s.state.landmark_source, gatr2::kLandmarkSourceNone);
-    EXPECT_EQ(f.one(selectRequest(session, 4, 1, false)).result, gatr2::kResultOk);
-}
-
-TEST(BrainLinkState, ObservedLandmarkUsesTheRobotAnchor) {
-    LinkHarness    f;
-    const uint32_t session = f.open();
-    f.one(selectRequest(session, 2, 1, true));
-
-    f.robot.field_from_odom = Pose2D{1.0, 0.0, kPi / 2.0};
-    f.robot.odometry_epoch  = 3;
-    FieldObjectState& goal  = f.field.objects[FieldObjectId{"center_goal"}];
-    goal.source             = EstimateSource::kObserved;
-    goal.T_odom_object      = Pose2D{0.5, 0.0, 0.0};
-    goal.odometry_epoch     = 3;
-    goal.lastObservedAt     = hostTime(f.now_ms + 5 - 30);   // 30 ms before the next cycle
-
-    gatr2::BrainReply s = f.one(getStateRequest(session, 3));
-    EXPECT_EQ(s.state.landmark_source, gatr2::kLandmarkSourceObserved);
-    EXPECT_EQ(s.state.lm_x_mm, 1000);   // physical landmark, field frame
-    EXPECT_EQ(s.state.lm_y_mm, 500);
-    EXPECT_EQ(s.state.lm_heading_cdeg, 9000);
-    EXPECT_EQ(s.state.landmark_age_ms, 30u);
-
-    goal.odometry_epoch = 2;   // measured in another odometry frame
-    s                   = f.one(getStateRequest(session, 4));
-    EXPECT_EQ(s.state.landmark_source, gatr2::kLandmarkSourceNone);
-    EXPECT_EQ(s.state.lm_x_mm, 0);
+    EXPECT_EQ(f.one(readDocRequest(session, 4, gatr2::kDocFieldMap)).result,
+              gatr2::kResultUnavailable);
+    EXPECT_EQ(f.one(readDocRequest(session, 5, gatr2::kDocFieldEstimate)).result,
+              gatr2::kResultUnavailable);
 }
 
 TEST(BrainLinkState, RobotUnitsAgeAnchorBitsAndHealth) {
@@ -783,7 +974,224 @@ TEST(BrainLinkState, SetPoseOkOnlyForTheAppliedPlacement) {
     EXPECT_EQ(f.one(setPoseRequest(session, 2, 610, 457, 9000)).result, gatr2::kResultPending);
 }
 
-TEST(BrainLinkConfig, PublishingPairingAndMappingErrors) {
+TEST(BrainLinkState, PathReportIsKeptForInspectionUntilClearedOrANewSession) {
+    LinkHarness    f;
+    const uint32_t session = f.open();
+
+    std::vector<gatr2::PathPoint> points;
+    for (int32_t i = 0; i < gatr2::kPathReportMaxPoints; ++i) {
+        points.push_back({i * 100, -i * 50});
+    }
+    f.one(pathRequest(session, 2, 77, gatr2::kPathAvoiding, points));
+    const PathReport& path = f.command.path;
+    EXPECT_EQ(path.session, session);
+    EXPECT_EQ(path.command_id, 77u);
+    EXPECT_EQ(path.mode, gatr2::kPathAvoiding);
+    ASSERT_EQ(path.count, gatr2::kPathReportMaxPoints);
+    EXPECT_DOUBLE_EQ(path.points[12].x_m, 1.2);
+    EXPECT_DOUBLE_EQ(path.points[12].y_m, -0.6);
+    EXPECT_EQ(path.received.ms, f.now_ms);
+
+    f.one(pathRequest(session, 3, 77, gatr2::kPathNone, {}));
+    EXPECT_EQ(f.command.path.mode, gatr2::kPathNone);
+    EXPECT_EQ(f.command.path.count, 0u);
+
+    f.one(pathRequest(session, 4, 78, gatr2::kPathDirect, {{1, 1}}));
+    f.open(1, 0xBEEF);
+    EXPECT_EQ(f.command.path.mode, gatr2::kPathNone);
+}
+
+// ---- robot profile -----------------------------------------------------------
+
+TEST(BrainLinkProfile, WritesStageContiguousBytesAndResendsAreIdempotent) {
+    LinkHarness                f;
+    const uint32_t             session = f.open();
+    const std::vector<uint8_t> doc     = profileBytes(benchProfile());
+    const uint32_t             id      = profileId(doc);
+    ASSERT_EQ(doc.size(), kTwoWheelLen);
+    uint16_t rid = 2;
+
+    gatr2::BrainReply r = f.one(writeRequest(session, rid++, id, doc, 0, 40));
+    EXPECT_EQ(r.result, gatr2::kResultOk);
+    EXPECT_EQ(r.profile_id, id);
+    EXPECT_EQ(r.received, 40u);
+    EXPECT_EQ(f.one(writeRequest(session, rid++, id, doc, 0, 40)).received, 40u);   // resend
+    EXPECT_EQ(f.one(writeRequest(session, rid++, id, doc, 20, 40)).received, 60u);   // overlap
+
+    EXPECT_EQ(f.one(writeRequest(session, rid++, id, doc, 70, 2)).result,
+              gatr2::kResultInvalidArgument);   // a gap
+    std::vector<uint8_t> other = doc;
+    other[10] ^= 0xFF;
+    EXPECT_EQ(f.one(writeRequest(session, rid++, id, other, 0, 20)).result,
+              gatr2::kResultInvalidArgument);   // a resend with other bytes
+    EXPECT_EQ(f.one(applyRequest(session, rid++, id, kTwoWheelLen)).result,
+              gatr2::kResultInvalidArgument);   // incomplete
+
+    // staging survives a new session
+    const uint32_t next = f.open(1, 0xFEED);
+    rid                 = 2;
+    r                   = f.one(writeRequest(next, rid++, id, doc, 60, kTwoWheelLen - 60));
+    EXPECT_EQ(r.received, kTwoWheelLen);
+    EXPECT_EQ(f.one(applyRequest(next, rid++, id, kTwoWheelLen)).result, gatr2::kResultProfileRejected);
+
+    // another id restarts staging, but only from offset 0
+    gatr2::RobotProfileDoc second = benchProfile();
+    second.wheels[0].counts_per_rev = 8192;
+    const std::vector<uint8_t> doc2 = profileBytes(second);
+    EXPECT_EQ(f.one(writeRequest(next, rid++, profileId(doc2), doc2, 40, 32)).result,
+              gatr2::kResultInvalidArgument);
+    EXPECT_EQ(f.one(applyRequest(next, rid++, id, kTwoWheelLen)).result,
+              gatr2::kResultProfileRejected);   // the first is still staged
+    EXPECT_EQ(f.one(writeRequest(next, rid++, profileId(doc2), doc2, 0, 32)).received, 32u);
+    EXPECT_EQ(f.one(applyRequest(next, rid++, id, kTwoWheelLen)).result, gatr2::kResultInvalidArgument);
+}
+
+TEST(BrainLinkProfile, ApplyNeedsTheWholeDocumentUnderItsCrc) {
+    LinkHarness                f;
+    const uint32_t             session = f.open();
+    const std::vector<uint8_t> doc     = profileBytes(benchProfile());
+    const uint32_t             id      = profileId(doc);
+    uint16_t                   rid     = 2;
+
+    EXPECT_EQ(f.one(applyRequest(session, rid++, id, kTwoWheelLen)).result,
+              gatr2::kResultInvalidArgument);   // nothing staged
+    f.stage(session, rid, doc);
+    EXPECT_EQ(f.one(applyRequest(session, rid++, id, kThreeWheelLen)).result,
+              gatr2::kResultInvalidArgument);   // another length
+    EXPECT_EQ(f.one(applyRequest(session, rid++, id + 1, kTwoWheelLen)).result,
+              gatr2::kResultInvalidArgument);   // another id
+
+    // bytes staged under an id that is not their crc
+    const uint32_t wrong = id ^ 0x5A5A5A5A;
+    EXPECT_EQ(f.one(writeRequest(session, rid++, wrong, doc, 0, kTwoWheelLen)).result, gatr2::kResultOk);
+    EXPECT_EQ(f.one(applyRequest(session, rid++, wrong, kTwoWheelLen)).result,
+              gatr2::kResultInvalidArgument);
+    EXPECT_EQ(f.command.profile.state, gatr2::kProfileNone);
+}
+
+TEST(BrainLinkProfile, AConfigurationWithoutAProfileHostRefusesEveryProfile) {
+    LinkHarness                f;
+    const uint32_t             session = f.open();
+    const std::vector<uint8_t> doc     = profileBytes(benchProfile());
+    const uint32_t             id      = profileId(doc);
+    uint16_t                   rid     = 2;
+    f.stage(session, rid, doc, 30);
+
+    const gatr2::BrainReply r = f.one(applyRequest(session, rid++, id, kTwoWheelLen));
+    EXPECT_EQ(r.result, gatr2::kResultProfileRejected);
+    EXPECT_EQ(r.profile_id, id);
+    EXPECT_EQ(r.profile_state, gatr2::kProfileRejected);
+    EXPECT_EQ(r.profile_reason, gatr2::kProfileReasonNotAccepted);
+
+    const gatr2::BrainReply s = f.one(getStateRequest(session, rid++));
+    EXPECT_EQ(s.state.profile_state, gatr2::kProfileRejected);
+    EXPECT_EQ(s.state.profile_reason, gatr2::kProfileReasonNotAccepted);
+    EXPECT_EQ(s.state.profile_id, id);
+
+    // the XML localization keeps accepting placements
+    EXPECT_EQ(f.one(setPoseRequest(session, rid++, 1, 2, 3)).result, gatr2::kResultPending);
+    EXPECT_EQ(f.command.init_sequence, 1u);
+}
+
+TEST(BrainLinkProfile, HostedProfileAppliesAtTheBoundaryAndGatesPlacement) {
+    FakeProfileHost            host;
+    LinkHarness                f(&host);
+    const uint32_t             session = f.open();
+    const std::vector<uint8_t> doc     = profileBytes(benchProfile());
+    const uint32_t             id      = profileId(doc);
+    uint16_t                   rid     = 2;
+
+    // no odometry to anchor yet
+    EXPECT_EQ(f.one(setPoseRequest(session, rid, 610, 457, 0)).result, gatr2::kResultNotReady);
+    EXPECT_EQ(f.one(setPoseRequest(session, rid++, 610, 457, 0)).result, gatr2::kResultNotReady);
+    EXPECT_EQ(f.command.init_sequence, 0u);
+
+    f.stage(session, rid, doc);
+    gatr2::BrainReply r = f.one(applyRequest(session, rid++, id, kTwoWheelLen));
+    EXPECT_EQ(r.result, gatr2::kResultPending);
+    EXPECT_EQ(r.profile_state, gatr2::kProfileApplying);
+    EXPECT_EQ(host.calls, 1);
+    EXPECT_EQ(host.last_id, id);
+    EXPECT_EQ(f.one(getStateRequest(session, rid++)).state.profile_state,
+              gatr2::kProfileApplying);
+    EXPECT_EQ(f.one(applyRequest(session, rid++, id, kTwoWheelLen)).result, gatr2::kResultPending);
+    EXPECT_EQ(host.calls, 1);   // built once
+    EXPECT_EQ(f.one(setPoseRequest(session, rid++, 610, 457, 0)).result,
+              gatr2::kResultNotReady);
+
+    // the System swaps it in at its boundary
+    f.command.profile.state      = gatr2::kProfileApplied;
+    f.command.profile.applied_id = id;
+    r                            = f.one(applyRequest(session, rid++, id, kTwoWheelLen));
+    EXPECT_EQ(r.result, gatr2::kResultOk);
+    EXPECT_EQ(r.profile_state, gatr2::kProfileApplied);
+    EXPECT_EQ(host.calls, 1);   // idempotent: nothing rebuilt or reset
+    EXPECT_EQ(f.one(setPoseRequest(session, rid++, 610, 457, 0)).result, gatr2::kResultPending);
+    EXPECT_EQ(f.command.init_sequence, 1u);
+
+    // a new Brain session keeps the applied profile and its placement gate open
+    const uint32_t next = f.open(1, 0xB007);
+    EXPECT_EQ(f.one(setPoseRequest(next, 2, 610, 457, 0)).result, gatr2::kResultPending);
+}
+
+TEST(BrainLinkProfile, RejectionsCarryReasonsAndAreRemembered) {
+    FakeProfileHost host;
+    LinkHarness     f(&host);
+    const uint32_t  session = f.open();
+    uint16_t        rid     = 2;
+
+    // the shared semantic check runs before the host
+    gatr2::RobotProfileDoc three_vex = benchProfile();
+    three_vex.topology               = gatr2::kTopologyThreeWheel;
+    three_vex.wheel_count            = 3;
+    three_vex.wheels[2]              = {2, 0, 4000, 24000, -100000, 0, 90000};
+    const std::vector<uint8_t> a     = profileBytes(three_vex);
+    f.stage(session, rid, a);
+    gatr2::BrainReply r = f.one(applyRequest(session, rid++, profileId(a), kThreeWheelLen));
+    EXPECT_EQ(r.result, gatr2::kResultProfileRejected);
+    EXPECT_EQ(r.profile_reason, gatr2::kProfileReasonImuCombination);
+    EXPECT_EQ(host.calls, 0);
+
+    // undecodable bytes
+    std::vector<uint8_t> junk(gatr2::kProfileHeaderLen, 0);
+    junk[0] = 9;
+    f.stage(session, rid, junk);
+    r = f.one(applyRequest(session, rid++, profileId(junk), gatr2::kProfileHeaderLen));
+    EXPECT_EQ(r.profile_reason, gatr2::kProfileReasonFormat);
+
+    // this Pi's capability check, remembered for the id
+    host.accept                    = false;
+    host.reason                    = gatr2::kProfileReasonEncoderPort;
+    host.detail                    = 1;
+    gatr2::RobotProfileDoc unwired = benchProfile();
+    unwired.wheels[1].encoder_port = 2;
+    const std::vector<uint8_t> b   = profileBytes(unwired);
+    f.stage(session, rid, b);
+    r = f.one(applyRequest(session, rid++, profileId(b), kTwoWheelLen));
+    EXPECT_EQ(r.profile_reason, gatr2::kProfileReasonEncoderPort);
+    EXPECT_EQ(r.profile_detail, 1u);
+    EXPECT_EQ(host.calls, 1);
+    host.accept = true;
+    r           = f.one(applyRequest(session, rid++, profileId(b), kTwoWheelLen));
+    EXPECT_EQ(r.result, gatr2::kResultProfileRejected);
+    EXPECT_EQ(r.profile_reason, gatr2::kProfileReasonEncoderPort);
+    EXPECT_EQ(host.calls, 1);   // no retry storm
+
+    const gatr2::BrainReply s = f.one(getStateRequest(session, rid++));
+    EXPECT_EQ(s.state.profile_state, gatr2::kProfileRejected);
+    EXPECT_EQ(s.state.profile_id, profileId(b));
+    EXPECT_EQ(s.state.profile_detail, 1u);
+    EXPECT_EQ(f.command.profile.applied_id, 0u);
+
+    // a good profile still applies afterwards
+    const std::vector<uint8_t> good = profileBytes(benchProfile());
+    f.stage(session, rid, good);
+    EXPECT_EQ(f.one(applyRequest(session, rid++, profileId(good), kTwoWheelLen)).result,
+              gatr2::kResultPending);
+    EXPECT_EQ(host.calls, 2);
+}
+
+TEST(BrainLinkConfig, PublishingPairingAndChildErrors) {
     LinkHarness f;
     std::string err;
     f.context.commands_type = FunctionKey{"noop"};
@@ -797,16 +1205,15 @@ TEST(BrainLinkConfig, PublishingPairingAndMappingErrors) {
     f.context.commands_serial = ResourceId{"brain_uart"};
     EXPECT_EQ(f.make<PublishingMakeFunction>(R"(<Publishing type="brain_link">
                     <Serial resource_id="brain_uart"/>
-                    <FieldObject object_id="a" wire_id="1"/>
-                    <FieldObject object_id="b" wire_id="1"/></Publishing>)",
+                    <FieldObject object_id="a" wire_id="1"/></Publishing>)",
                                              "brain_link", err),
               nullptr);
-    EXPECT_NE(err.find("duplicate"), std::string::npos);
+    EXPECT_NE(err.find("removed with brain link v4"), std::string::npos) << err;
     EXPECT_EQ(f.make<PublishingMakeFunction>(R"(<Publishing type="brain_link">
-                    <Serial resource_id="brain_uart"/>
-                    <FieldObject object_id="a" wire_id="0"/></Publishing>)",
+                    <Serial resource_id="brain_uart"/><Healt/></Publishing>)",
                                              "brain_link", err),
               nullptr);
+    EXPECT_NE(err.find("unknown element Healt"), std::string::npos) << err;
     EXPECT_EQ(f.make<PublishingMakeFunction>(R"(<Publishing type="brain_link">
                     <Serial resource_id="brain_uart"/>
                     <Health><BiasCal function_id="ghost_model"/></Health></Publishing>)",
@@ -881,31 +1288,27 @@ TEST(BrainLinkSystem, NewSessionKeepsTheAnchorAndReplacementApplies) {
     EXPECT_EQ(rig.system->robot().placement_sequence, 2u);
 }
 
-TEST(BrainLinkSystem, NewSessionReleasesTheTargetLatch) {
+TEST(BrainLinkSystem, XmlConfiguredPiRefusesAProfileAndKeepsLocalizing) {
     PiRig rig(piXml());
     ASSERT_NE(rig.system, nullptr);
-    const uint32_t a = rig.open(1, 0xA);
-    rig.one(setPoseRequest(a, 2, 610, 457, 9000));   // a valid robot for activation
+    const uint32_t             session = rig.open();
+    const std::vector<uint8_t> doc     = profileBytes(benchProfile());
+    const uint32_t             id      = profileId(doc);
+    uint16_t                   rid     = 2;
+    EXPECT_EQ(rig.one(writeRequest(session, rid++, id, doc, 0, kTwoWheelLen)).received, kTwoWheelLen);
 
-    // world estimation is noop: unsupported for the wire, still recorded
-    EXPECT_EQ(rig.one(selectRequest(a, 3, 2, true)).result, gatr2::kResultLandmarkUnsupported);
-    EXPECT_TRUE(rig.system->target().active);
-    EXPECT_TRUE(rig.system->target().latched);
-
-    rig.open(1, 0xB);
-    EXPECT_FALSE(rig.system->target().active);
-    EXPECT_FALSE(rig.system->command().object_requested);
-}
-
-TEST(BrainLinkSystem, NoopWorldEstimationReportsNoLandmark) {
-    PiRig rig(piXml());
-    ASSERT_NE(rig.system, nullptr);
-    const uint32_t session = rig.open();
-    EXPECT_EQ(rig.one(selectRequest(session, 2, 1, true)).result,
-              gatr2::kResultLandmarkUnsupported);
-    const gatr2::BrainReply s = rig.one(getStateRequest(session, 3));
-    EXPECT_EQ(s.state.landmark_id, 1u);
-    EXPECT_EQ(s.state.landmark_source, gatr2::kLandmarkSourceNone);
+    const gatr2::BrainReply refused = rig.one(applyRequest(session, rid++, id, kTwoWheelLen));
+    EXPECT_EQ(refused.result, gatr2::kResultProfileRejected);
+    EXPECT_EQ(refused.profile_reason, gatr2::kProfileReasonNotAccepted);
+    EXPECT_EQ(rig.one(setPoseRequest(session, rid++, 610, 457, 9000)).result,
+              gatr2::kResultOk);
+    const gatr2::BrainReply s = rig.one(getStateRequest(session, rid++));
+    EXPECT_TRUE(s.state.robot_flags & gatr2::kRobotLocalized);
+    EXPECT_EQ(s.state.profile_state, gatr2::kProfileRejected);
+    EXPECT_EQ(s.state.map_id, 0u);
+    EXPECT_EQ(rig.one(readDocRequest(session, rid++, gatr2::kDocFieldMap)).result,
+              gatr2::kResultUnavailable);
+    EXPECT_FALSE(rig.system->target().active);   // no Brain op selects a target
 }
 
 TEST(BrainLinkSystem, PiInstanceIsNewPerSystemAndReset) {
@@ -918,12 +1321,20 @@ TEST(BrainLinkSystem, PiInstanceIsNewPerSystemAndReset) {
     EXPECT_NE(a.pi_instance, 0u);
     EXPECT_NE(a.pi_instance, b.pi_instance);
 
+    const std::vector<uint8_t> doc = profileBytes(benchProfile());
+    EXPECT_EQ(first.one(writeRequest(a.session, 2, profileId(doc), doc, 0, kTwoWheelLen)).received, kTwoWheelLen);
+
     first.system->reset();
     EXPECT_TRUE(first.step().empty());   // first drain after reset: no reply
-    const gatr2::BrainReply old = first.one(getStateRequest(a.session, 2));
+    const gatr2::BrainReply old = first.one(getStateRequest(a.session, 3));
     EXPECT_EQ(old.result, gatr2::kResultUnknownSession);
     EXPECT_NE(old.pi_instance, a.pi_instance);
     EXPECT_EQ(first.system->command().init_sequence, 0u);
+
+    // power-on state: staging is gone too
+    const uint32_t session = first.open(1, 0x2);
+    EXPECT_EQ(first.one(applyRequest(session, 2, profileId(doc), kTwoWheelLen)).result,
+              gatr2::kResultInvalidArgument);
 }
 
 TEST(BrainLinkSystem, PairingAndLoopRateBuildErrors) {

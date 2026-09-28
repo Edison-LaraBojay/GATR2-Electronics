@@ -10,6 +10,7 @@
 // never silent defaults. Errors carry the element's XML path.
 
 #pragma once
+#include <initializer_list>
 #include <string>
 
 namespace tinyxml2
@@ -61,6 +62,14 @@ public:
             fn(c);
         }
     }
+
+    // Strict schema: false and err naming the first child element or
+    // attribute that is not listed.
+    bool onlyChildren(std::initializer_list<const char*> allowed, std::string& err) const;
+    bool onlyAttributes(std::initializer_list<const char*> allowed, std::string& err) const;
+
+    // False and err when more than one child has this name.
+    bool atMostOne(const char* child_name, std::string& err) const;
 
 private:
     const tinyxml2::XMLElement* e_ = nullptr;

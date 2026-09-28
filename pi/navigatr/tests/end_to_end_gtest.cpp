@@ -119,7 +119,6 @@ const char* kFullConfig = R"(
                 <Gyro sensor_id="robot_imu"/>
                 <BiasCal function_id="imu_heading"/>
             </Health>
-            <FieldObject object_id="center_goal" wire_id="1"/>
         </Publishing>
     </Pipeline>
 </System>
@@ -240,12 +239,12 @@ TEST(EndToEnd, SquarePathClosesOnCommandedStart) {
     int      cycle = 0;
 
     // brain: open a session, start at (0.61, 0.457) facing +y, poll state
-    // every 4 cycles, select landmark wire id 1 at cycle 300
+    // every 4 cycles, report a two point path at cycle 300
     uint32_t          session = 0;
     uint16_t          rid     = 0;
     int               sent    = 0;
     gatr2::BrainReply last_state;
-    bool              placed = false, selected = false;
+    bool              placed = false, reported = false;
 
     auto step = [&](bool driving, bool turning) {
         ++cycle;
@@ -276,9 +275,12 @@ TEST(EndToEnd, SquarePathClosesOnCommandedStart) {
             request.y_mm         = 457;
             request.heading_cdeg = 9000;
         } else if (cycle == 300) {
-            request.op           = gatr2::kOpSelectLandmark;
-            request.landmark_id  = 1;
-            request.select_flags = gatr2::kSelectFlagSelected;
+            request.op          = gatr2::kOpPathReport;
+            request.command_id  = 17;
+            request.path_mode   = gatr2::kPathDirect;
+            request.point_count = 2;
+            request.points[0]   = {610, 457};
+            request.points[1]   = {610, 1457};
         } else if (cycle > 3 && cycle % 4 == 0) {
             request.op = gatr2::kOpGetState;
         }
@@ -302,8 +304,8 @@ TEST(EndToEnd, SquarePathClosesOnCommandedStart) {
             session = reply.session;
         } else if (reply.op == gatr2::kOpSetPose) {
             placed = reply.result == gatr2::kResultOk;
-        } else if (reply.op == gatr2::kOpSelectLandmark) {
-            selected = reply.result == gatr2::kResultOk;
+        } else if (reply.op == gatr2::kOpPathReport) {
+            reported = reply.result == gatr2::kResultOk;
         } else {
             last_state = reply;
         }
@@ -338,7 +340,7 @@ TEST(EndToEnd, SquarePathClosesOnCommandedStart) {
     EXPECT_EQ(link.replies, static_cast<uint32_t>(sent));
 
     EXPECT_TRUE(placed);
-    EXPECT_TRUE(selected);
+    EXPECT_TRUE(reported);
     const gatr2::BrainState& s = last_state.state;
     EXPECT_EQ(last_state.session, session);
     EXPECT_TRUE(s.robot_flags & gatr2::kRobotPoseValid);
@@ -351,12 +353,17 @@ TEST(EndToEnd, SquarePathClosesOnCommandedStart) {
     EXPECT_TRUE(s.health & gatr2::kHealthBiasCalibrated);
     EXPECT_FALSE(s.health & gatr2::kHealthVisionAlive);
 
-    // wire id 1 maps to center_goal: the map nominal, never observed
-    EXPECT_EQ(s.landmark_id, 1u);
-    EXPECT_EQ(s.landmark_source, gatr2::kLandmarkSourceNominal);
-    EXPECT_EQ(s.lm_x_mm, 1800);
-    EXPECT_EQ(s.lm_y_mm, 1800);
-    EXPECT_EQ(s.landmark_age_ms, 0u);
+    // XML robot, no field documents; the reported path is kept for inspection
+    EXPECT_EQ(s.profile_state, gatr2::kProfileNone);
+    EXPECT_EQ(s.map_id, 0u);
+    EXPECT_EQ(s.estimate_id, 0u);
+    const PathReport& path = rig.system->command().path;
+    EXPECT_EQ(path.session, session);
+    EXPECT_EQ(path.command_id, 17u);
+    EXPECT_EQ(path.mode, gatr2::kPathDirect);
+    ASSERT_EQ(path.count, 2u);
+    EXPECT_DOUBLE_EQ(path.points[1].x_m, 0.610);
+    EXPECT_DOUBLE_EQ(path.points[1].y_m, 1.457);
 
     EXPECT_NEAR(s.x_mm, 610, 3);
     EXPECT_NEAR(s.y_mm, 457, 3);
@@ -399,7 +406,7 @@ TEST(EndToEnd, NothingAttachedStillRunsAndSendsNothingUnasked) {
     EXPECT_FALSE(replies[0].state.robot_flags & gatr2::kRobotPoseValid);
     EXPECT_FALSE(replies[0].state.robot_flags & gatr2::kRobotAgeKnown);
     EXPECT_FALSE(replies[0].state.health & gatr2::kHealthEncodersFresh);
-    EXPECT_EQ(replies[0].state.landmark_source, gatr2::kLandmarkSourceNone);
+    EXPECT_EQ(replies[0].state.estimate_id, 0u);
 
     // the map-seeded world exists with no data at all
     EXPECT_EQ(rig.system->field().objects.count(FieldObjectId{"center_goal"}), 1u);

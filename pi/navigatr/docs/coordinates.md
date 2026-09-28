@@ -41,11 +41,11 @@ implement these conventions.
 ## Heading values
 
 Robot heading and `FieldObjectState.pose.heading_rad` are full field orientations.
-The brain link's landmark fields are always the physical landmark pose `T_F_L`
-under the robot's current anchor, with full field heading; they never carry a
-resolved robot destination. A Brain destination relative to a landmark is
+The brain link's field estimate records are always the physical object pose
+`T_F_L` under the robot's current anchor, with full field heading; they never
+carry a resolved robot destination. A Brain destination relative to a landmark is
 `T_F_dest = T_F_L * T_L_dest`, composed once on the Brain. See
-[landmarks](landmarks.md#brain-output) for the source and age rules.
+[landmarks](landmarks.md#field-documents) for the source and age rules.
 
 Inspection additionally calculates:
 

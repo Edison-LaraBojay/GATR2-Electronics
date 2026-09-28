@@ -1,248 +1,569 @@
+// main.cpp
+// Localization test: motor-free bench program. Sends the robot profile from
+// brain/robot/gatr2_robot.h, keeps the Pi link up, places the robot once at
+// program start, calibrates wheels and the IMU, and shows pose, readiness and
+// recovery on the Brain screen. Move the robot by hand.
+//
+// Pages (B or the right screen button cycles):
+//   Status       A place at the start pose, X recalibrate the IMU,
+//                Y reinitialize the Pico IMU, hold L1+R1 and press A to
+//                reinitialize localization (placement needed after)
+//   Wheels       LEFT/RIGHT wheel, UP start a push, DOWN end it,
+//                L1/R1 -/+1 cm, L2/R2 -/+10 cm reference, X clear trials,
+//                A apply the proposed travel scale, then A again to place
+//                at the last pose
+//   Recovery     link, session, Pi, Pico and calibration history
+
 #include "main.h"
 #include "robot_config.h"
 
-#include <cerrno>
 #include <cmath>
 #include <cstdio>
-#include <limits>
 #include <memory>
-#include <type_traits>
+#include <vector>
 
-#include "communigatr/pros_driver.h"
-#include "usb_bench_driver.h"
+#include "communigatr/link_events.h"
+#include "communigatr/pros_link.h"
+#include "communigatr/pros_vex_imu.h"
+#include "communigatr/startup_placement.h"
+#include "communigatr/wheel_calibration.h"
 
-namespace {
+namespace
+{
 
-using communigatr::PlacementResult;
-using communigatr::ProsDriverStatus;
-using BenchDriver = std::conditional_t<robot_config::kUseUsbBench,
-                                      communigatr::UsbBenchDriver, communigatr::ProsDriver>;
+using communigatr::Seconds;
+using investigatr::Pose;
+
+// ---------------------------------------------------------------------------
+// Link access. Every communiGATR call of this program is in this section.
+// ---------------------------------------------------------------------------
+
+using Link = communigatr::ProsLink;
+
+std::unique_ptr<communigatr::ProsVexImu> g_vex;
+std::unique_ptr<Link>                    g_link;
+
+Seconds now() {
+    return Link::now();
+}
+
+void createLink() {
+    communigatr::LinkConfig config;
+    if (gatr2_robot::kUseUsb) {
+        config.transport = communigatr::Transport::kUsb;
+    } else {
+        config.transport  = communigatr::Transport::kSmartPort;
+        config.smart_port = gatr2_robot::kLinkPort;
+        config.baud       = gatr2_robot::kLinkBaud;
+    }
+    config.profile = gatr2_robot::profile();
+    if (gatr2_robot::usesVexImu()) {
+        g_vex.reset(new communigatr::ProsVexImu(gatr2_robot::kVexImuPort));
+        communigatr::ProsVexImu* vex = g_vex.get();
+        config.client.bench_imu      = [vex] { return vex->sample(); };
+    }
+    g_link.reset(new Link(config));
+}
+
+// What the screens and decisions need from the link, read once per loop.
+struct View {
+    bool                       started   = false;
+    bool                       connected = false;
+    communigatr::Readiness     readiness = communigatr::Readiness::kConnecting;
+    uint32_t                   session     = 0;
+    uint32_t                   pi_instance = 0;
+    communigatr::ProfileStatus profile;
+    bool                       state_valid = false;
+    bool                       localized   = false;
+    communigatr::HealthBits    health;
+    uint8_t                    calibration = gatr2::kCalibrationNone;
+    bool                       heading_valid = false;
+    investigatr::Radians       heading       = 0; // raw Pi heading, placed or not
+    investigatr::RobotState    robot;
+    communigatr::LinkSnapshot  snapshot;
+};
+
+// False when the link was busy; v is then left as it was.
+bool readView(Seconds t, View& v) {
+    const communigatr::ProsLinkStatus s = g_link->status();
+    if (s.busy) {
+        return false;
+    }
+    v.started       = s.started;
+    v.connected     = s.connected;
+    v.readiness     = s.readiness;
+    v.session       = s.session;
+    v.pi_instance   = s.pi_instance;
+    v.profile       = s.profile;
+    v.state_valid   = s.state.valid;
+    v.localized     = s.summary.localized;
+    v.health        = s.summary.health;
+    v.calibration   = s.summary.calibration;
+    v.heading_valid = s.heading_valid;
+    v.heading       = s.heading;
+    v.robot                    = g_link->robot(t);
+    v.snapshot.connected       = s.connected;
+    v.snapshot.session         = s.session;
+    v.snapshot.pi_instance     = s.pi_instance;
+    v.snapshot.profile         = s.profile.state;
+    v.snapshot.state_valid     = s.state.valid;
+    v.snapshot.localized       = v.localized;
+    v.snapshot.health          = s.state.valid ? s.state.state.health : 0;
+    v.snapshot.calibration     = v.calibration;
+    v.snapshot.odometry_epoch  = s.state.state.odometry_epoch;
+    v.snapshot.anchor_revision = s.state.state.anchor_revision;
+    return true;
+}
+
+// Link, profile and sensors are up: the readiness got past them.
+bool sensorsReady(communigatr::Readiness r) {
+    using communigatr::Readiness;
+    return r != Readiness::kConnecting && r != Readiness::kReconnecting &&
+           r != Readiness::kProfilePending && r != Readiness::kProfileRejected &&
+           r != Readiness::kSensorsUnavailable && r != Readiness::kSensorsInitializing;
+}
+
+// Pi IMU calibration not settled; a failed one waits for a recalibration.
+bool calibrating(communigatr::Readiness r) {
+    using communigatr::Readiness;
+    return r == Readiness::kWaitingStill || r == Readiness::kCalibrating ||
+           r == Readiness::kCalibrationFailed;
+}
+
+// ---------------------------------------------------------------------------
+// Program state.
+// ---------------------------------------------------------------------------
+
+enum class Page : uint8_t { kStatus, kWheels, kRecovery };
+
+enum class Capture : uint8_t { kIdle, kStart, kEnd };
+
+struct WheelTool {
+    communigatr::WheelCalibration calibration;
+    const char*                   name;
+};
+
+Page                                      g_page = Page::kStatus;
+communigatr::LinkEvents                   g_events;
+std::unique_ptr<communigatr::StartupPlacement> g_startup;
+std::vector<WheelTool>                    g_wheels;
+std::size_t                               g_wheel      = 0;
+double                                    g_reference  = robot_config::kCalibrationDistance;
+Capture                                   g_capture    = Capture::kIdle;
+uint32_t                                  g_capture_after = 0; // wheel reading sequence
+const char*                               g_message    = "Hold still while sensors start";
+char                                      g_note[64]   = {};
+communigatr::PlacementTicket              g_placement  = 0;
+communigatr::ControlTicket                g_control    = 0;
+bool                                      g_have_last_pose = false;
+Pose                                      g_last_pose;
+bool                                      g_offer_place = false; // after applying a calibration
+
+void buildWheelTools() {
+    const communigatr::RobotProfile p      = gatr2_robot::profile();
+    const auto                      config = robot_config::wheelCalibration();
+    for (std::size_t i = 0; i < p.wheels.size(); ++i) {
+        // Cross wheels: those measuring roughly perpendicular to this one.
+        std::vector<uint8_t> cross;
+        for (std::size_t j = 0; j < p.wheels.size(); ++j) {
+            const double between = std::fabs(investigatr::wrapAngle(p.wheels[j].angle - p.wheels[i].angle));
+            if (j != i && std::fabs(between - investigatr::kPi / 2) < investigatr::kPi / 8) {
+                cross.push_back(p.wheels[j].encoder_port);
+            }
+        }
+        const bool forward = std::fabs(std::sin(p.wheels[i].angle)) < 0.5;
+        g_wheels.push_back(WheelTool{
+            communigatr::WheelCalibration(p.wheels[i], cross, config),
+            forward ? "forward" : "sideways"});
+    }
+}
+
+communigatr::CalibrationSnapshot snapshotFrom(const communigatr::WheelReadings& r, const View& v) {
+    communigatr::CalibrationSnapshot s;
+    s.profile_id    = v.profile.id;
+    s.heading_valid = v.heading_valid;
+    s.heading       = v.heading;
+    for (uint8_t i = 0; i < r.count && i < gatr2::kWheelReadingsMax; ++i) {
+        communigatr::WheelSample w = communigatr::fromReading(r.wheels[i]);
+        // Age at the time of use: the Pi's age plus the time since the reply.
+        w.age += now() - r.received_at + r.round_trip;
+        s.wheels.push_back(w);
+    }
+    return s;
+}
+
+bool pressed(pros::Controller& c, pros::controller_digital_e_t button) {
+    return c.is_connected() == 1 && c.get_digital_new_press(button) == 1;
+}
+
+bool held(pros::Controller& c, pros::controller_digital_e_t button) {
+    return c.is_connected() == 1 && c.get_digital(button) == 1;
+}
+
+bool poseLive(const View& v) {
+    return v.robot.valid() && v.robot.age <= robot_config::kMaxPoseAgeSeconds;
+}
+
+void placeAt(const Pose& pose, const char* done) {
+    const communigatr::PlacementTicket t = g_link->place(pose);
+    if (t == 0) {
+        g_message = "Place refused: link, profile or a pending placement";
+        return;
+    }
+    g_placement = t;
+    g_message   = done;
+}
+
+void startControl(communigatr::ControlTicket t, const char* done) {
+    if (t == 0) {
+        g_message = "Refused: no link, or another request pending";
+        return;
+    }
+    g_control = t;
+    g_message = done;
+}
+
+// ---------------------------------------------------------------------------
+// Pages.
+// ---------------------------------------------------------------------------
+
+void statusInput(pros::Controller& c, const View& v) {
+    if (pressed(c, pros::E_CONTROLLER_DIGITAL_A)) {
+        if (held(c, pros::E_CONTROLLER_DIGITAL_L1) && held(c, pros::E_CONTROLLER_DIGITAL_R1)) {
+            startControl(g_link->reinitialize(), "Reinitializing: place the robot after");
+        } else if (!v.connected) {
+            g_message = "No link; connect, then A again";
+        } else {
+            placeAt(gatr2_robot::kStartPose, "Placing at the start pose");
+        }
+    }
+    if (pressed(c, pros::E_CONTROLLER_DIGITAL_X)) {
+        if (g_vex) {
+            // The VEX IMU calibrates in its own firmware; the Pi sees invalid
+            // samples meanwhile and holds the pose.
+            g_vex->recalibrate();
+            g_message = "VEX IMU calibrating: hold still";
+        } else {
+            startControl(g_link->recalibrate(), "IMU recalibration requested: hold still");
+        }
+    }
+    if (pressed(c, pros::E_CONTROLLER_DIGITAL_Y)) {
+        if (g_vex) {
+            g_message = "Y reinitializes the Pico IMU; this profile uses the VEX IMU";
+        } else {
+            startControl(g_link->reinitImu(), "Pico IMU reinitializing: hold still");
+        }
+    }
+}
+
+void wheelsInput(pros::Controller& c, const View& v) {
+    if (g_wheels.empty()) {
+        return;
+    }
+    if (pressed(c, pros::E_CONTROLLER_DIGITAL_LEFT)) {
+        g_wheel   = (g_wheel + g_wheels.size() - 1) % g_wheels.size();
+        g_capture = Capture::kIdle;
+    }
+    if (pressed(c, pros::E_CONTROLLER_DIGITAL_RIGHT)) {
+        g_wheel   = (g_wheel + 1) % g_wheels.size();
+        g_capture = Capture::kIdle;
+    }
+    const double steps[4] = {-0.01, 0.01, -0.1, 0.1};
+    const pros::controller_digital_e_t keys[4] = {
+        pros::E_CONTROLLER_DIGITAL_L1, pros::E_CONTROLLER_DIGITAL_R1,
+        pros::E_CONTROLLER_DIGITAL_L2, pros::E_CONTROLLER_DIGITAL_R2};
+    for (int i = 0; i < 4; ++i) {
+        if (pressed(c, keys[i])) {
+            g_reference = std::round((g_reference + steps[i]) * 100.0) / 100.0;
+        }
+    }
+    if (pressed(c, pros::E_CONTROLLER_DIGITAL_UP) || pressed(c, pros::E_CONTROLLER_DIGITAL_DOWN)) {
+        const bool start = c.get_digital(pros::E_CONTROLLER_DIGITAL_UP) == 1;
+        if (!g_link->requestWheels()) {
+            g_message = "No link: cannot read the wheels";
+        } else {
+            g_capture       = start ? Capture::kStart : Capture::kEnd;
+            g_capture_after = g_link->wheelReadings().sequence;
+            g_message       = start ? "Reading start..." : "Reading end...";
+        }
+    }
+    if (pressed(c, pros::E_CONTROLLER_DIGITAL_X)) {
+        g_wheels[g_wheel].calibration.clear();
+        g_message = "Trials cleared";
+    }
+    if (pressed(c, pros::E_CONTROLLER_DIGITAL_A)) {
+        if (g_offer_place) {
+            g_offer_place = false;
+            placeAt(g_last_pose, "Placing at the pose before the change");
+            return;
+        }
+        const communigatr::CalibrationProposal p = g_wheels[g_wheel].calibration.proposal();
+        if (!p.ready) {
+            g_message = "Need 3 agreeing trials before applying";
+            return;
+        }
+        communigatr::RobotProfile profile = g_link->profile();
+        for (communigatr::TrackingWheel& w : profile.wheels) {
+            if (w.encoder_port == g_wheels[g_wheel].calibration.port()) {
+                w.travel_scale = p.scale;
+            }
+        }
+        g_have_last_pose = poseLive(v);
+        if (g_have_last_pose) {
+            g_last_pose = v.robot.pose;
+        }
+        if (!g_link->setProfile(profile)) {
+            g_message = "Profile refused by the Brain check";
+            return;
+        }
+        std::snprintf(g_note, sizeof(g_note), "Port %u travel_scale = %.4f (copy to gatr2_robot.h)",
+                      unsigned(g_wheels[g_wheel].calibration.port()), p.scale);
+        g_offer_place = g_have_last_pose;
+        g_message     = g_offer_place ? "Applied; A places at the last pose" : "Applied; place again";
+    }
+}
+
+// Finishes a wheel capture once a newer reading arrives.
+void serviceCapture(const View& v) {
+    if (g_capture == Capture::kIdle) {
+        return;
+    }
+    const communigatr::WheelReadings& r = g_link->wheelReadings();
+    if (r.sequence == g_capture_after) {
+        return;
+    }
+    const Capture step = g_capture;
+    g_capture          = Capture::kIdle;
+    if (r.result != gatr2::kResultOk) {
+        g_message = "Wheel read refused (profile not applied?)";
+        return;
+    }
+    const communigatr::CalibrationSnapshot s = snapshotFrom(r, v);
+    communigatr::WheelCalibration&         cal = g_wheels[g_wheel].calibration;
+    const communigatr::TrialStatus status =
+        step == Capture::kStart ? cal.start(s) : cal.finish(s, g_reference);
+    if (status == communigatr::TrialStatus::kAccepted) {
+        g_message = step == Capture::kStart ? "Push along the wheel, then DOWN" : "Trial accepted";
+    } else {
+        std::snprintf(g_note, sizeof(g_note), "Rejected: %s", communigatr::toString(status));
+        g_message = g_note;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Screen.
+// ---------------------------------------------------------------------------
 
 constexpr int kButtonTop = 208;
 
-communigatr::BenchImuSample readBenchImu(const pros::Imu& imu) {
-    communigatr::BenchImuSample sample;
-    sample.stamp_ms = pros::millis();
-    if (imu.get_status() == pros::ImuStatus::error || imu.is_calibrating()) {
-        return sample;
-    }
-    // PROS total rotation is clockwise-positive degrees; naviGATR uses CCW.
-    const double mdeg = -imu.get_rotation() * 1000.0;
-    if (!std::isfinite(mdeg) || mdeg < std::numeric_limits<int32_t>::min() ||
-        mdeg > std::numeric_limits<int32_t>::max()) {
-        return sample;
-    }
-    sample.rotation_mdeg = static_cast<int32_t>(std::lround(mdeg));
-    sample.valid = true;
-    return sample;
-}
-
-const char* placementName(PlacementResult result) {
-    switch (result) {
-    case PlacementResult::kNone: return "not requested";
-    case PlacementResult::kPending: return "pending";
-    case PlacementResult::kApplied: return "applied";
-    case PlacementResult::kRejected: return "rejected";
-    case PlacementResult::kTimedOut: return "timeout: outcome unknown";
-    case PlacementResult::kSessionLost: return "session lost";
-    }
-    return "unknown";
-}
-
-bool livePose(const investigatr::InputSnapshot& sample) {
-    return sample.connected && sample.robot.valid &&
-           std::isfinite(sample.robot.age) && sample.robot.age >= 0 &&
-           sample.robot.age <= robot_config::kMaxPoseAgeSeconds;
-}
-
-template <typename... Args>
-void row(int index, const char* format, Args... args) {
+template <typename... Args> void row(int index, const char* format, Args... args) {
     const int y = 4 + index * 20;
     pros::screen::erase_rect(0, y, 479, y + 19);
     pros::screen::print(pros::E_TEXT_MEDIUM, 6, y, format, args...);
 }
 
-void display(const ProsDriverStatus& link, const investigatr::InputSnapshot& sample,
-             const communigatr::PlacementStatus& placement, const char* message,
-             int open_error) {
-    if constexpr (robot_config::kUseUsbBench) {
-        row(0, "Localization test | USB to Pi");
+void showStatus(const View& v) {
+    row(1, "%s | %s", gatr2_robot::kUseUsb ? "USB" : "RS-485", communigatr::toString(v.readiness));
+    row(2, "Profile %08lx %s", static_cast<unsigned long>(v.profile.id),
+        v.profile.state == communigatr::ProfileSync::kRejected
+            ? communigatr::profileReasonName(v.profile.reason)
+            : "");
+    if (v.robot.valid()) {
+        row(3, "x %+.3f  y %+.3f m  h %+.2f deg", v.robot.pose.x, v.robot.pose.y,
+            v.robot.pose.heading * 180.0 / investigatr::kPi);
+        row(4, "Pose %s, age %.0f ms", poseLive(v) ? "LIVE" : "STALE", v.robot.age * 1000.0);
     } else {
-        row(0, "Localization test | Smart Port %u", unsigned(robot_config::kNavigatrPort));
+        row(3, "x --  y --  h --");
+        row(4, "Pose: %s", investigatr::toString(v.robot.status));
     }
-    if (!link.started) {
-        row(1, "Serial open failed: errno %d (retrying)", open_error);
-    } else if (link.error != communigatr::LinkError::kNone) {
-        row(1, "Protocol error %u, peer version %u", unsigned(link.error),
-            unsigned(link.peer_version));
+    row(5, "Enc %s  IMU %s  Pico %s  Still %s", v.health.encoders_fresh ? "ok" : "--",
+        v.health.imu_fresh ? "ok" : "--", v.health.pico_link ? "ok" : "--",
+        v.health.stationary ? "yes" : "no");
+    if (g_vex) {
+        const communigatr::BenchImuSample imu = g_vex->sample();
+        row(6, "VEX IMU P%u: %s %+.2f deg", unsigned(gatr2_robot::kVexImuPort),
+            g_vex->calibrating() ? "calibrating" : imu.valid ? "ok" : "unavailable",
+            imu.rotation_mdeg / 1000.0);
     } else {
-        row(1, "Link: %s | Pose: %s", sample.connected ? "connected" : "waiting/lost",
-            livePose(sample) ? "LIVE" : sample.robot.valid ? "STALE" : "unavailable");
+        row(6, "Pi IMU calibration: %s%s", communigatr::calibrationName(v.calibration),
+            v.calibration == gatr2::kCalibrationFailed ? " (X retries)" : "");
     }
-    row(2, "Placement: %s", placementName(placement.state));
-    if (sample.robot.valid) {
-        row(3, "x: %+.3f m    y: %+.3f m", sample.robot.pose.x, sample.robot.pose.y);
-        row(4, "Heading: %+.2f deg", sample.robot.pose.heading * 180.0 / investigatr::kPi);
-        row(5, "Pose age: %.0f ms | Link: %.0f ms", sample.robot.age * 1000,
-            sample.link_age * 1000);
-    } else {
-        row(3, "x: -- m    y: -- m");
-        row(4, "Heading: -- deg");
-        row(5, "Waiting for placement / fresh sensors");
-    }
-    row(6, "Session: %08lx | Frame: %lu", static_cast<unsigned long>(link.session),
-        static_cast<unsigned long>(sample.frame));
-    row(7, "Replies: %lu | Timeouts: %lu", static_cast<unsigned long>(link.stats.replies),
-        static_cast<unsigned long>(link.stats.timeouts));
-    row(8, "Set: %.2f, %.2f m / %.1f deg", robot_config::kStartX,
-        robot_config::kStartY, robot_config::kStartHeadingDegrees);
-    row(9, "%s", message);
+    row(7, "Start placement: %s", communigatr::toString(g_startup->state()));
+    row(8, "A place  X recal IMU  Y Pico IMU  L1+R1+A reinit");
+}
 
+void showWheels() {
+    if (g_wheels.empty()) {
+        row(1, "No tracking wheels in the profile");
+        return;
+    }
+    const WheelTool&                         tool = g_wheels[g_wheel];
+    const communigatr::CalibrationProposal   p    = tool.calibration.proposal();
+    const communigatr::WheelReadings&        r    = g_link->wheelReadings();
+    double                                   travel = 0;
+    for (uint8_t i = 0; i < r.count; ++i) {
+        if (r.wheels[i].port == tool.calibration.port()) {
+            travel = r.wheels[i].travel_um * 1e-6;
+        }
+    }
+    row(1, "Wheel port %u (%s)  %s", unsigned(tool.calibration.port()), tool.name,
+        tool.calibration.started() ? "PUSHING" : "");
+    row(2, "Reference %.2f m (L1/R1 1 cm, L2/R2 10 cm)", g_reference);
+    row(3, "Raw travel %.4f m (last read)", travel);
+    row(4, "Trials %u  scale %.4f  spread %.2f%%", unsigned(p.trials), p.scale, p.spread * 100.0);
+    const auto& trials = tool.calibration.trials();
+    for (std::size_t i = 0; i < 3; ++i) {
+        if (i < trials.size()) {
+            const auto& t = trials[trials.size() - 1 - i];
+            row(5 + static_cast<int>(i), "  ref %.3f  wheel %.4f  scale %.4f", t.reference,
+                t.measured, t.scale);
+        } else {
+            row(5 + static_cast<int>(i), "");
+        }
+    }
+    row(8, p.ready ? "READY: A applies  UP start  DOWN end  X clear" : "UP start  DOWN end  X clear");
+}
+
+void showRecovery() {
+    for (int i = 0; i < 8; ++i) {
+        if (static_cast<std::size_t>(i) < g_events.size()) {
+            const communigatr::LinkEventRecord& e = g_events.at(static_cast<std::size_t>(i));
+            if (e.event == communigatr::LinkEvent::kLinkRestored) {
+                row(1 + i, "%7.1f s  %s after %.1f s", e.at, communigatr::toString(e.event),
+                    e.duration);
+            } else {
+                row(1 + i, "%7.1f s  %s", e.at, communigatr::toString(e.event));
+            }
+        } else {
+            row(1 + i, "");
+        }
+    }
+}
+
+void display(const View& v) {
+    const char* titles[] = {"Status", "Wheel calibration", "Recovery"};
+    row(0, "Localization test | %s", titles[static_cast<int>(g_page)]);
+    switch (g_page) {
+    case Page::kStatus: showStatus(v); break;
+    case Page::kWheels: showWheels(); break;
+    case Page::kRecovery: showRecovery(); break;
+    }
+    row(9, "%s", g_message);
     pros::screen::set_pen(0x00304B60);
     pros::screen::fill_rect(0, kButtonTop, 479, 239);
     pros::screen::set_pen(0x00FFFFFF);
-    pros::screen::print(pros::E_TEXT_MEDIUM, 12, kButtonTop + 6,
-                        "A / TAP: set configured starting pose");
+    pros::screen::print(pros::E_TEXT_MEDIUM, 12, kButtonTop + 6, "PLACE AT START");
+    pros::screen::print(pros::E_TEXT_MEDIUM, 330, kButtonTop + 6, "NEXT PAGE");
+    pros::screen::set_pen(0x00FFFFFF);
 }
 
-void log(const ProsDriverStatus& link, const investigatr::InputSnapshot& sample,
-         const communigatr::PlacementStatus& placement) {
-    std::printf("[localization] connected=%d live=%d placement=%s result=%u "
-                "session=%08lx frame=%lu ",
-                sample.connected, livePose(sample), placementName(placement.state),
-                unsigned(placement.result), static_cast<unsigned long>(link.session),
-                static_cast<unsigned long>(sample.frame));
-    if (sample.robot.valid) {
-        std::printf("x_m=%.3f y_m=%.3f heading_deg=%.2f age_ms=%.0f\n",
-                    sample.robot.pose.x, sample.robot.pose.y,
-                    sample.robot.pose.heading * 180.0 / investigatr::kPi,
-                    sample.robot.age * 1000);
-    } else {
-        std::printf("pose=unavailable\n");
-    }
-}
+// ---------------------------------------------------------------------------
+// Main loop.
+// ---------------------------------------------------------------------------
 
-void runTest() {
-    std::shared_ptr<pros::Imu> vex_imu;
-    if (robot_config::kUseVexImuBench) {
-        vex_imu = std::make_shared<pros::Imu>(robot_config::kVexImuPort);
-        vex_imu->reset(false);
-    }
-    communigatr::ProsDriverConfig config;
-    config.port = robot_config::kNavigatrPort;
-    config.baud = robot_config::kNavigatrBaud;
-    config.client.placement_deadline = robot_config::kPlacementDeadlineSeconds;
-    // Allow Pending replies for the whole deadline rather than exhausting
-    // the library's shorter default retry count during sensor startup.
-    config.client.placement_attempts = 100;
-    if (vex_imu) {
-        config.client.bench_imu = [vex_imu] { return readBenchImu(*vex_imu); };
-    }
-    BenchDriver driver(config);
+void run() {
+    createLink();
+    buildWheelTools();
+    g_startup.reset(new communigatr::StartupPlacement(robot_config::kStartupPolicy,
+                                                      robot_config::kStartupWaitSeconds));
     pros::Controller controller(pros::E_CONTROLLER_MASTER);
-
-    communigatr::PlacementTicket ticket = 0;
-    const double startup_end = BenchDriver::now() + robot_config::kStartupWaitSeconds;
-    bool startup_wait = true;
-    double next_open = 0;
-    int open_error = 0;
-    int32_t last_touch_count = -1;
-    uint32_t wake = pros::millis();
-    uint32_t last_display = wake - robot_config::kDisplayPeriodMs;
-    uint32_t last_log = wake - robot_config::kLogPeriodMs;
-    const char* message = "Hold still for IMU calibration";
-
     pros::screen::set_eraser(0x00000000);
     pros::screen::set_pen(0x00FFFFFF);
     pros::screen::erase();
 
+    double   next_start   = 0;
+    int32_t  last_touches = -1;
+    uint32_t wake         = pros::millis();
+    uint32_t last_display = wake - robot_config::kDisplayPeriodMs;
+
+    View v;
     while (true) {
-        const double now = BenchDriver::now();
-        auto link = driver.status();
-        if (!link.started && now >= next_open) {
-            if (!driver.start()) {
-                open_error = errno;
-            }
-            next_open = now + 1.0;
-            link = driver.status();
+        const Seconds t = now();
+        if (!g_link->status().started && t >= next_start) {
+            // Retried once a second; opening can fail right after power-up.
+            g_link->start();
+            next_start = t + 1.0;
+        }
+        // A busy link keeps the last view and skips the decisions below.
+        const bool fresh = readView(t, v);
+        if (fresh) {
+            g_events.update(v.snapshot, t);
         }
 
-        bool place = controller.is_connected() == 1 &&
-                     controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A) == 1;
+        // Program start placement: once, when everything is ready.
+        communigatr::StartupInputs in;
+        in.connected     = v.connected;
+        in.profile_ready = v.profile.state == communigatr::ProfileSync::kApplied;
+        in.sensors_ready = sensorsReady(v.readiness);
+        in.calibrating   = calibrating(v.readiness);
+        in.localized     = v.localized;
+        if (fresh && g_startup->update(in, t) == communigatr::StartupState::kSubmit) {
+            const communigatr::PlacementTicket ticket = g_link->place(gatr2_robot::kStartPose);
+            if (ticket != 0) {
+                g_placement = ticket;
+                g_startup->submitted();
+                g_message = "Placed at the start pose";
+            }
+        }
+
+        // Touch buttons: left half places, right half pages.
         const auto touch = pros::screen::touch_status();
+        bool       touch_place = false;
+        bool       touch_page  = false;
         if (touch.touch_status != pros::E_TOUCH_ERROR) {
-            const bool pressed = touch.touch_status == pros::E_TOUCH_PRESSED ||
-                                 touch.touch_status == pros::E_TOUCH_HELD;
-            place |= pressed && touch.press_count != last_touch_count &&
-                     touch.y >= kButtonTop && touch.y <= 239 && touch.x >= 0 && touch.x <= 479;
-            last_touch_count = touch.press_count;
+            const bool down = touch.touch_status == pros::E_TOUCH_PRESSED ||
+                              touch.touch_status == pros::E_TOUCH_HELD;
+            if (down && touch.press_count != last_touches && touch.y >= kButtonTop) {
+                touch_place = touch.x < 240;
+                touch_page  = touch.x >= 240;
+            }
+            last_touches = touch.press_count;
         }
-
-        // One attempt per program start. Recovery never repositions the robot
-        // automatically after a timeout, disconnect or Pi restart.
-        const bool imu_ready = !vex_imu || readBenchImu(*vex_imu).valid;
-        if (startup_wait && link.connected && imu_ready && now < startup_end) {
-            place = true;
-            startup_wait = false;
-        } else if (startup_wait && now >= startup_end) {
-            startup_wait = false;
-            message = "Startup wait ended; A / tap to place";
+        if (pressed(controller, pros::E_CONTROLLER_DIGITAL_B) || touch_page) {
+            g_page = static_cast<Page>((static_cast<int>(g_page) + 1) % 3);
+            pros::screen::erase();
         }
-
-        if (place) {
-            startup_wait = false;
-            if (!link.connected) {
-                // Do not queue a command that could apply later unexpectedly.
-                message = "No link; connect, then A / tap again";
-            } else if (driver.placementResult(ticket) == PlacementResult::kPending) {
-                message = "Placement already pending";
+        if (touch_place) {
+            if (v.connected) {
+                placeAt(gatr2_robot::kStartPose, "Placing at the start pose");
             } else {
-                const auto requested = driver.submitPlacement(robot_config::kStartPose);
-                if (requested != 0) {
-                    ticket = requested;
-                    message = "Hold still; awaiting placement";
-                } else {
-                    message = "Placement refused; check config";
-                }
+                g_message = "No link; connect, then tap again";
             }
         }
+        switch (g_page) {
+        case Page::kStatus: statusInput(controller, v); break;
+        case Page::kWheels: wheelsInput(controller, v); break;
+        case Page::kRecovery: break;
+        }
+        serviceCapture(v);
 
-        const auto placement = driver.placementStatus(ticket);
-        const auto sample = driver.latest(BenchDriver::now());
-        if (placement.state == PlacementResult::kApplied) {
-            message = livePose(sample) ? "Push / rotate robot to check pose"
-                                       : "Waiting for fresh pose / link";
-        } else if (placement.state == PlacementResult::kTimedOut ||
-                   placement.state == PlacementResult::kRejected ||
-                   placement.state == PlacementResult::kSessionLost) {
-            message = "Check link/sensors; A / tap to place";
+        // Outcomes of the last placement and control.
+        const communigatr::PlacementStatus placement = g_link->placement(g_placement);
+        if (placement.state == communigatr::PlacementResult::kApplied && g_placement != 0) {
+            g_placement = 0;
+            g_message   = "Placement applied: push the robot to check the pose";
+        } else if (placement.state == communigatr::PlacementResult::kRejected ||
+                   placement.state == communigatr::PlacementResult::kTimedOut ||
+                   placement.state == communigatr::PlacementResult::kSessionLost) {
+            g_placement = 0;
+            g_message   = "Placement not applied: check link and sensors, A again";
+        }
+        const communigatr::ControlStatus control = g_link->control(g_control);
+        if (g_control != 0 && control.state != communigatr::ControlResult::kPending) {
+            g_control = 0;
+            switch (control.state) {
+            case communigatr::ControlResult::kOk: g_message = "Done"; break;
+            case communigatr::ControlResult::kNotStationary: g_message = "Refused: robot moving"; break;
+            case communigatr::ControlResult::kNotReady: g_message = "Refused: profile not applied"; break;
+            case communigatr::ControlResult::kFailed: g_message = "Failed: see Recovery page"; break;
+            default: g_message = "No answer: check the link"; break;
+            }
         }
 
         const uint32_t tick = pros::millis();
         if (tick - last_display >= robot_config::kDisplayPeriodMs) {
-            display(link, sample, placement, message, open_error);
-            if (vex_imu) {
-                const auto imu_sample = readBenchImu(*vex_imu);
-                if (imu_sample.valid) {
-                    row(8, "VEX IMU P%u: %+.2f deg CCW (bench)",
-                        unsigned(robot_config::kVexImuPort), imu_sample.rotation_mdeg / 1000.0);
-                } else {
-                    row(8, "VEX IMU P%u: calibrating / unavailable",
-                        unsigned(robot_config::kVexImuPort));
-                }
-            }
+            display(v);
             last_display = tick;
-        }
-        if (!robot_config::kUseUsbBench && robot_config::kUsbDebug &&
-            tick - last_log >= robot_config::kLogPeriodMs) {
-            log(link, sample, placement);
-            if (vex_imu) {
-                const auto imu_sample = readBenchImu(*vex_imu);
-                std::printf("[VEX IMU bench] port=%u valid=%d ccw_mdeg=%ld\n",
-                            unsigned(robot_config::kVexImuPort), imu_sample.valid,
-                            static_cast<long>(imu_sample.rotation_mdeg));
-            }
-            last_log = tick;
         }
         pros::Task::delay_until(&wake, robot_config::kLoopPeriodMs);
     }
@@ -251,8 +572,8 @@ void runTest() {
 } // namespace
 
 void initialize() {
-    // This task keeps the display and link alive in every competition mode.
-    static pros::Task monitor(runTest, "localization-test");
+    // Runs in every competition mode: the display and the link stay alive.
+    static pros::Task task(run, "localization-test");
 }
 
 void disabled() {}

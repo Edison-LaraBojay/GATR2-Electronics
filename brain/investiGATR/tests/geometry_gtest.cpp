@@ -60,3 +60,39 @@ TEST(Geometry, ComposeIsAssociative) {
     EXPECT_NEAR(left.y, right.y, 1e-12);
     EXPECT_NEAR(wrapAngle(left.heading - right.heading), 0.0, 1e-12);
 }
+
+TEST(Geometry, InverseUndoesCompose) {
+    const Pose a{1.5, -0.4, 2.2};
+    const Pose b{-0.3, 0.9, -1.1};
+    const Pose back = compose(inverse(a), compose(a, b));
+    EXPECT_NEAR(back.x, b.x, 1e-12);
+    EXPECT_NEAR(back.y, b.y, 1e-12);
+    EXPECT_NEAR(wrapAngle(back.heading - b.heading), 0.0, 1e-12);
+
+    const Pose identity = compose(a, inverse(a));
+    EXPECT_NEAR(identity.x, 0.0, 1e-12);
+    EXPECT_NEAR(identity.y, 0.0, 1e-12);
+    EXPECT_NEAR(identity.heading, 0.0, 1e-12);
+}
+
+TEST(Geometry, BetweenExpressesInFirstFrame) {
+    // Robot at (1, 1) facing +y; a point 0.5 m ahead of it.
+    const Pose robot{1.0, 1.0, kPi / 2.0};
+    const Pose ahead{1.0, 1.5, kPi};
+    const Pose rel = between(robot, ahead);
+    EXPECT_NEAR(rel.x, 0.5, 1e-12);
+    EXPECT_NEAR(rel.y, 0.0, 1e-12);
+    EXPECT_NEAR(rel.heading, kPi / 2.0, 1e-12);
+
+    const Pose again = compose(robot, rel);
+    EXPECT_NEAR(again.x, ahead.x, 1e-12);
+    EXPECT_NEAR(again.y, ahead.y, 1e-12);
+    EXPECT_NEAR(wrapAngle(again.heading - ahead.heading), 0.0, 1e-12);
+}
+
+TEST(Geometry, FiniteRejectsNanAndInf) {
+    EXPECT_TRUE(finite(Pose{1.0, 2.0, 3.0}));
+    EXPECT_FALSE(finite(Pose{std::nan(""), 0.0, 0.0}));
+    EXPECT_FALSE(finite(Pose{0.0, INFINITY, 0.0}));
+    EXPECT_FALSE(finite(Pose{0.0, 0.0, -INFINITY}));
+}

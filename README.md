@@ -40,14 +40,14 @@ Neither pipeline requires a particular sensor family or relative execution rate.
 Robot position and field-object positions use configured field coordinates.
 Field estimation starts with nominal landmark poses and can update them from
 accepted observations. The Pi sends nothing unasked: each Brain request gets
-one reply, and a state reply carries the robot pose with its measurement age
-and anchor identity, plus the physical pose of the landmark the Brain selected,
-labeled nominal or observed. Landmark headings on the wire are full field
-headings, and the Brain applies its own destination offset. Configured targets
-from target resolution stay on the Pi. The inspection viewer also displays
+one reply. A state reply carries the robot pose with its measurement age and
+anchor identity; the field map (objects and their obstacle boxes) and the
+current field-object estimates, labeled nominal or observed, are read as
+chunked documents. Headings on the wire are full field headings, and the Brain
+applies its own destination offset. The inspection viewer also displays
 heading differences from nominal orientation. See the landmark documentation
 for selection and retention behavior, and the
-[brain link v3](docs/interfaces.md#brain-link-v3) for the wire contract.
+[brain link](docs/interfaces.md) for the wire contract.
 
 - [Architecture and scheduling](pi/navigatr/docs/architecture.md)
 - [Coordinates and heading](pi/navigatr/docs/coordinates.md)
@@ -64,14 +64,18 @@ has the run and SSH port-forward commands.
 [`brain/`](brain/README.md) holds portable C++ libraries with host tests and
 the PROS programs that compile them in place.
 
-- [investiGATR](docs/investigatr.md): waypoint navigation and motion control
-  over an abstract input source.
-- [communiGATR](docs/communigatr.md): the Brain side of the brain link, an
-  investiGATR input source backed by Navigatr, PROS packaging, and the testing
-  application with its hardware bring-up checklist.
+- [investiGATR](docs/investigatr.md): path planning, direct and around the
+  field's obstacle boxes, and the shared Brain types.
+- [communiGATR](docs/communigatr.md): the Brain side of the Pi link over USB or
+  RS-485: robot profile upload, field map, placement, calibration and recovery.
+- [actuGATR](docs/actugatr.md): `goToDirect` and `goToAvoiding`, path
+  following, tank and mecanum drives.
 
-Both are host tested and compile in the PROS build; none of the Brain code has
-run on the robot yet.
+The Brain describes the robot (tracking wheels, IMU, footprint) and sends it
+to the Pi as a robot profile; see [Brain setup](docs/brain_setup.md) for
+configuration, calibration and the two test programs. The libraries are host
+tested and compile in the PROS build; none of the Brain code has run on the
+robot yet.
 
 ## Repository map
 

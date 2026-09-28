@@ -1,52 +1,76 @@
 // client.h
-// Brain side of brain link v3: session, request scheduling, retries and reply
-// correlation over a BytePort. One request outstanding at a time, priority
-// placement > landmark selection > state poll. No clock and no threads:
-// poll(now) does all I/O and never blocks.
+// Brain side of brain link v4 over a BytePort: session, request scheduling,
+// retries and reply correlation, robot profile upload, field map and
+// estimate transfer, placement, control, wheel readings and path reports. One
+// request outstanding at a time. No clock and no threads: poll(now) does all
+// I/O and never blocks.
+//
+// Priority of the next request: HELLO without a session, placement,
+// control, profile sync, the due state poll, wheel readings, map chunk,
+// estimate chunk, path report. Reads and transfers go while the state poll
+// is not due, or after four due polls in a row held one back.
 
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 #include "common/frame_codec.h"
 #include "communigatr/byte_port.h"
+#include "communigatr/doc_assembly.h"
+#include "communigatr/robot_profile.h"
 
 namespace communigatr
 {
 
 using Seconds = double;
 
-// Optional bench IMU uplink. Keep the acquisition stamp unchanged when reusing
-// a sample; report invalid during calibration, disconnect or sensor errors.
+// Bench IMU sample carried by every GET_STATE. Keep the acquisition stamp
+// unchanged when reusing a sample; report invalid during calibration,
+// disconnect or sensor errors.
 struct BenchImuSample {
-    bool valid = false;
-    uint32_t stamp_ms = 0;
-    int32_t rotation_mdeg = 0; // continuous rotation, CCW positive
+    bool     valid         = false;
+    uint32_t stamp_ms      = 0;
+    int32_t  rotation_mdeg = 0;     // continuous rotation, CCW positive
+    bool     calibrating   = false; // Brain side IMU calibration; not sent, for readiness
 };
 
 struct ClientConfig {
+    // Per request response timeout: response_timeout, plus byte_time for
+    // every byte the request frame and the op's largest reply frame add
+    // beyond the 85 byte v3 budget pair.
     Seconds response_timeout   = 0.060; // from the write call's return
+    Seconds byte_time          = 10.0 / 115200;
     Seconds request_gap        = 0.005; // after a reply or a timeout
     Seconds state_period       = 0.020; // GET_STATE poll period
     Seconds link_timeout       = 0.25;  // connected while a reply is this recent
-    Seconds pending_retry      = 0.020; // SET_POSE resend after Pending
+    Seconds pending_retry      = 0.020; // SET_POSE and PROFILE_APPLY resend after Pending
     int     placement_attempts = 10;    // sends per placement
     Seconds placement_deadline = 1.0;   // first send through confirming GET_STATE
-    int     select_attempts    = 5;     // sends per SELECT transaction
-    Seconds select_retry       = 0.5;   // before a new SELECT after a failed one
+    int     control_attempts   = 5;     // sends per control without a reply
+    Seconds control_deadline   = 1.0;   // first send through its first reply
+    Seconds control_retry      = 0.1;   // CONTROL resend after Pending
+    Seconds control_wait       = 20.0;  // first send through the end of a Pending control
     Seconds hello_backoff      = 1.0;   // HELLO period after an unsupported version or op
-    // Called once per state request in the driver task. Empty preserves v3
-    // GET_STATE traffic exactly. Requires a Pi supporting the bench extension.
+    Seconds field_period       = 0.5;   // between field estimate reads
+    Seconds transfer_backoff   = 1.0;   // after 3 failed transfers of one kind in a row
+
+    // Brain robot profile. Not configured: the Pi uses its XML localization
+    // and nothing is uploaded.
+    ProfileDocument profile;
+
+    // Called once per state request in the polling task. Empty: flags 0.
     std::function<BenchImuSample()> bench_imu;
 };
 
-using PlacementTicket = uint32_t; // 0 = none
+using PlacementTicket = uint32_t; // 0 = none or refused
 
 enum class PlacementResult : uint8_t {
     kNone,        // not the latest ticket, or 0
-    kPending,     // queued, in flight, or Ok and waiting for a state with its anchor
+    kPending,     // in flight, or Ok and waiting for a state with its anchor
     kApplied,     // a state reply after the Ok shows the placement's anchor
-    kRejected,    // error result, see PlacementStatus::result
+    kRejected,    // error result, see PlacementStatus::result (NotReady included)
     kTimedOut,    // attempts or deadline used up; outcome unknown, may still apply
     kSessionLost, // session ended while pending; never resent
 };
@@ -59,12 +83,56 @@ struct PlacementStatus {
     uint32_t        anchor_revision = 0;
 };
 
-enum class SelectionState : uint8_t {
-    kNotRequested,
-    kPending,         // not acknowledged, or no state reply since the ack
-    kActive,          // acknowledged, and the latest state reply carries the id
-    kUnknownLandmark, // settled until the wanted id or the session changes
-    kUnsupported,     // settled; world estimation is noop on the Pi
+using ControlTicket = uint32_t; // 0 = none or refused
+
+enum class ControlResult : uint8_t {
+    kNone,          // not the latest ticket, or 0
+    kPending,       // queued, in flight, or the Pi answered Pending (Pico working)
+    kOk,            // done; see ControlStatus::calibration
+    kFailed,        // ran and failed, see ControlStatus::detail
+    kNotStationary, // the robot moved in the Pi's stationary window; nothing started
+    kNotReady,      // the Pi has no applied robot profile
+    kRejected,      // other error result, see ControlStatus::result
+    kTimedOut,      // attempts or deadline used up; outcome unknown
+    kSessionLost,   // session ended while pending; never resent
+};
+
+struct ControlStatus {
+    ControlTicket ticket      = 0;
+    uint8_t       action      = 0; // gatr2::ControlAction
+    ControlResult state       = ControlResult::kNone;
+    uint8_t       result      = gatr2::kResultOk;
+    uint8_t       calibration = gatr2::kCalibrationNone;    // last Ok or Pending reply
+    uint8_t       detail      = gatr2::kControlDetailNone; // Failed and Pending
+};
+
+// Latest READ_WHEELS reply: the profile wheels as the Pi last received them.
+struct WheelReadings {
+    uint32_t            sequence    = 0; // Ok replies so far, 0 = none
+    Seconds             received_at = 0;
+    Seconds             round_trip  = 0;
+    uint8_t             result      = gatr2::kResultOk; // last reply result
+    uint8_t             count       = 0;
+    gatr2::WheelReading wheels[gatr2::kWheelReadingsMax];
+};
+
+enum class ProfileSync : uint8_t {
+    kNone,     // no profile configured
+    kInvalid,  // failed the Brain side check; never sent
+    kWaiting,  // no state in this session yet
+    kWriting,  // sending the document
+    kApplying, // PROFILE_APPLY sent, or the Pi answered Pending
+    kApplied,  // the Pi runs this profile
+    kRejected, // refused; settled until the session changes or resubmitProfile()
+};
+
+struct ProfileStatus {
+    ProfileSync state    = ProfileSync::kNone;
+    uint32_t    id       = 0; // crc32 of the configured document
+    uint8_t     reason   = gatr2::kProfileReasonNone; // Brain or Pi reason
+    uint8_t     detail   = 0;
+    uint8_t     result   = gatr2::kResultOk; // last PROFILE_* reply result
+    uint16_t    received = 0;                // bytes the Pi holds of this document
 };
 
 enum class LinkError : uint8_t { kNone, kUnsupportedVersion, kUnsupportedOp };
@@ -79,21 +147,54 @@ struct StateSample {
     Seconds           round_trip  = 0; // this request's write to its reply
 };
 
+// The newest complete field: a map and an estimate checked against it,
+// published together. Never a partial document.
+struct FieldPublication {
+    uint32_t             generation = 0; // per published pair, 0 = none yet
+    uint32_t             map_id     = 0;
+    std::vector<uint8_t> map;            // validated map document
+    uint32_t             estimate_id = 0;
+    std::vector<uint8_t> estimate;       // validated against map
+    uint32_t             pi_instance = 0; // exchange that delivered the estimate
+    uint32_t             session     = 0;
+    Seconds              completed_at = 0; // last estimate chunk received
+    // The Pi took the estimate snapshot no earlier than this, on the poll
+    // clock. Observation ages at completed_at are at most
+    // age_ms + (completed_at - snapshot_after).
+    Seconds snapshot_after = 0;
+};
+
+// Transfer progress for status displays.
+struct FieldSyncStatus {
+    uint32_t map_id           = 0; // complete map held, 0 = none
+    bool     map_reading      = false;
+    uint16_t map_received     = 0; // bytes of the map being read
+    uint32_t estimate_reading = 0; // estimate id being read, 0 = none
+};
+
 struct ClientStats {
-    uint32_t requests       = 0; // frames written, resends included
-    uint32_t resends        = 0; // byte-identical retries
-    uint32_t replies        = 0; // correlated
-    uint32_t timeouts       = 0;
-    uint32_t uncorrelated   = 0; // valid replies matching no outstanding request
-    uint32_t bad_frames     = 0; // complete frames that are not decodable replies
-    uint32_t drained_bytes  = 0; // discarded before a send
-    uint32_t read_errors    = 0;
-    uint32_t write_errors   = 0;
-    uint32_t sessions       = 0; // opened
-    uint32_t session_losses = 0;
-    uint32_t pi_restarts    = 0; // pi_instance changes
-    uint32_t stale_hellos   = 0;
-    uint32_t unexpected     = 0; // correlated replies with a result the op never gets
+    uint32_t requests        = 0; // frames written, resends included
+    uint32_t resends         = 0; // byte-identical retries
+    uint32_t replies         = 0; // correlated
+    uint32_t timeouts        = 0;
+    uint32_t uncorrelated    = 0; // valid replies matching no outstanding request
+    uint32_t bad_frames      = 0; // complete frames that are not decodable replies
+    uint32_t drained_bytes   = 0; // discarded before a send
+    uint32_t read_errors     = 0;
+    uint32_t write_errors    = 0;
+    uint32_t sessions        = 0; // opened
+    uint32_t session_losses  = 0;
+    uint32_t pi_restarts     = 0; // pi_instance changes
+    uint32_t stale_hellos    = 0;
+    uint32_t unexpected      = 0; // correlated replies with a result or body the op never gets
+    uint32_t profile_writes  = 0; // PROFILE_WRITE Ok replies
+    uint32_t doc_chunks      = 0; // READ_DOC Ok replies taken
+    uint32_t doc_rejects     = 0; // inconsistent chunks, crc or validation failures
+    uint32_t doc_stale       = 0; // READ_DOC Stale replies
+    uint32_t maps            = 0; // maps completed
+    uint32_t estimates       = 0; // estimates published
+    uint32_t path_reports    = 0; // sent
+    uint32_t paths_dropped   = 0; // replaced before sending, or no session
 };
 
 class Client {
@@ -106,21 +207,65 @@ public:
     // with a steady clock; now also stands for the write call's return.
     void poll(Seconds now);
 
-    // Field pose in wire units. One placement at a time: 0 while another is
-    // pending. Only the latest ticket is tracked. Queued until a session opens;
-    // the deadline starts at the first send, not at submission.
+    // Field pose in wire units. 0 (refused) unless ready, the configured
+    // profile is applied, and no other placement is pending. Only the latest
+    // ticket is tracked.
     PlacementTicket submitPlacement(int32_t x_mm, int32_t y_mm, int32_t heading_cdeg);
     PlacementResult placementResult(PlacementTicket ticket) const;
     PlacementStatus placementStatus(PlacementTicket ticket) const;
     bool            placementPending() const;
 
-    // Wanted landmark wire id, 0 = none. Idempotent.
-    void           selectLandmark(uint8_t id) { want_ = id; }
-    uint8_t        wantedLandmark() const { return want_; }
-    SelectionState selection() const;
+    // Pi control, a gatr2::ControlAction. 0 (refused) unless ready and no
+    // other control is pending. The Pi checks the stationary condition. A
+    // Pending answer is asked again with the same request id every
+    // control_retry until it settles; a duplicate never runs twice.
+    ControlTicket control(uint8_t action);
+    ControlTicket recalibrate() { return control(gatr2::kControlRecalibrate); }
+    ControlTicket reinitialize() { return control(gatr2::kControlReinitialize); }
+    ControlTicket reinitImu() { return control(gatr2::kControlReinitImu); }
+    ControlTicket restartAcquisition() { return control(gatr2::kControlRestartAcquisition); }
+    ControlStatus controlStatus(ControlTicket ticket) const;
+    bool          controlPending() const;
+
+    // Asks once for the raw profile wheel readings; the answer lands in
+    // wheelReadings(). False without a session.
+    bool                 requestWheels();
+    const WheelReadings& wheelReadings() const { return wheels_; }
+
+    // Uploads and applies the configured profile again, clearing a
+    // settled rejection.
+    void resubmitProfile();
+
+    // Replaces the configured profile at run time. The next state shows
+    // whether the Pi already runs it; otherwise it is uploaded and applied,
+    // and the Pi starts a new odometry epoch that needs a new placement. The
+    // same document again changes nothing. False when doc is empty or fails
+    // the Brain side check: a valid current profile stays; without one, doc
+    // is kept as kInvalid so its reason shows.
+    bool setProfile(const ProfileDocument& doc);
+
+    const ProfileStatus& profile() const { return profile_; }
+    bool                 profileConfigured() const { return profile_.state != ProfileSync::kNone; }
+    bool                 profileApplied() const { return profile_.state == ProfileSync::kApplied; }
+
+    // Latest planned path for Pi inspection, points in field mm. Best effort:
+    // one attempt, a newer report replaces an unsent one, dropped without a
+    // session. More than kPathReportMaxPoints points are thinned to that many,
+    // first and last kept. False when dropped at once.
+    bool reportPath(uint32_t command_id, uint8_t path_mode, const gatr2::PathPoint* points,
+                    std::size_t count);
+
+    const FieldPublication& field() const { return field_; }
+    FieldSyncStatus         fieldSync() const;
 
     // Session open and a GET_STATE Ok received in it.
     bool ready() const { return ready_; }
+
+    // Ready at least once since this client started.
+    bool everReady() const { return ever_ready_; }
+
+    // Bench IMU sample of the latest state poll.
+    const BenchImuSample& benchImu() const { return bench_sample_; }
 
     // Ready and a correlated reply within link_timeout.
     bool    connected(Seconds now) const;
@@ -134,11 +279,26 @@ public:
     LinkError error() const { return error_; }
     uint8_t   peerVersion() const { return peer_version_; }
 
+    // Response timeout for a request frame of frame_len bytes with this op.
+    Seconds responseTimeout(uint8_t op, uint16_t frame_len) const;
+
     const ClientStats&  stats() const { return stats_; }
     const ClientConfig& config() const { return config_; }
 
 private:
-    enum class Kind : uint8_t { kNone, kHello, kPlacement, kSelect, kState };
+    enum class Kind : uint8_t {
+        kNone,
+        kHello,
+        kPlacement,
+        kControl,
+        kProfileWrite,
+        kProfileApply,
+        kState,
+        kWheels,
+        kMapChunk,
+        kEstimateChunk,
+        kPathReport,
+    };
 
     struct Transaction {
         gatr2::BrainRequest request;
@@ -148,28 +308,55 @@ private:
         Seconds             first_sent                 = 0;
     };
 
-    void         receive(Seconds now);
-    void         handleFrame(const uint8_t* frame, uint16_t len, Seconds now);
-    bool         correlates(const gatr2::BrainReply& reply) const;
-    void         handleReply(const gatr2::BrainReply& reply, Seconds now);
-    void         handleHello(const gatr2::BrainReply& reply, Seconds now);
-    void         handlePlacement(const gatr2::BrainReply& reply, Seconds now);
-    void         handleSelect(const gatr2::BrainReply& reply, Seconds now);
-    void         handleState(const gatr2::BrainReply& reply, Seconds now, Seconds round_trip);
-    void         incompatible(Kind kind, const gatr2::BrainReply& reply, Seconds now);
-    void         attemptFailed(Seconds now);
-    void         transmit(Seconds now);
-    Kind         choose(Seconds now);
-    Transaction& transaction(Kind kind);
-    void         start(Transaction& tx, gatr2::BrainRequest request);
-    void         drain();
-    void         loseSession();
-    void         settlePlacement(PlacementResult state, uint8_t result);
-    bool         placementExhausted(Seconds now) const;
-    bool         selectionNeeded() const;
-    void         selectFailed(Seconds now);
-    uint16_t     takeRequestId();
-    uint32_t     takeNonce();
+    // Estimate ids seen in state replies, with the send time of the last poll
+    // before the id appeared.
+    struct EstimateSeen {
+        uint32_t id    = 0;
+        Seconds  after = 0;
+    };
+
+    void receive(Seconds now);
+    void handleFrame(const uint8_t* frame, uint16_t len, Seconds now);
+    bool correlates(const gatr2::BrainReply& reply) const;
+    void handleReply(const gatr2::BrainReply& reply, Seconds now);
+    void handleHello(const gatr2::BrainReply& reply, Seconds now);
+    void handlePlacement(const gatr2::BrainReply& reply, Seconds now);
+    void handleControl(const gatr2::BrainReply& reply, Seconds now);
+    void handleWheels(const gatr2::BrainReply& reply, Seconds now, Seconds round_trip);
+    void handleProfileWrite(const gatr2::BrainReply& reply);
+    void handleProfileApply(const gatr2::BrainReply& reply, Seconds now);
+    void handleState(const gatr2::BrainReply& reply, Seconds now, Seconds round_trip);
+    void handleMapChunk(const gatr2::BrainReply& reply, Seconds now);
+    void handleEstimateChunk(const gatr2::BrainReply& reply, Seconds now);
+    void incompatible(Kind kind, const gatr2::BrainReply& reply, Seconds now);
+
+    void attemptFailed(Seconds now);
+    void transmit(Seconds now);
+    Kind choose(Seconds now);
+    Kind statePoll();
+    void start(Transaction& tx, gatr2::BrainRequest request);
+    void drain();
+    void loseSession();
+
+    void settlePlacement(PlacementResult state, uint8_t result);
+    bool placementExhausted(Seconds now) const;
+    void settleControl(ControlResult state, uint8_t result);
+    bool controlExhausted(Seconds now) const;
+
+    void configureProfile(const ProfileDocument& doc);
+    void profileFromState(const gatr2::BrainState& state);
+    void profileFailure(uint8_t result);
+    void settleProfileRejected(uint8_t result, uint8_t reason, uint8_t detail);
+
+    bool mapWanted(Seconds now) const;
+    bool estimateWanted(Seconds now) const;
+    void mapFailure(Seconds now);
+    void estimateFailure(Seconds now);
+    void publish(Seconds now);
+    void noteEstimateId(uint32_t id, Seconds after);
+
+    uint16_t takeRequestId();
+    uint32_t takeNonce();
 
     BytePort&                 port_;
     std::function<uint32_t()> nonce_source_;
@@ -180,26 +367,32 @@ private:
     // Exchange.
     Transaction         hello_;
     Transaction         placement_tx_;
-    Transaction         select_tx_;
-    Transaction         state_tx_;
+    Transaction         control_tx_;
+    Transaction         once_tx_; // every request sent once: state, profile, docs, path
     Kind                outstanding_ = Kind::kNone;
     gatr2::BrainRequest sent_; // the outstanding request
-    Seconds             sent_at_         = 0;
-    Seconds             next_send_       = 0;
-    Seconds             next_hello_      = 0;
-    Seconds             next_state_      = 0;
-    uint16_t            next_request_id_ = 1;
-    uint32_t            last_nonce_      = 0;
+    Seconds             sent_at_          = 0;
+    Seconds             sent_timeout_     = 0;
+    Seconds             next_send_        = 0;
+    Seconds             next_hello_       = 0;
+    Seconds             next_state_       = 0;
+    Kind                retry_first_      = Kind::kNone; // timed out; retried before anything else
+    bool                state_before_retry_ = false;      // bench IMU poll before a SET_POSE resend
+    int                 starved_polls_    = 0; // due polls sent while a transfer waited
+    uint16_t            next_request_id_  = 1;
+    uint32_t            last_nonce_       = 0;
 
     // Session.
-    uint32_t    session_     = 0;
-    uint32_t    pi_instance_ = 0;
-    bool        ready_       = false;
-    Seconds     last_reply_  = 0;
+    uint32_t    session_       = 0;
+    uint32_t    pi_instance_   = 0;
+    bool        ready_         = false;
+    bool        ever_ready_    = false;
+    Seconds     last_reply_    = 0;
     StateSample state_;
-    uint32_t    state_count_  = 0; // GET_STATE Ok replies in this session
-    LinkError   error_        = LinkError::kNone;
-    uint8_t     peer_version_ = 0;
+    uint32_t    state_count_   = 0; // GET_STATE Ok replies in this session
+    Seconds     last_state_sent_ = 0; // send time of the previous state poll
+    LinkError   error_         = LinkError::kNone;
+    uint8_t     peer_version_  = 0;
 
     // Placement.
     PlacementStatus     placement_;
@@ -208,15 +401,43 @@ private:
     bool                placement_acked_ = false;
     uint32_t            placement_mark_  = 0; // state_count_ at the Ok
     Seconds             next_placement_  = 0;
-    bool                bench_poll_before_retry_ = false;
 
-    // Selection. pi_selection_ is what the Pi recorded for this session.
-    uint8_t  want_               = 0;
-    uint8_t  pi_selection_       = 0;
-    bool     pi_selection_known_ = true;
-    uint8_t  selection_result_   = gatr2::kResultOk;
-    uint32_t selection_mark_     = 0; // state_count_ at the ack
-    Seconds  next_select_        = 0;
+    // Control.
+    ControlStatus control_;
+    ControlTicket last_control_     = 0;
+    bool          control_answered_ = false; // a reply arrived; control_wait applies
+    int           control_misses_   = 0;     // sends without a reply, in a row
+    Seconds       next_control_     = 0;
+
+    // Wheel readings.
+    bool          wheels_wanted_ = false;
+    WheelReadings wheels_;
+
+    // Profile.
+    uint16_t profile_len_      = 0;
+    int      profile_failures_ = 0; // InvalidArgument or no progress, in a row
+    Seconds  next_profile_     = 0;
+    ProfileStatus profile_;
+
+    // Field documents.
+    std::vector<uint8_t> map_cache_; // complete validated map, keyed by map_cache_id_
+    uint16_t             map_cache_len_ = 0;
+    uint32_t             map_cache_id_  = 0;
+    DocAssembly          map_asm_;
+    int                  map_failures_ = 0;
+    Seconds              next_map_     = 0;
+    DocAssembly          estimate_asm_;
+    int                  estimate_failures_ = 0;
+    Seconds              next_estimate_     = 0;
+    EstimateSeen         estimate_seen_[4];
+    FieldPublication     field_;
+
+    // Bench IMU.
+    BenchImuSample bench_sample_;
+
+    // Path report.
+    bool                path_pending_ = false;
+    gatr2::BrainRequest path_request_;
 };
 
 } // namespace communigatr

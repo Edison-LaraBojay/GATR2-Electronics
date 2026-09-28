@@ -231,10 +231,11 @@ level; the Pico sends no roll or pitch. Detection runs in its own worker, so a
 slow or failed camera never stalls localization; a camera fault shows in the
 sources table.
 
-A landmark-relative request from the Brain needs a `FieldObject` mapping with a
-wire id agreed with the Brain code in the Publishing section of
-[the camera pipeline](../config/shared/pipelines/parallel_wheels_bno08x_camera.xml).
-None is configured yet, so such requests are refused as an unknown landmark.
+The Brain reads every landmark from the field documents that the Publishing
+section of
+[the camera pipeline](../config/shared/pipelines/parallel_wheels_bno08x_camera.xml)
+serves. A landmark stays nominal until the camera observes it; see
+[landmarks](landmarks.md#field-documents).
 Nominal map poses are never accepted as observed landmarks by default.
 
 A camera configured with world estimation off still shows its preview, marked

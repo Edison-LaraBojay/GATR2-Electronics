@@ -22,6 +22,7 @@
 namespace navigatr
 {
 
+class BrainProfileHost;
 class ResourceStore;
 class SensorCatalog;
 
@@ -55,7 +56,9 @@ struct SlotInitializationContext {
     FunctionKey commands_type;
     ResourceId  commands_serial;
 
-    bool world_estimation_noop = false;   // filled after world estimation
+    // Set before Command Collection when Localization takes a Brain robot
+    // profile; null otherwise.
+    BrainProfileHost* brain_profile = nullptr;
 
     std::vector<std::string>* warnings = nullptr;
 

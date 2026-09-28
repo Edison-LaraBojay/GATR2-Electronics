@@ -29,11 +29,13 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(TEST_SOURCES
     frames_gtest.cpp
     frame_codec_gtest.cpp
+    link_documents_gtest.cpp
 )
 
 # Sources under test.
 set(CODE_UNDER_TEST
     ../frame_codec.cpp
+    ../link_documents.cpp
 )
 
 add_executable(common_tests
