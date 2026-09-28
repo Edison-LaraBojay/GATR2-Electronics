@@ -340,22 +340,29 @@ TEST(TrackingWheelMotion, TwoWheelsNeedHeadingConstraintAndCalibrateFirst) {
     ASSERT_NE(fn, nullptr) << err;
     EXPECT_FALSE(fn->readiness().ready);   // still calibrating
 
-    // calibration: two stationary imu readings with bias 0.02 rad/s
+    // calibration: two stationary readings of every source, gyro bias
+    // 0.02 rad/s
     f.putEncoder("enc_a", 0.0, 1000, 1);
     f.putEncoder("enc_b", 0.0, 1000, 1);
     f.putImu(0.02, 1000, 1);
     f.run(*fn);
     f.putImu(0.02, 1005, 2);
     EXPECT_TRUE(f.run(*fn).empty());
+    EXPECT_FALSE(fn->readiness().ready);   // retained wheel records are no evidence
+    f.putEncoder("enc_a", 0.0, 1005, 2);
+    f.putEncoder("enc_b", 0.0, 1005, 2);
+    EXPECT_TRUE(f.run(*fn).empty());
     EXPECT_TRUE(fn->readiness().ready);
+    EXPECT_EQ(fn->readiness().stillness.calibration, BiasCalibration::kDone);
+    EXPECT_NEAR(fn->readiness().stillness.bias_rad_s, 0.02, 1e-12);
 
     // motion: forward 0.01 m while the gyro reads bias only (no rotation)
-    f.putEncoder("enc_a", 0.01 / 0.0254, 1010, 2);
-    f.putEncoder("enc_b", 0.0, 1010, 2);
+    f.putEncoder("enc_a", 0.01 / 0.0254, 1010, 3);
+    f.putEncoder("enc_b", 0.0, 1010, 3);
     f.putImu(0.02, 1010, 3);   // first post-cal sample seeds the integrator
     f.run(*fn);
-    f.putEncoder("enc_a", 0.02 / 0.0254, 1015, 3);
-    f.putEncoder("enc_b", 0.0, 1015, 3);
+    f.putEncoder("enc_a", 0.02 / 0.0254, 1015, 4);
+    f.putEncoder("enc_b", 0.0, 1015, 4);
     f.putImu(0.02, 1015, 4);
     FunctionStatus status;
     const auto     out   = f.run(*fn, &status);
@@ -384,17 +391,22 @@ TEST(TrackingWheelMotion, CalibrationRebasesWheelsAndRestartsOnMotion) {
     f.putEncoder("enc_b", 0.0, 1005, 2);
     f.putImu(0.02, 1005, 2);
     EXPECT_TRUE(f.run(*fn).empty());
+    EXPECT_EQ(fn->readiness().stillness.calibration, BiasCalibration::kWaitingStill);
 
-    f.putImu(0.02, 1010, 3);   // stationary again: completes the restarted run
+    // stationary again: completes the restarted run
+    f.putEncoder("enc_a", 0.02 / r, 1010, 3);
+    f.putEncoder("enc_b", 0.0, 1010, 3);
+    f.putImu(0.02, 1010, 3);
     EXPECT_TRUE(f.run(*fn).empty());
+    EXPECT_TRUE(fn->readiness().ready);
 
     // post-calibration motion contains only travel after calibration
-    f.putEncoder("enc_a", 0.03 / r, 1015, 3);
-    f.putEncoder("enc_b", 0.0, 1015, 3);
+    f.putEncoder("enc_a", 0.03 / r, 1015, 4);
+    f.putEncoder("enc_b", 0.0, 1015, 4);
     f.putImu(0.02, 1015, 4);   // seeds the integrator
     EXPECT_TRUE(f.run(*fn).empty());
-    f.putEncoder("enc_a", 0.04 / r, 1020, 4);
-    f.putEncoder("enc_b", 0.0, 1020, 4);
+    f.putEncoder("enc_a", 0.04 / r, 1020, 5);
+    f.putEncoder("enc_b", 0.0, 1020, 5);
     f.putImu(0.02, 1020, 5);
     const auto delta = Fixture::motion(f.run(*fn));
     ASSERT_NE(delta, nullptr);
@@ -669,15 +681,17 @@ TEST(ImuHeadingIncrement, CalibratesThenIntegratesWithProvenance) {
     ASSERT_NE(fn, nullptr) << err;
     EXPECT_FALSE(fn->readiness().ready);
 
-    f.putImu(0.5, 0, 1);
+    // a stationary gyro: small rates, close to their mean
+    f.putImu(0.005, 0, 1);
     f.run(*fn);
-    f.putImu(0.3, 5, 2);   // bias average 0.4
+    f.putImu(0.003, 5, 2);   // bias: the window's angle over its time, 0.004
     EXPECT_TRUE(f.run(*fn).empty());
     EXPECT_TRUE(fn->readiness().ready);
+    EXPECT_NEAR(fn->readiness().stillness.bias_rad_s, 0.004, 1e-12);
 
-    f.putImu(0.4 + 1.0, 10, 3);   // seeds the integrator at 1 rad/s
+    f.putImu(0.004 + 1.0, 10, 3);   // seeds the integrator at 1 rad/s
     EXPECT_TRUE(f.run(*fn).empty());
-    f.putImu(0.4 + 1.0, 15, 4);
+    f.putImu(0.004 + 1.0, 15, 4);
     const auto out = f.run(*fn);
     const auto it  = out.find(ObservationId{"heading"});
     ASSERT_NE(it, out.end());
@@ -691,6 +705,125 @@ TEST(ImuHeadingIncrement, CalibratesThenIntegratesWithProvenance) {
     EXPECT_EQ(delta->sources[0].source, "imu");
     EXPECT_EQ(delta->sources[0].sequence, 4u);
     EXPECT_EQ(it->second.receivedAt.ms, 18);   // upstream receipt preserved
+}
+
+TEST(TrackingWheelMotion, LaterStationaryWindowsMoveTheBiasInBoundedSteps) {
+    Fixture     f;
+    std::string err;
+    auto        fn = f.makeMotion(kTwoWheelXml, err);
+    ASSERT_NE(fn, nullptr) << err;
+    int64_t  t   = 1000;
+    uint64_t seq = 0;
+    const auto still = [&](double rate) {
+        ++seq;
+        f.putEncoder("enc_a", 0.0, t, seq);
+        f.putEncoder("enc_b", 0.0, t, seq);
+        f.putImu(rate, t, seq);
+        f.run(*fn);
+        t += 5;
+    };
+    still(0.02);
+    still(0.02);
+    ASSERT_TRUE(fn->readiness().ready);
+    EXPECT_NEAR(fn->readiness().stillness.bias_rad_s, 0.02, 1e-12);
+
+    // the bias drifts to 0.021 while the robot sits still: each two-sample
+    // window moves the estimate a fifth of the way, never past the drift
+    double previous = 0.02;
+    for (int i = 0; i < 6; ++i) {
+        still(0.021);
+        const double bias = fn->readiness().stillness.bias_rad_s;
+        EXPECT_GT(bias, previous);
+        EXPECT_LT(bias, 0.021);
+        previous = bias;
+    }
+    EXPECT_EQ(fn->readiness().stillness.steps, 6u);
+    EXPECT_EQ(fn->readiness().stillness.attempts, 1u);   // never recalibrated
+}
+
+TEST(TrackingWheelMotion, AGyroSourceRestartInvalidatesTheBias) {
+    Fixture     f;
+    std::string err;
+    auto        fn = f.makeMotion(kTwoWheelXml, err);
+    ASSERT_NE(fn, nullptr) << err;
+    const auto tick = [&](int64_t t, uint64_t seq, double rate, uint64_t source_epoch) {
+        f.putEncoder("enc_a", 0.0, t, seq);
+        f.putEncoder("enc_b", 0.0, t, seq);
+        f.putImu(rate, t, seq);
+        f.sensors[SensorId{"imu"}].latest->upstream.epoch = source_epoch;
+        f.run(*fn);
+    };
+    tick(1000, 1, 0.02, 0);
+    tick(1005, 2, 0.02, 0);
+    ASSERT_TRUE(fn->readiness().ready);
+
+    tick(1010, 3, 0.05, 1);   // the IMU restarted: its old bias means nothing
+    EXPECT_FALSE(fn->readiness().ready);
+    EXPECT_NE(fn->readiness().stillness.calibration, BiasCalibration::kDone);
+    EXPECT_EQ(fn->readiness().stillness.attempts, 2u);
+    tick(1015, 4, 0.05, 1);
+    tick(1020, 5, 0.05, 1);
+    ASSERT_TRUE(fn->readiness().ready);
+    EXPECT_NEAR(fn->readiness().stillness.bias_rad_s, 0.05, 1e-12);   // measured again
+}
+
+TEST(ImuHeadingIncrement, ASourceRestartInvalidatesTheBias) {
+    Fixture     f;
+    std::string err;
+    auto        fn = f.makeHeading(R"(
+<Observation id="imu_heading" type="imu_heading_increment">
+    <Input sensor_id="imu"/>
+    <Calibration bias_samples="2"/>
+    <Output observation_id="heading"/>
+</Observation>)",
+                                   err);
+    ASSERT_NE(fn, nullptr) << err;
+    const auto tick = [&](int64_t t, uint64_t seq, double rate, uint64_t source_epoch) {
+        f.putImu(rate, t, seq);
+        f.sensors[SensorId{"imu"}].latest->upstream.epoch = source_epoch;
+        f.run(*fn);
+    };
+    tick(0, 1, 0.004, 0);
+    tick(5, 2, 0.004, 0);
+    ASSERT_TRUE(fn->readiness().ready);
+    tick(10, 3, 0.02, 1);   // the IMU restarted
+    EXPECT_FALSE(fn->readiness().ready);
+    EXPECT_EQ(fn->readiness().stillness.attempts, 2u);
+    tick(15, 4, 0.02, 1);
+    ASSERT_TRUE(fn->readiness().ready);
+    EXPECT_NEAR(fn->readiness().stillness.bias_rad_s, 0.02, 1e-12);
+}
+
+TEST(ImuHeadingIncrement, WheelsGateTheBiasWindow) {
+    Fixture     f;
+    std::string err;
+    auto        fn = f.makeHeading(R"(
+<Observation id="imu_heading" type="imu_heading_increment">
+    <Input sensor_id="imu"/>
+    <Calibration bias_samples="3" still_travel_m="0.001">
+        <Wheel sensor_id="enc_a" radius_m="0.0254"/>
+    </Calibration>
+    <Output observation_id="heading"/>
+</Observation>)",
+                                   err);
+    ASSERT_NE(fn, nullptr) << err;
+    const double r    = 0.0254;
+    const auto   tick = [&](int64_t t, uint64_t seq, double travel_m) {
+        f.putEncoder("enc_a", travel_m / r, t, seq);
+        f.putImu(0.01, t, seq);
+        f.run(*fn);
+    };
+    // a still gyro on a rolling robot is no stationary evidence
+    for (int i = 0; i < 10; ++i) {
+        tick(1000 + 5 * i, static_cast<uint64_t>(i + 1), 0.005 * i);
+    }
+    EXPECT_FALSE(fn->readiness().ready);
+    EXPECT_EQ(fn->readiness().stillness.calibration, BiasCalibration::kWaitingStill);
+    for (int i = 10; i < 13; ++i) {
+        tick(1000 + 5 * i, static_cast<uint64_t>(i + 1), 0.045);
+    }
+    EXPECT_TRUE(fn->readiness().ready);
+    EXPECT_NEAR(fn->readiness().stillness.bias_rad_s, 0.01, 1e-12);
 }
 
 TEST(ImuHeadingIncrement, OutagesDiscontinuitiesAndBadIntervalsReseed) {

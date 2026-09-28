@@ -122,12 +122,14 @@ inline actugatr::DriveOwnerConfig manual() {
 }
 
 // ---------------------------------------------------------------------------
-// Tests. PLACEHOLDER destinations: pick clear floor space on your field.
+// Tests. PLACEHOLDER destinations for the Override field from the
+// placeholder start pose (1.2, 1.8, 0); pick clear floor space on your
+// field. brain_link_e2e_gtest runs the same three.
 // ---------------------------------------------------------------------------
-// Direct: field origin reference, no obstacles checked.
-constexpr investigatr::Pose kDirectGoal{1.4, 0.6, 0.0};
-// Avoiding: field origin reference, routes around the field's obstacles.
-constexpr investigatr::Pose kAvoidGoal{1.4, 1.2, 90.0 * kDeg};
+// Direct: field origin reference, no obstacles checked. 0.5 m north.
+constexpr investigatr::Pose kDirectGoal{1.2, 2.3, 90.0 * kDeg};
+// Avoiding: field origin reference, around the center goal.
+constexpr investigatr::Pose kAvoidGoal{2.4, 1.8, 0.0};
 // Landmark relative: 0.45 m on the landmark's +x side, facing it.
 constexpr investigatr::Pose kLandmarkOffset{0.45, 0.0, 180.0 * kDeg};
 inline investigatr::Reference landmark() { return Field::RedGoal2West; }

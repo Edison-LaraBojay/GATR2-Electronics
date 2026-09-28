@@ -1,29 +1,39 @@
+// brain_imu_wheel_bench.cpp
+
 #include "impl/localization/brain_imu_wheel_bench.h"
+
 #include <cmath>
 #include <vector>
+
 #include "math/angles.h"
 #include "payloads/robot_observations.h"
 #include "resources/resource_store.h"
 #include "resources/wheel_geometry.h"
 
-namespace navigatr {
-std::unique_ptr<RobotObservationFunction> BrainImuWheelBench::createParallel(
-    const ConfigNode& node, RobotObservationInitializationContext& context, std::string& err) {
+namespace navigatr
+{
+
+std::unique_ptr<RobotObservationFunction>
+BrainImuWheelBench::createParallel(const ConfigNode& node,
+                                   RobotObservationInitializationContext& context,
+                                   std::string& err) {
     return create(node, context, err, false);
 }
 
-std::unique_ptr<RobotObservationFunction> BrainImuWheelBench::createPlanar(
-    const ConfigNode& node, RobotObservationInitializationContext& context, std::string& err) {
+std::unique_ptr<RobotObservationFunction>
+BrainImuWheelBench::createPlanar(const ConfigNode& node,
+                                 RobotObservationInitializationContext& context,
+                                 std::string& err) {
     return create(node, context, err, true);
 }
 
-std::unique_ptr<RobotObservationFunction> BrainImuWheelBench::create(
-    const ConfigNode& node, RobotObservationInitializationContext& context, std::string& err,
-    bool planar) {
-    auto model = std::make_unique<BrainImuWheelBench>();
+std::unique_ptr<RobotObservationFunction>
+BrainImuWheelBench::create(const ConfigNode& node, RobotObservationInitializationContext& context,
+                           std::string& err, bool planar) {
+    auto model     = std::make_unique<BrainImuWheelBench>();
     model->planar_ = planar;
-    model->type_ = planar ? "brain_imu_planar_bench" : "brain_imu_parallel_bench";
-    model->id_ = ObservationFunctionId{node.attr("id")};
+    model->type_   = planar ? "brain_imu_planar_bench" : "brain_imu_parallel_bench";
+    model->id_     = ObservationFunctionId{node.attr("id")};
     model->output_ = ObservationId{node.child("Output").attr("observation_id")};
     if (!context.resources || !context.sensors || model->output_.empty()) {
         err = node.path() + ": needs resources, sensors and Output observation_id";
@@ -31,14 +41,18 @@ std::unique_ptr<RobotObservationFunction> BrainImuWheelBench::create(
     }
     model->imu_ = context.resources->require<BrainImuBench>(
         ResourceId{node.child("Imu").attr("resource_id")}, err);
-    if (!model->imu_) return nullptr;
+    if (!model->imu_) {
+        return nullptr;
+    }
 
     // Inline TrackingWheel elements or a Wheels reference to wheel_geometry.
     std::vector<WheelDecl> declared;
-    bool ok = true;
+    bool                   ok = true;
     node.forEach("TrackingWheel", [&](const ConfigNode& w) {
-        if (!ok) return;
-        WheelDecl decl;
+        if (!ok) {
+            return;
+        }
+        WheelDecl   decl;
         std::string sensor, direction;
         ok = w.requireAttr("sensor_id", sensor, err) &&
              w.requireDouble("radius_m", decl.radius_m, err) &&
@@ -49,13 +63,16 @@ std::unique_ptr<RobotObservationFunction> BrainImuWheelBench::create(
              w.getDouble("travel_scale", 1.0, decl.travel_scale, err);
         if (ok && direction != "positive" && direction != "negative") {
             err = w.path() + ": direction must be positive or negative";
-            ok = false;
+            ok  = false;
         }
-        decl.sensor = SensorId{sensor};
+        decl.sensor             = SensorId{sensor};
+        decl.label              = w.attr("label");
         decl.direction_positive = direction == "positive";
         declared.push_back(decl);
     });
-    if (!ok) return nullptr;
+    if (!ok) {
+        return nullptr;
+    }
     const ConfigNode wheels_ref = node.child("Wheels");
     if (wheels_ref.valid()) {
         if (!declared.empty()) {
@@ -65,18 +82,24 @@ std::unique_ptr<RobotObservationFunction> BrainImuWheelBench::create(
         }
         const auto geometry = context.resources->require<const WheelGeometryMap>(
             ResourceId{wheels_ref.attr("resource_id")}, err);
-        if (!geometry) return nullptr;
+        if (!geometry) {
+            return nullptr;
+        }
         wheels_ref.forEach("Use", [&](const ConfigNode& use) {
-            if (!ok) return;
+            if (!ok) {
+                return;
+            }
             const auto* w = geometry->find(use.attr("wheel_id"));
             if (!w) {
                 err = node.path() + ": bench model needs exactly two declared wheels";
-                ok = false;
+                ok  = false;
                 return;
             }
             declared.push_back(*w);
         });
-        if (!ok) return nullptr;
+        if (!ok) {
+            return nullptr;
+        }
     }
     if (declared.size() > 2) {
         err = node.path() + ": bench model needs exactly two declared wheels";
@@ -99,33 +122,106 @@ std::unique_ptr<RobotObservationFunction> BrainImuWheelBench::create(
             return nullptr;
         }
         dest.radius = w.radius_m;
-        dest.scale = w.travel_scale;
-        dest.ux = std::cos(angle);
-        dest.uy = std::sin(angle);
-        dest.k = w.position_x_m * dest.uy - w.position_y_m * dest.ux;
-        dest.sign = w.direction_positive ? 1.0 : -1.0;
+        dest.scale  = w.travel_scale;
+        dest.ux     = std::cos(angle);
+        dest.uy     = std::sin(angle);
+        dest.k      = w.position_x_m * dest.uy - w.position_y_m * dest.ux;
+        dest.sign   = w.direction_positive ? 1.0 : -1.0;
     }
     if (count != 2 || model->wheels_[0].binding.id == model->wheels_[1].binding.id) {
         err = node.path() + ": bench model needs two distinct encoder sensors";
         return nullptr;
     }
-    const auto& a = model->wheels_[0];
-    const auto& b = model->wheels_[1];
+    const auto& a       = model->wheels_[0];
+    const auto& b       = model->wheels_[1];
     model->determinant_ = a.ux * b.uy - a.uy * b.ux;
     if (planar && std::fabs(model->determinant_) < 1e-3) {
         err = node.path() + ": planar bench needs two nonparallel wheel directions; "
-              "use brain_imu_parallel_bench only when sideways travel is assumed zero";
+                            "use brain_imu_parallel_bench only when sideways travel is assumed "
+                            "zero";
         return nullptr;
     }
-    if (context.warnings) context.warnings->push_back(
-        node.path() + ": BENCH ONLY: pairs latest wheels and Brain IMU by Pi arrival time; " +
-        (planar ? "forward and sideways motion from configured wheel directions" :
-                  "sideways motion assumed zero"));
+
+    const ConfigNode still_node = node.child("Stillness");
+    StillnessConfig  still;
+    long             samples = still.min_samples;
+    if (!still_node.getInt("samples", samples, samples, err) ||
+        !still_node.getDouble("still_travel_m", still.still_travel_m, still.still_travel_m,
+                              err) ||
+        !readStillness(still_node, still, err)) {
+        return nullptr;
+    }
+    if (samples < 1 || !(still.still_travel_m > 0.0)) {
+        err = still_node.path() + ": samples and still_travel_m must be positive";
+        return nullptr;
+    }
+    still.min_samples = samples;
+    model->window_.configure(still);
+    for (Wheel& w : model->wheels_) {
+        w.source = model->window_.addSource(StationaryWindow::Kind::kWheel,
+                                            "wheel " + w.binding.id.value);
+    }
+    model->rotation_source_ =
+        model->window_.addSource(StationaryWindow::Kind::kRotation, "VEX IMU rotation");
+
+    if (context.warnings) {
+        context.warnings->push_back(
+            node.path() + ": BENCH ONLY: pairs latest wheels and Brain IMU by Pi arrival time; " +
+            (planar ? "forward and sideways motion from configured wheel directions"
+                    : "sideways motion assumed zero"));
+    }
     return model;
 }
 
 std::vector<RobotObservationOutputDecl> BrainImuWheelBench::outputs() const {
-    return {{output_, PayloadDescriptor::of<BodyMotionIncrement>(payload_names::kBodyMotionIncrement)}};
+    return {{output_,
+             PayloadDescriptor::of<BodyMotionIncrement>(payload_names::kBodyMotionIncrement)}};
+}
+
+ObservationReadiness BrainImuWheelBench::readiness() const {
+    ObservationReadiness r;
+    r.ready     = ready_;
+    r.note      = note_;
+    r.stillness = stillnessOf(window_, nullptr);
+    return r;
+}
+
+void BrainImuWheelBench::reset() {
+    baseline_ = false;
+    offered_  = false;
+    ready_    = false;
+    window_.restart(StationaryWindow::Phase::kWaitingData, "reset");
+}
+
+void BrainImuWheelBench::observeStillness(const std::array<const StoredSample*, 2>&  stored,
+                                          const std::array<const EncoderSample*, 2>& samples,
+                                          MonotonicTime                              now) {
+    for (std::size_t i = 0; i < 2; ++i) {
+        if (stored[i] == nullptr || samples[i] == nullptr) {
+            continue;
+        }
+        const Wheel& w = wheels_[i];
+        StillSample  evidence;
+        evidence.sequence      = stored[i]->sequence;
+        evidence.epoch         = stored[i]->epoch;
+        evidence.discontinuity = samples[i]->discontinuity_epoch;
+        evidence.at            = stored[i]->receivedAt;   // arrival time, like the IMU
+        evidence.received      = stored[i]->receivedAt;
+        evidence.value         = samples[i]->angle_rad * w.radius * w.scale;
+        window_.add(w.source, evidence);
+    }
+    if (imu_->valid) {
+        StillSample evidence;
+        evidence.sequence = imu_->sequence;
+        evidence.epoch    = imu_->epoch;
+        evidence.at       = imu_->received;
+        evidence.received = imu_->received;
+        evidence.value    = degToRad(imu_->rotation_mdeg / 1000.0);
+        window_.add(rotation_source_, evidence);
+    }
+    window_.poll(now);
+    StationaryWindow::Qualified ignored;
+    window_.takeQualified(ignored);   // status only; the VEX IMU has no Pi bias
 }
 
 FunctionStatus BrainImuWheelBench::run(const RobotObservationInput& in, RobotObservationMap& out) {
@@ -133,42 +229,51 @@ FunctionStatus BrainImuWheelBench::run(const RobotObservationInput& in, RobotObs
         return t.domain == ClockDomain::kHost && in.context.now.domain == ClockDomain::kHost &&
                in.context.now.ms >= t.ms && in.context.now.ms - t.ms <= 200;
     };
-    std::array<const StoredSample*, 2> stored{};
+    std::array<const StoredSample*, 2>  stored{};
     std::array<const EncoderSample*, 2> samples{};
-    bool valid = imu_->valid && fresh(imu_->received);
+    bool                                valid = imu_->valid && fresh(imu_->received);
     for (std::size_t i = 0; i < 2; ++i) {
-        stored[i] = wheels_[i].binding.freshStored(in.sensors);
+        stored[i]  = wheels_[i].binding.freshStored(in.sensors);
         samples[i] = stored[i] ? stored[i]->payload.get<EncoderSample>() : nullptr;
-        valid = valid && stored[i] && samples[i] && fresh(stored[i]->receivedAt) &&
+        valid      = valid && stored[i] && samples[i] && fresh(stored[i]->receivedAt) &&
                 std::isfinite(samples[i]->angle_rad);
     }
+    observeStillness(stored, samples, in.context.now);
     if (!valid) {
-        baseline_ = ready_ = false;
-        note_ = "bench: VEX IMU or encoder missing/stale; hold pose and rebaseline";
+        baseline_ = false;
+        ready_    = false;
+        note_     = "bench: VEX IMU or encoder missing/stale; hold pose and rebaseline";
         return FunctionStatus::kNoData;
     }
-    if (offered_) return FunctionStatus::kNoData;
-    if (baseline_ && imu_->sequence == imu_sequence_ && imu_->epoch == imu_epoch_)
+    if (offered_) {
         return FunctionStatus::kNoData;
-    bool rebase = !baseline_ || imu_->epoch != imu_epoch_ ||
-                  imu_->received.ms <= previous_.ms || imu_->received.ms - previous_.ms > 200;
+    }
+    if (baseline_ && imu_->sequence == imu_sequence_ && imu_->epoch == imu_epoch_) {
+        return FunctionStatus::kNoData;
+    }
+    bool rebase = !baseline_ || imu_->epoch != imu_epoch_ || imu_->received.ms <= previous_.ms ||
+                  imu_->received.ms - previous_.ms > 200;
     for (std::size_t i = 0; i < 2; ++i) {
-        const auto& w = wheels_[i];
-        rebase = rebase || stored[i]->epoch != w.epoch ||
+        const Wheel& w = wheels_[i];
+        rebase         = rebase || stored[i]->epoch != w.epoch ||
                  samples[i]->discontinuity_epoch != w.discontinuity;
     }
     // Do not emit heading-only updates while wheel records are retained. A
     // later new wheel sample captures the whole cumulative travel instead.
     if (!rebase && (stored[0]->sequence == wheels_[0].sequence ||
-                    stored[1]->sequence == wheels_[1].sequence)) return FunctionStatus::kNoData;
+                    stored[1]->sequence == wheels_[1].sequence)) {
+        return FunctionStatus::kNoData;
+    }
 
     BodyMotionIncrement motion;
-    motion.startAt = previous_;
-    motion.endAt = imu_->received;
-    motion.dt_s = (motion.endAt.ms - motion.startAt.ms) / 1000.0;
+    motion.startAt    = previous_;
+    motion.endAt      = imu_->received;
+    motion.dt_s       = (motion.endAt.ms - motion.startAt.ms) / 1000.0;
     motion.dtheta_rad = degToRad((static_cast<double>(imu_->rotation_mdeg) - rotation_) / 1000.0);
-    // Catch unannounced zeroing/discontinuous angles rather than teleporting.
-    if (!rebase && std::fabs(motion.dtheta_rad) > 12.0 * motion.dt_s + 0.1) rebase = true;
+    // Catch unannounced zeroing or discontinuous angles rather than teleporting.
+    if (!rebase && std::fabs(motion.dtheta_rad) > 12.0 * motion.dt_s + 0.1) {
+        rebase = true;
+    }
     std::array<double, 2> travel{};
     for (std::size_t i = 0; i < 2; ++i) {
         auto& w = wheels_[i];
@@ -177,40 +282,44 @@ FunctionStatus BrainImuWheelBench::run(const RobotObservationInput& in, RobotObs
         travel[i] = (samples[i]->angle_rad - w.angle) * w.radius * w.scale * w.sign -
                     w.k * motion.dtheta_rad;
         Provenance source = stored[i]->upstream;
-        source.source = w.binding.id.value;
-        source.sequence = stored[i]->sequence;
-        source.epoch = stored[i]->epoch;
-        motion.sources.push_back(std::move(source)); // preserve actual Pico lineage/clock
-        w.angle = samples[i]->angle_rad;
-        w.sequence = stored[i]->sequence;
-        w.epoch = stored[i]->epoch;
+        source.source     = w.binding.id.value;
+        source.sequence   = stored[i]->sequence;
+        source.epoch      = stored[i]->epoch;
+        motion.sources.push_back(std::move(source));   // preserve actual Pico lineage/clock
+        w.angle         = samples[i]->angle_rad;
+        w.sequence      = stored[i]->sequence;
+        w.epoch         = stored[i]->epoch;
         w.discontinuity = samples[i]->discontinuity_epoch;
     }
     if (planar_) {
         const auto& a = wheels_[0];
         const auto& b = wheels_[1];
-        motion.dx_m = (travel[0] * b.uy - a.uy * travel[1]) / determinant_;
-        motion.dy_m = (a.ux * travel[1] - travel[0] * b.ux) / determinant_;
+        motion.dx_m   = (travel[0] * b.uy - a.uy * travel[1]) / determinant_;
+        motion.dy_m   = (a.ux * travel[1] - travel[0] * b.ux) / determinant_;
     } else {
         // both wheels along +-x: the mean forward travel
         motion.dx_m = 0.5 * (wheels_[0].ux * travel[0] + wheels_[1].ux * travel[1]);
     }
     motion.sources.push_back(Provenance{"brain_imu_bench", "brain.vex_imu", "brain",
                                         imu_->sequence, imu_->epoch});
-    rotation_ = imu_->rotation_mdeg;
+    rotation_     = imu_->rotation_mdeg;
     imu_sequence_ = imu_->sequence;
-    imu_epoch_ = imu_->epoch;
-    previous_ = imu_->received;
-    baseline_ = ready_ = true;
-    note_ = planar_ ? "BENCH: arrival-time pairing; forward and sideways wheel solve" :
-                      "BENCH: arrival-time pairing; sideways motion unmeasured";
-    if (rebase) return FunctionStatus::kNoData;
+    imu_epoch_    = imu_->epoch;
+    previous_     = imu_->received;
+    baseline_     = true;
+    ready_        = true;
+    note_         = planar_ ? "BENCH: arrival-time pairing; forward and sideways wheel solve"
+                            : "BENCH: arrival-time pairing; sideways motion unmeasured";
+    if (rebase) {
+        return FunctionStatus::kNoData;
+    }
     RobotObservationRecord record;
     record.measuredAt = motion.endAt;
     record.receivedAt = motion.endAt;
     record.payload = TypedPayload::store(std::move(motion), payload_names::kBodyMotionIncrement);
-    out[output_] = std::move(record);
-    offered_ = true;
+    out[output_]   = std::move(record);
+    offered_       = true;
     return FunctionStatus::kOk;
 }
+
 } // namespace navigatr

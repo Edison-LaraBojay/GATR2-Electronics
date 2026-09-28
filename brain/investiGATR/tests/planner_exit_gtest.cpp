@@ -626,10 +626,11 @@ namespace
 // A channel 0.4 m wide between x 1.6 and 2.0 opening east into a closed
 // pocket; the open field lies west of it.
 Field pocketField() {
-    return field({obstacle(1, Pose{1.8, 1.65, 0}, 0.4, 0.1), obstacle(2, Pose{1.8, 2.15, 0}, 0.4, 0.1),
-                  obstacle(3, Pose{2.9, 1.9, 0}, 0.1, 1.5), obstacle(4, Pose{2.275, 2.6, 0}, 1.35, 0.1),
-                  obstacle(5, Pose{2.275, 1.2, 0}, 1.35, 0.1)},
-                 Bounds{0, 0, 3.6, 3.6});
+    return field(
+        {obstacle(1, Pose{1.8, 1.65, 0}, 0.4, 0.1), obstacle(2, Pose{1.8, 2.15, 0}, 0.4, 0.1),
+         obstacle(3, Pose{2.9, 1.9, 0}, 0.1, 1.5), obstacle(4, Pose{2.275, 2.6, 0}, 1.35, 0.1),
+         obstacle(5, Pose{2.275, 1.2, 0}, 1.35, 0.1)},
+        Bounds{0, 0, 3.6, 3.6});
 }
 
 } // namespace
@@ -681,11 +682,13 @@ TEST(PlannerExit, LaterStretchesAlongOneMove) {
     // Rows 0.075 m beside the robot's sides: box pair A along it, then a gap,
     // then a thin pair B. Driving forward, the first point clear of the
     // circle is a closed sliver between A and B; the open field starts past B.
-    const Field f =
-        field({obstacle(1, Pose{0.95, 2.275, 0}, 0.3, 0.1), obstacle(2, Pose{0.95, 1.725, 0}, 0.3, 0.1),
-               obstacle(3, Pose{1.34, 2.275, 0}, 0.02, 0.1), obstacle(4, Pose{1.34, 1.725, 0}, 0.02, 0.1)});
+    // The goal is off the start heading line, so no single straight move.
+    const Field       f = field({obstacle(1, Pose{0.95, 2.275, 0}, 0.3, 0.1),
+                                 obstacle(2, Pose{0.95, 1.725, 0}, 0.3, 0.1),
+                                 obstacle(3, Pose{1.34, 2.275, 0}, 0.02, 0.1),
+                                 obstacle(4, Pose{1.34, 1.725, 0}, 0.02, 0.1)});
     const MotionModel m = tank();
-    PlanRequest       r = request(Pose{1.09, 2, 0}, Pose{3, 2, 0}, m, f);
+    PlanRequest       r = request(Pose{1.09, 2, 0}, Pose{3, 2.6, 0}, m, f);
     r.allow_reverse     = false;
     ASSERT_NEAR(gapAt(r.start, m, f), 0.075, 1e-12);
 
@@ -697,6 +700,49 @@ TEST(PlannerExit, LaterStretchesAlongOneMove) {
     expectExecutable(p.path, r);
     expectFootprintsClear(p.path, r);
     EXPECT_TRUE(kPlanner.clear(p.path, f, m));
+}
+
+TEST(PlannerExit, ShortestWholeRoute) {
+    // A corridor 0.36 m wide along y, from y 1.8 to 2.2; a tank in it facing
+    // +y, 5 cm above the middle: out the top is 0.1 m shorter than out the
+    // bottom.
+    const Field f =
+        field({obstacle(1, Pose{1.77, 2, 0}, 0.1, 0.4), obstacle(2, Pose{2.23, 2, 0}, 0.1, 0.4)});
+    const MotionModel m = tank();
+    const Pose        inside{2, 2.05, kPi / 2.0};
+
+    // Goal 0.1 m below the middle: the route from the bottom is shorter, the
+    // whole path out the top shorter still. 0.2 m below: out the bottom.
+    for (const Meters y : {1.9, 1.8}) {
+        SCOPED_TRACE(y);
+        const bool        top = y > 1.85;
+        const PlanRequest r   = request(inside, Pose{3.2, y, 0}, m, f);
+        PlanResult        p   = kPlanner.plan(r);
+        ASSERT_EQ(p.status, PlanStatus::kOk);
+        const PathSegment& out = p.path.segments.front();
+        EXPECT_TRUE(out.exact);
+        EXPECT_EQ(out.reverse, !top);
+        EXPECT_EQ(out.end.y > 2.2, top);
+        expectExecutable(p.path, r);
+        expectFootprintsClear(p.path, r);
+        // The other way out, then the best route from its end, is longer.
+        const Pose       other{2, 4 - out.end.y, kPi / 2.0};
+        const PlanResult rest = kPlanner.plan(request(other, r.goal, m, f));
+        ASSERT_EQ(rest.status, PlanStatus::kOk);
+        EXPECT_LT(p.path.length(), std::fabs(other.y - inside.y) + rest.path.length());
+
+        // Mirrored: into the corridor from outside, the approach along the
+        // goal heading from the side giving the shorter whole path.
+        const PlanRequest in = request(Pose{3.2, y, 0}, inside, m, f);
+        p                    = kPlanner.plan(in);
+        ASSERT_EQ(p.status, PlanStatus::kOk);
+        const PathSegment& last = p.path.segments.back();
+        EXPECT_TRUE(last.exact);
+        EXPECT_EQ(last.reverse, top);
+        EXPECT_EQ(last.start.y > 2.2, top);
+        expectExecutable(p.path, in);
+        expectFootprintsClear(p.path, in);
+    }
 }
 
 TEST(PlannerExit, AllowanceOnlyNearTheEnds) {
@@ -765,11 +811,28 @@ TEST(PlannerExit, TurnOntoAnApproachIsKept) {
     expectExecutable(p.path, r);
     expectFootprintsClear(p.path, r);
 
+    // On the approach line, 5 mrad off its heading: the turn onto the route
+    // is dropped, so that leg is not joined into the exact approach.
+    const PlanRequest off = request(Pose{0.6, 2, 0.005}, Pose{1.7, 2, 0}, m, f);
+    const PlanResult  j   = kPlanner.plan(off);
+    ASSERT_EQ(j.status, PlanStatus::kOk);
+    ASSERT_EQ(j.path.segments.size(), 2u);
+    EXPECT_FALSE(j.path.segments[0].exact);
+    EXPECT_TRUE(j.path.segments[1].exact);
+    expectExecutable(j.path, off);
+    expectFootprintsClear(j.path, off);
+    // At the approach heading it is one exact move.
+    const PlanResult one = kPlanner.plan(request(Pose{0.6, 2, 0}, Pose{1.7, 2, 0}, m, f));
+    ASSERT_EQ(one.status, PlanStatus::kOk);
+    ASSERT_EQ(one.path.segments.size(), 1u);
+    EXPECT_TRUE(one.path.segments[0].exact);
+
     // A straight exact move keeps the start heading; the goal heading is
     // within min_turn of it.
     const Field       open = field({});
-    const PlanRequest s = request(Pose{2, 0.155, kPi / 2.0 + 0.005}, Pose{2, 0.3, kPi / 2.0}, mecanum(), open);
-    const PlanResult  q = kPlanner.plan(s);
+    const PlanRequest s =
+        request(Pose{2, 0.155, kPi / 2.0 + 0.005}, Pose{2, 0.3, kPi / 2.0}, mecanum(), open);
+    const PlanResult q = kPlanner.plan(s);
     ASSERT_EQ(q.status, PlanStatus::kOk);
     ASSERT_EQ(q.path.segments.size(), 1u);
     EXPECT_TRUE(q.path.segments[0].exact);

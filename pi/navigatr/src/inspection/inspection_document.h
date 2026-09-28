@@ -3,9 +3,13 @@
 // runtime's published snapshots. Three documents:
 //
 //   hello     static identity: session, configuration, field definition
-//             with display data, cameras, localization layout
-//   snapshot  the live state: robot, localization, trail, field objects,
-//             detection frames with overlays bound to their image identity,
+//             with display and planning data (boundary, collision boxes,
+//             wire ids, map id), cameras, localization layout
+//   snapshot  the live state: robot, localization with stationary and
+//             calibration status, trail, field objects, detection frames
+//             with overlays bound to their image identity, the Brain link
+//             (profile, the state block it reads, wheel readings, Pico
+//             operation, reported path), the Pico link, lifecycle events,
 //             sources, workers, diagnostics
 //   frame     the header that precedes one JPEG preview, naming exactly
 //             which frame the bytes belong to

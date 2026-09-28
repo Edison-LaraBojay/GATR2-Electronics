@@ -13,16 +13,18 @@
 
 #include "state/pose_history.h"
 #include "state/robot_state.h"
+#include "state/stillness.h"
 
 namespace navigatr
 {
 
 // Per observation function readiness, for publishers and inspection.
 struct ObservationFunctionStatus {
-    std::string id;
-    std::string type;
-    bool        ready = false;   // calibration complete, producing
-    std::string note;            // calibrating, waiting for wheels, ...
+    std::string     id;
+    std::string     type;
+    bool            ready = false;   // calibration complete, producing
+    std::string     note;            // calibrating, waiting for wheels, ...
+    StillnessStatus stillness;       // stationary window and bias calibration
 };
 
 struct LocalizationStatus {
@@ -31,6 +33,18 @@ struct LocalizationStatus {
     uint64_t                               updates      = 0;   // accepted estimator advances
     uint64_t                               history_size = 0;
     bool                                   clock_mapped = false;   // device to host mapping valid
+    uint64_t    continuity_breaks = 0;   // pose continuity ended by a lost sensor
+    std::string last_break;              // why the latest one ended
+
+    // Some function's stationary window qualified and nothing moved since.
+    bool stationary() const {
+        for (const auto& f : functions) {
+            if (f.stillness.stationary) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     bool allReady() const {
         for (const auto& f : functions) {

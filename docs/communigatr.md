@@ -1,385 +1,841 @@
 # communiGATR
 
-`brain/communiGATR` is the Brain side of the brain link v3 described in
-[interfaces.md](interfaces.md#brain-link-v3). It gives an investiGATR
-`Navigator` the Pi's robot pose and landmark estimates as an ordinary
-`InputSource`, and lets the application place the robot on the field.
+`brain/communiGATR` is the Brain side of the Pi link, brain link v4
+([interfaces.md](interfaces.md#brain-link-v4)). It:
 
-Status: implemented and host tested against a fake Pi on a simulated
-half-duplex bus. The PROS sources compile and link against PROS kernel 4.2.2.
-Nothing here has been validated on the robot or on real RS-485 hardware.
+- opens and keeps a session with the Pi over USB or RS-485;
+- uploads the Brain's robot profile and follows its application;
+- reads the field map and field estimates in chunks and publishes them whole;
+- gives planning and control the robot state and the field as an
+  `investigatr::StateSource`, and forwards planned paths to the Pi viewer;
+- places the robot, runs calibration and recovery actions on the Pi, and reads
+  raw wheel travel for calibration;
+- sums up what the link, profile, sensors, calibration and placement still
+  wait for.
+
+It does not plan routes ([investiGATR](investigatr.md)) or drive motors
+([actuGATR](actugatr.md)). Robot setup, calibration procedures and the two
+test programs are in [Brain setup](brain_setup.md).
+
+Status: host tested against a fake Pi over a simulated RS-485 bus and a
+simulated USB console. The PROS sources (`pros/`) compile only in the PROS
+build. Nothing here has been validated on the robot, on the V5 USB console or
+on real RS-485 hardware.
 
 | Path | Contents |
 |---|---|
 | `include/communigatr/` | public headers; `pros_*.h` are PROS only |
-| `src/` | portable sources (host and PROS): `client.cpp`, `driver.cpp` |
-| `pros/` | PROS only sources: `pros_serial_port.cpp`, `pros_driver.cpp` |
-| `sim/` | host only fake Pi, fake half-duplex bus, test rig |
+| `src/` | portable sources, host and PROS |
+| `pros/` | PROS only sources, never built on the host |
+| `sim/` | host only fake Pi, RS-485 bus, USB console and test rig |
 | `tests/` | host tests |
 
-Namespace `communigatr`. Time is `Seconds` (double) everywhere.
+Namespace `communigatr`. Time is `Seconds` (double) everywhere; the portable
+classes take the time as an argument and have no clock, thread or PROS
+dependency.
 
 ## Layers
 
 ```
-investigatr::Navigator
-  -> InputSource&
-       ProsDriver              PROS: poll task, one mutex, owns everything below
-         Driver                InputSource: units, validity, ages, frames, landmarks
-           Client              protocol: sessions, scheduling, retries, correlation
-             BytePort          nonblocking bytes
-               ProsSerialPort  V5 smart port, generic serial
+application (localization-test, testing)
+  actugatr::Motion, planner      use StateSource and PathSink only
+  ProsLink                       PROS: poll task, bounded mutex, either transport
+    LinkDriver                   StateSource + PathSink: SI units, status, frames, field
+      Client                     protocol: session, scheduling, retries, profile,
+                                 documents, placement, control, wheels, path
+        BytePort                 nonblocking bytes
+          ProsUsbPort            V5 USB user console, NG1 lines, two I/O tasks
+          ProsSerialPort         V5 smart port, generic serial, RS-485 adapter
+  ProsVexImu                     Brain VEX IMU sample carried by GET_STATE
 ```
 
-| Class | Header | Portable | Role |
+| Class or function | Header | Portable | Role |
 |---|---|---|---|
 | `BytePort` | `byte_port.h` | yes | nonblocking `read`/`write` interface |
-| `Client` | `client.h` | yes | brain link v3 state machine; all I/O in `poll(now)` |
-| `Driver` | `driver.h` | yes | `investigatr::InputSource` over a client; no I/O |
-| `ProsSerialPort` | `pros_serial_port.h` | PROS | `BytePort` over the PROS `serial_*` C API |
-| `ProsDriver` | `pros_driver.h` | PROS | owns port, client and driver; poll task; mutex; `InputSource` by delegation |
-
-The portable classes have no clock, thread or PROS dependency. Time is passed
-in, so the same code runs in host tests and on the Brain.
+| `Client` | `client.h` | yes | brain link v4 state machine; all I/O in `poll(now)` |
+| `LinkDriver` | `link_driver.h` | yes | `StateSource` and `PathSink` over a client; no I/O |
+| `RobotProfile`, `makeProfileDocument` | `robot_profile.h` | yes | robot profile in SI units, wire document, shared check |
+| `DocAssembly` | `doc_assembly.h` | yes | one READ_DOC document, bounded and checked |
+| `readinessOf`, `Readiness` | `readiness.h` | yes | readiness summary and decoded health |
+| `encodeUsbLine`, `UsbLineDecoder` | `usb_line.h` | yes | NG1 line codec |
+| `VexImuRecalibration` | `vex_imu_recalibration.h` | yes | Brain VEX IMU calibration gated by the Pi's stationary check |
+| `WheelCalibration` | `wheel_calibration.h` | yes | per-wheel travel scale trials (application helper) |
+| `StartupPlacement` | `startup_placement.h` | yes | once-per-start placement policy (application helper) |
+| `LinkEvents` | `link_events.h` | yes | recovery history for displays (application helper) |
+| `ProsLink` | `pros_link.h` | PROS | owns port, client and driver; poll task; both transports |
+| `ProsUsbPort` | `pros_usb_port.h` | PROS | `BytePort` over the V5 USB console |
+| `ProsSerialPort` | `pros_serial_port.h` | PROS | `BytePort` over a smart port in generic serial mode |
+| `ProsVexImu` | `pros_vex_imu.h` | PROS | VEX IMU as the Brain bench IMU source |
 
 ## PROS use
 
+A program creates one `ProsLink` and keeps it for its whole run. This is what
+both test programs do, with the robot description from
+[brain/robot/gatr2_robot.h](../brain/robot/gatr2_robot.h):
+
 ```cpp
-#include "investigatr/navigator.h"
-#include "communigatr/pros_driver.h"
+#include "communigatr/pros_link.h"
+#include "communigatr/pros_vex_imu.h"
+#include "gatr2_robot.h"
 
-using communigatr::ProsDriver;
-
-ProsDriver*             navigatr  = nullptr; // created once, kept for the program's life
-investigatr::Navigator* navigator = nullptr;
+std::unique_ptr<communigatr::ProsVexImu> g_vex;  // kept for the program's life
+std::unique_ptr<communigatr::ProsLink>   g_link;
 
 void initialize() {
-    communigatr::ProsDriverConfig config;
-    config.port = 10;      // PLACEHOLDER: smart port wired to the RS-485 link
-    config.baud = 115200;  // must match the Pi serial resource
-    navigatr  = new ProsDriver(config);
-    navigator = new investigatr::Navigator(*navigatr);
-    navigatr->start();
-
-    // Bounded waits; never hang in initialize().
-    const double connect_end = ProsDriver::now() + 3.0;
-    while (!navigatr->status().connected && ProsDriver::now() < connect_end) {
-        pros::delay(10);
+    communigatr::LinkConfig config;
+    if (gatr2_robot::kUseUsb) {
+        config.transport = communigatr::Transport::kUsb;
+    } else {
+        config.transport  = communigatr::Transport::kSmartPort;
+        config.smart_port = gatr2_robot::kLinkPort;
+        config.baud       = gatr2_robot::kLinkBaud;
     }
-    const auto   ticket    = navigatr->submitPlacement({0.0, 0.0, 0.0}); // starting pose
-    const double place_end = ProsDriver::now() + 2.0;
-    while (navigatr->placementResult(ticket) == communigatr::PlacementResult::kPending &&
-           ProsDriver::now() < place_end) {
-        pros::delay(10);
+    config.profile = gatr2_robot::profile();          // RobotProfile, SI units
+    if (gatr2_robot::usesVexImu()) {
+        g_vex.reset(new communigatr::ProsVexImu(gatr2_robot::kVexImuPort));
+        communigatr::ProsVexImu* vex = g_vex.get();
+        config.client.bench_imu      = [vex] { return vex->sample(); };
     }
+    g_link.reset(new communigatr::ProsLink(config));
+    g_link->start();  // false: task not created (errno set); call again later
 }
 
-// Control task, fixed period, the only motor writer:
-//   const investigatr::DriveCommand demand = navigator->update(ProsDriver::now());
+// Any task, every loop:
+//   const communigatr::ProsLinkStatus s = g_link->status();   // readiness, profile, stats
+//   const investigatr::RobotState r = g_link->robot(communigatr::ProsLink::now());
+//   if (r.valid()) { ... r.pose, r.age, r.frame ... }
 ```
 
-- `start()` enables generic serial on the port, sets the baud rate, clears the
-  buffers and starts the poll task. It returns false when PROS refuses the
-  port (errno set) and can be called again.
-- Pass `ProsDriver::now()` (seconds since PROS start, from `pros::micros()`)
-  to `Navigator::update`. Ages and link timing are only meaningful when the
-  Navigator and the poll task use the same clock.
-- The Navigator itself is not thread safe; one control task owns it.
+- `start()` only creates the poll task. The task opens the transport and
+  reopens it while it is closed; nothing in `initialize()` waits for the Pi.
+- Pass `ProsLink::now()` (seconds since PROS start, from `pros::micros()`) to
+  `robot()` and to every controller that uses the link. Ages and link timing
+  are only meaningful on that clock.
+- actuGATR's `Motion` takes the `ProsLink` as its `StateSource` and
+  `PathSink` ([actuGATR](actugatr.md)).
+- The planner and the robot state never depend on the VEX IMU: `ProsVexImu`
+  only feeds the GET_STATE sample, and only for a profile whose IMU source is
+  the Brain VEX IMU.
 
-### ProsDriverConfig
+### LinkConfig
 
 | Field | Default | Meaning |
 |---|---|---|
-| `port` | 0 | V5 smart port 1..21 wired to the RS-485 link; must be set |
-| `baud` | 115200 | must match the Pi serial resource |
+| `transport` | `kUsb` | `kUsb`: V5 USB user console. `kSmartPort`: RS-485 adapter on a smart port |
+| `smart_port` | 0 | `kSmartPort` only: V5 port 1..21 |
+| `baud` | 115200 | `kSmartPort` only: must match the Pi serial resource |
 | `poll_period_ms` | 2 | poll task period, at least 1 |
 | `task_priority` | `TASK_PRIORITY_DEFAULT + 1` | poll task priority |
-| `client` | `ClientConfig{}` | see [Client](#client) |
-| `driver` | `DriverConfig{}` | see [Driver](#driver) |
+| `call_timeout_ms` | 20 | bounded mutex wait of every public call |
+| `profile` | empty | `RobotProfile` to upload; when set it replaces `client.profile`. Empty and no `client.profile`: the Pi runs its own XML localization |
+| `client` | `ClientConfig{}` | see [ClientConfig](#clientconfig); `bench_imu` runs in the poll task under the link mutex |
+| `driver` | `LinkDriverConfig{}` | `accept_configured_anchor`, see [Robot state](#robot-state) |
 
-### ProsDriver calls
+The transport choice is explicit and has a matching Pi configuration:
+`brain_profile_usb.xml` (`pros_usb_link`) for USB and `brain_profile_rs485.xml`
+(`linux_serial_link`) for RS-485. There is no automatic choice or failover.
+The transport never changes the robot profile or the localization.
 
-Every call takes the wrapper's mutex; the poll task takes the same mutex
-around each `poll`. No call waits for the bus.
+### ProsLink calls
 
-| Call | Effect |
+Every call takes the link mutex with a bounded wait (`call_timeout_ms`) and
+copies values out. When the mutex is busy the call gives a safe answer and
+counts it in `status().link.call_lock_misses`.
+
+| Call | Effect | Busy answer |
+|---|---|---|
+| `start()` | create the poll task; true once started | |
+| `now()` (static) | poll task clock, seconds | |
+| `status()` | `ProsLinkStatus`, below | `busy` true; only `started`, `transport`, `port_open`, `link` and `usb` current |
+| `robot(now)` | `investigatr::RobotState` | status `kNoLink` |
+| `field(out)` | copy the newest complete field into `out` unless it already holds that generation | `out` unchanged; true when it holds a field |
+| `reportPath(command, path)` | planned path to the Pi viewer, best effort | dropped |
+| `place(pose)` | SET_POSE ticket, 0 when refused | 0 |
+| `placement(ticket)` | `PlacementStatus` | `kPending` for a nonzero ticket (ask again) |
+| `recalibrate()`, `reinitialize()`, `reinitImu()`, `restartAcquisition()` | CONTROL ticket, 0 when refused | 0 |
+| `control(ticket)` | `ControlStatus` | `kPending` for a nonzero ticket |
+| `requestWheels()` | READ_WHEELS ticket, 0 when refused (no session, another read pending) | 0 |
+| `wheels(ticket)` | `WheelStatus` with the readings | `kPending` for a nonzero ticket |
+| `wheelReadings()` | readings of the latest Ok reply of any read, by value | `busy` set, sequence 0, result NotReady |
+| `setProfile(profile)` | replace the configured profile at run time | false |
+| `profile()` | the configured `RobotProfile` | empty profile |
+| `resubmitProfile()` | upload and apply again, clearing a settled rejection | false |
+
+### ProsLinkStatus
+
+| Field | Meaning |
 |---|---|
-| `start()` | open the port and start the poll task |
-| `now()` (static) | poll task clock, seconds |
-| `request(InputRequest)`, `latest(now)` | `InputSource`, forwarded to the driver |
-| `submitPlacement(Pose)` | forwarded to the driver |
-| `placementResult(ticket)`, `placementStatus(ticket)` | forwarded to the driver |
-| `status()` | `ProsDriverStatus`: started, ready, connected, link_age, session, pi_instance, error, peer_version, selection, stats |
+| `busy` | the mutex was not taken in time; the fields below `port_open` are not current |
+| `started`, `transport`, `port_open` | poll task running, selected transport, port open |
+| `ready`, `connected`, `link_age` | session with a state reply; a reply within `link_timeout`; time since the last reply (infinity without a session) |
+| `session`, `pi_instance`, `error`, `peer_version` | current session, Pi instance, last incompatibility and the Pi's version |
+| `readiness`, `summary` | [readiness](#readiness) state and its details (IMU use, decoded health, calibration, Brain IMU calibrating, localized, pose valid) |
+| `profile` | `ProfileStatus`: sync state, id, reason, detail, last result, bytes the Pi holds |
+| `state` | latest GET_STATE Ok of this session, raw wire units |
+| `heading_valid`, `heading` | raw Pi heading, placed or not, while the Pi has a pose; used by wheel calibration |
+| `field_sync` | transfer progress: complete map id, map bytes read, estimate id being read |
+| `field_generation`, `map_id`, `estimate_id`, `field_age` | published field and time since its estimate completed |
+| `stats`, `link`, `usb` | `ClientStats`, `ProsLinkStats`, `ProsUsbStats` counters |
 
-The destructor stops the poll task. Construct the wrapper once and keep it; it
-is not meant to be created per command.
+`ProsLinkStats`: `poll_lock_misses` (poll cycles skipped), `call_lock_misses`
+(busy answers), `opens` (transport open attempts), `serial_closes` (smart
+port closed after repeated errors).
+
+### Tasks and locks
+
+| Task | Priority | Role |
+|---|---|---|
+| `communigatr` | `task_priority` | opens and reopens the transport, then `client.poll(now)` under the mutex every `poll_period_ms` |
+| `communigatr-usb-tx` | `TASK_PRIORITY_DEFAULT` | USB only: writes NG1 lines |
+| `communigatr-usb-rx` | `TASK_PRIORITY_DEFAULT` | USB only: reads stdin, decodes lines |
+
+- Each poll cycle takes the mutex with a wait of one period. A miss skips
+  the cycle and counts in `poll_lock_misses`.
+- Opening runs outside the mutex: only the poll task touches the port, and a
+  smart port open may wait about 100 ms for the port to settle.
+- PROS deletes competition tasks (autonomous, opcontrol) at mode changes
+  without releasing mutexes they hold. Because every wait is bounded, a
+  deleted holder costs skipped cycles and busy answers, all counted, but the
+  link cannot recover until the program restarts. Run loops that call the
+  link in your own tasks, as both test programs do.
+- `std::shared_ptr` is not shared between tasks: the PROS toolchain has no
+  atomic reference counts. `ProsLink` hands out value copies only.
+- The destructor stops the poll task within 250 ms and deletes it only as a
+  last resort. Keep a started link for the program's life.
 
 ### HELLO nonce
 
-The client asks for a nonce once per new HELLO. `ProsDriver` mixes, with a
-murmur3 style finalizer: `pros::micros()` at construction, at `start()` and at
-the call; battery voltage and current; the object's address and a stack
-address; and a call counter. Timing is the main entropy: boot time to the
-first HELLO varies with device enumeration and `initialize()` work. The
-addresses only differ between builds. The nonce only needs to differ from the
-Pi's last four opening nonces. A collision costs one `kResultStale` and a retry
-with a new nonce; a 0 or a repeat is replaced by the client.
+The client asks for a nonce once per new HELLO. `ProsLink` mixes, with a
+murmur3 finalizer, `pros::micros()` at construction, at `start()`, at each
+transport open and at the call; battery voltage and current; an object and a
+stack address; and a call counter. The nonce only has to differ from the Pi's
+last four opening nonces. A collision costs one `kResultStale` and a new
+nonce; a 0 or a repeat is replaced by the client.
 
-## Driver
+## Transports
 
-```cpp
-Driver driver(client);            // client polled by its owner
-Driver driver(client, {true});    // also accept configured anchors
-```
+`BytePort` is the seam: `read` returns what is waiting (0 none, negative on
+error) and `write` queues a whole frame or nothing. Neither blocks.
 
-`Driver(Client&, const DriverConfig& = {})` reads the client's
-latest state; it never polls. Whoever owns the client calls `client.poll(now)`
-every few ms (`ProsDriver` does this).
+### USB (`ProsUsbPort`)
 
-| Call | Effect |
-|---|---|
-| `request(InputRequest)` | wanted landmark: ids 1..255 are sent as the wire id; `{}` or any other id releases the Pi selection |
-| `latest(now)` | `InputSnapshot` built from the latest GET_STATE of the current session |
-| `submitPlacement(Pose)` | SET_POSE in wire units; ticket, or 0 when another placement is pending or the pose is not finite or outside the wire range |
-| `placementResult(ticket)`, `placementStatus(ticket)`, `placementPending()` | from the client |
-| `client()`, `config()` | access |
+Each link frame travels as one NG1 line, `"NG1:" + uppercase hex + "\n"`
+([USB NG1 envelope](interfaces.md#usb-ng1-envelope)). The line codec
+(`usb_line.h`) is portable and follows the Pi's `pros_usb_link` parser: the
+last marker in a line counts, text before it is ignored, a trailing `\r` is
+stripped, the digits are uppercase, even in number and 2..256 long, and any
+fault drops the whole line. A line longer than 516 characters is dropped.
 
-`DriverConfig::accept_configured_anchor` (default false): also accept a Pi pose
-whose field anchor came from its `<InitialPlacement>` rather than from a Brain
-SET_POSE.
+- `open()` opens the PROS named stream `/ser/ngtr`, activates it, disables
+  PROS output COBS, and starts whichever I/O task is not running. Any failed
+  step returns false (errno set) and is retried by the poll task.
+- COBS off applies to all PROS output in the program, so console text
+  (`printf`) arrives plain and the Pi skips it. Each NG1 line is written with
+  one call, which the kernel keeps whole between other console output.
+- Input comes from stdin. Kernel 4.2.2 appends a NUL after the data it
+  returns, so one byte of the read buffer stays free.
+- The client's `write` only pushes onto a one-slot queue; a full slot is a
+  failed attempt that the client counts. Decoded frames wait in a four-slot
+  queue. Both queues are lock-free, one producer and one consumer.
+- A queued frame older than `clamp(response_timeout * 800, 1, 10000)` ms (48
+  ms by default) is dropped unwritten, so a stalled writer never replays an
+  expired request.
+- `SERCTL_NOBLKWRITE` has no effect in kernel 4.2.2, and USB writes can block
+  while no host is reading. Only the transmit task makes USB calls, so a
+  blocked write stalls that task alone: the poll task, the program and
+  battery-only operation carry on. Program `printf` calls may still block the
+  task that makes them while no host reads; keep console output low or off.
+- The port stays open across unplugging; the Brain sees timeouts until the
+  cable is back. The Pi reopens its device at most once a second and does
+  not answer the first request after reopening (it still applies it); the
+  next request, a resend or a new poll, gets an answer.
 
-### Units
+### RS-485 (`ProsSerialPort`)
 
-Wire to snapshot: mm to m, centidegrees to rad (wrapped to (-pi, pi]), ms to s.
-Placement: m to mm and rad to centidegrees, rounded to the nearest unit, heading
-normalized to (-18000, 18000].
+- `open()` enables generic serial on the smart port, then sets the baud and
+  flushes, retrying every 2 ms for up to 100 ms while the port settles. It
+  returns false when PROS refuses, and can be called again.
+- `read` returns only bytes already received. `write` is all or nothing: the
+  whole frame must fit the output FIFO, else it is refused (not an error).
+- After 50 consecutive read or write errors the port counts as closed
+  (`serial_closes`), and the poll task reopens it at most once a second.
+- The V5 smart port is assumed to switch its own RS-485 direction. Not
+  validated.
 
-### Robot estimate
+## Robot profile
 
-`robot.valid` requires all of:
-
-- a GET_STATE Ok of the current session;
-- `kRobotPoseValid`, `kRobotLocalized` and `kRobotAgeKnown`;
-- an accepted anchor: `kRobotAnchorCommand` (a SET_POSE from any session of
-  this Pi instance), or `kRobotAnchorConfigured` with
-  `accept_configured_anchor`;
-- no placement pending: from `submitPlacement` until the ticket is terminal,
-  including the phase where the Pi answered Ok and the driver waits for a state
-  that shows the placement's anchor.
-
-Pose and age are filled only when valid. Status and health bits are never
-treated as acknowledgements.
-
-Ages:
-
-```
-robot.age    = robot_age_ms / 1000    + round_trip + (now - received_at)
-landmark.age = landmark_age_ms / 1000 + round_trip + (now - received_at)
-```
-
-`round_trip` is the matched GET_STATE's write to its reply; `received_at` is
-the poll time that handled the reply. The Pi takes its ages at its cycle start,
-so the sum is an upper bound only to within the Pi cycle processing time (a
-few ms). Replies are noticed up to one poll period late, which makes ages
-slightly conservative. No clock values from different devices are subtracted.
-
-### Frame generation
-
-`frame` is 0 while there is no state of the current session. Otherwise it is a
-number, starting at 1, that changes whenever the identity
-(`pi_instance`, `session`, `odometry_epoch`, `anchor_revision`) of the state
-changes. Any change is a coordinate discontinuity: a Navigator that captured
-the old frame fails with `kFrameChanged` or, when the link is down,
-`kInputLost`. Generations are unique per driver instance.
-
-Changes come from a Pi restart or reset (instance), a new Brain session
-(session, including a Brain reboot), a Pico restart (odometry epoch), and an
-applied placement (anchor revision).
-
-### Link
-
-- `connected`: session open, a GET_STATE Ok received in it, and the last
-  correlated reply within `link_timeout` (0.25 s).
-- `link_age`: now minus the last correlated reply; infinity without a session.
-
-### Landmark statuses
-
-Checked in this order:
-
-| Condition | `status` |
-|---|---|
-| no landmark requested | `kNotRequested`, id 0 |
-| requested id 0 or above 255 (no wire id) | `kUnknownLandmark` |
-| not connected | `kStale` |
-| SELECT not acknowledged, or no state since the ack | `kPending` |
-| SELECT answered `kResultUnknownLandmark` | `kUnknownLandmark` |
-| SELECT answered `kResultLandmarkUnsupported` (Pi world estimation is noop) | `kUnsupported` |
-| state carries the id with source none | `kUnavailable` |
-| source nominal | `kAvailable`, `kNominal`, `age_known` false |
-| source observed | `kAvailable`, `kObserved`, `age_known` true |
-
-The landmark pose is the physical landmark pose from the same state as the
-robot pose, so it shares its frame. The Navigator applies the destination
-offset once. The Navigator requests a landmark only while a landmark waypoint
-is active; `request({})` releases the selection on the Pi.
-
-## Client
+The Brain owns the robot's localization description and sends it to the Pi as
+a typed document; the Pi never receives XML or file paths
+([Robot profile exchange](interfaces.md#robot-profile-exchange)).
 
 ```cpp
-Client client(port, nonce_function, ClientConfig{});
-client.poll(now);   // every few ms, never blocks
+#include "communigatr/robot_profile.h"
+
+communigatr::TrackingWheel forward;
+forward.encoder_port   = 0;        // naviGATR encoder port: 0 J2, 1 J3, 2 J4
+forward.radius         = 0.024;    // PROVISIONAL
+forward.counts_per_rev = 4000;     // encoder shaft
+forward.x = 0.0; forward.y = 0.15; // contact point, robot frame (PLACEHOLDER)
+forward.angle          = 0.0;      // measures forward travel
+
+communigatr::TrackingWheel sideways = forward;
+sideways.encoder_port = 1;
+sideways.x = 0.15; sideways.y = 0.0;   // PLACEHOLDER
+sideways.angle = investigatr::kPi / 2; // measures leftward travel
+
+communigatr::RobotProfile p;
+p.topology       = communigatr::LocalizationTopology::kTwoWheelImu;
+p.wheels         = {forward, sideways};
+p.imu_source     = communigatr::ImuSource::kBrainVex;
+p.vex_smart_port = 1;
+p.footprint      = {0.23, 0.23, 0.23, 0.23}; // front, back, left, right (PLACEHOLDER)
 ```
 
-`poll(now)` reads and correlates replies, times out the outstanding request,
-then sends at most one request. `now` also stands for the write call's return.
+The values above are the placeholders of the current bench; the real ones
+live in `gatr2_robot.h` ([Where settings live](brain_setup.md#1-where-settings-live)).
 
-| ClientConfig | Default | Meaning |
+### Fields
+
+| `RobotProfile` | Wire | Rule |
 |---|---|---|
-| `response_timeout` | 0.060 s | from the write return; see the budget in [interfaces.md](interfaces.md#bus-ownership-and-timing) |
-| `request_gap` | 0.005 s | after a reply or a timeout |
-| `state_period` | 0.020 s | GET_STATE poll period |
-| `link_timeout` | 0.25 s | connected while a correlated reply is this recent |
-| `pending_retry` | 0.020 s | SET_POSE resend after `kResultPending` |
-| `placement_attempts` | 10 | sends per placement |
-| `placement_deadline` | 1.0 s | from the first send through the GET_STATE that confirms the Ok |
-| `select_attempts` | 5 | sends per SELECT transaction |
-| `select_retry` | 0.5 s | wait before a new SELECT after a failed one |
-| `hello_backoff` | 1.0 s | HELLO period after an unsupported version or op |
+| `topology` | topology | see the table below |
+| `wheels` | wheel records | 2 or 3 by topology |
+| `imu_source` | imu_source | `kNone`, `kPico`, `kBrainVex` |
+| `imu_port` | imu_port | Pico IMU port with `kPico` (0 on HAT v2), else 0 |
+| `vex_smart_port` | vex_smart_port | 1..21 with `kBrainVex`, else 0 |
+| `imu_invert` | imu_flags bit 0 | `kPico` only: Pico yaw sign flipped |
+| `calibration.window` | calibration_window_ms | Pi IMU bias stationary window; 0 = Pi default, else 0.5..20 s |
+| `calibration.still_rate` | still_rate_cdps | gyro rate still counted as still, rad/s; 0 = default, else 0.1..20 deg/s |
+| `calibration.still_travel` | still_travel_um | per-wheel travel still counted as still over the window; 0 = default, else 20..5000 um |
+| `footprint` | footprint_*_um | distance from the origin to each side, 0..2 m, nonzero length and width |
+| `cameras` | camera records | up to 4, distinct Pi camera slots, mount within 2 m and 360 deg |
 
-Scheduling, one request outstanding: HELLO while no session is open; then
-placement > landmark selection > GET_STATE poll. Before each send the client
-drains its receive buffer and resets its frame reader. Request ids count from 1
-per boot and wrap 65535 to 1.
+| `TrackingWheel` | Wire | Rule | Kind |
+|---|---|---|---|
+| `encoder_port` | encoder_port | distinct per wheel; the Pi checks it is wired | encoder |
+| `counts_per_rev` | counts_per_rev | encoder shaft counts, 1..1000000 | encoder |
+| `reversed` | flags bit 0 | encoder polarity: positive counts mean travel against `angle` | encoder |
+| `gear_ratio` | gear_micro | encoder turns per wheel turn, 0.1..10 | encoder |
+| `radius` | radius_um | 1..200 mm | geometry |
+| `x`, `y` | x_um, y_um | contact point, robot frame, within 1 m | geometry |
+| `angle` | angle_mdeg | measuring direction, CCW from +x, within 360 deg | geometry |
+| `travel_scale` | travel_scale_ppm | measured distance correction, 0.9..1.1; 1.0 uncalibrated | empirical |
 
-Retries:
+The Pi applies each kind once: counts per revolution, gearing and polarity in
+the encoder sensor; radius and direction in the observation model; the travel
+scale as a factor on that travel. A measured travel test sees only the product
+of radius, gearing and travel scale, so keep radius and gearing physical and
+put the measured correction in `travel_scale`; its range is narrow on purpose.
 
-- HELLO: same bytes every timeout plus gap while the Pi is silent (the normal
-  connecting state, no attempt limit). `kResultStale` means a new nonce.
-- SET_POSE: same bytes on timeout, and `pending_retry` after `kResultPending`,
-  within `placement_attempts` and `placement_deadline`.
-- SELECT: same bytes on timeout within `select_attempts`, then a new
-  transaction after `select_retry`.
-- GET_STATE: never resent; every poll has a new request id.
+| Topology | Wheels | IMU source | Observability |
+|---|---|---|---|
+| `kTwoWheelImu` | 2 | `kPico` or `kBrainVex` | independent directions |
+| `kTwoForwardWheelImu` | 2 | `kPico` or `kBrainVex` | both angles 0 or 180 deg; no sideways travel assumed |
+| `kThreeWheel` | 3 | `kNone` or `kPico` | the three wheels resolve x, y and rotation |
 
-### Placement tickets
+A Brain VEX IMU with three wheels is refused (`ImuCombination`): its samples
+run on the Brain clock and cannot be fused as an independent observation. The
+Pico IMU chip (BNO08X or ASM330) is fixed by the Pico firmware build;
+`kPico` only selects the Pico IMU port.
 
-`submitPlacement(x_mm, y_mm, heading_cdeg)` returns a ticket, or 0 while
-another placement is pending. Only the latest ticket is tracked; older tickets
-report `kNone`. A ticket submitted with no session waits for the first
-session.
+### Documents and the shared check
+
+- `makeProfileDocument(profile)` converts to wire units (micrometers,
+  millidegrees, ratios x 1e6), rounding to the nearest unit, and runs the
+  shared `gatr2::validateRobotProfile`, the same check the Pi runs first. The
+  result carries the bytes, or the first failure as a `ProfileReason` and the
+  wheel or camera index. A value that does not fit the wire reports the
+  reason of its group.
+- `toProfileDoc` does the same into a `gatr2::RobotProfileDoc`.
+- `profileId(doc)` is the document's CRC-32, the id the Pi reports.
+- `profileReasonName(reason)` gives a short name for the screen.
+- A profile that fails the Brain check is `ProfileSync::kInvalid` with its
+  reason and is never sent. The Pi's own capability checks (ports wired, IMU
+  port present, Brain IMU mailbox configured, camera slots) can still reject
+  it.
+
+## Profile sync
+
+With a profile configured the client keeps the Pi running exactly that
+document:
+
+```
+first GET_STATE of a session
+  Pi runs this id   -> kApplied, nothing uploaded
+  otherwise         -> kWriting: PROFILE_WRITE chunks of up to 106 bytes
+                    -> kApplying: PROFILE_APPLY, again every pending_retry on Pending
+                    -> kApplied: a state showing it applied (after an APPLY Ok,
+                       the next state poll)
+                       or kRejected (ProfileRejected: the Pi's reason and detail)
+```
+
+| `ProfileSync` | Meaning |
+|---|---|
+| `kNone` | no profile configured; the Pi uses its XML localization |
+| `kInvalid` | failed the Brain side check; never sent |
+| `kWaiting` | no state in this session yet |
+| `kWriting` | sending the document |
+| `kApplying` | PROFILE_APPLY sent, the Pi answered Pending, or Ok and no state shows it yet |
+| `kApplied` | a state reply shows the Pi running this profile |
+| `kRejected` | refused; settled until the session changes or `resubmitProfile()` |
+
+- Only a state reply makes a profile `kApplied`. An APPLY Ok can arrive while
+  the newest state still predates the Pi's swap and carries the old
+  profile's epoch and placement; the client sends no more APPLY and waits for
+  the next state poll. So whenever `profileApplied()` is true, the state that
+  `robot()` and readiness read describes this profile. A state after the Ok
+  that shows another profile restarts the upload.
+- The upload resumes where the Pi's staging ends (`received`) within a
+  session, and starts over when the Pi reports a gap or other bytes.
+- A state poll goes between profile requests after a timeout. InvalidArgument
+  three times in a row (staging lost or replaced) settles as `kRejected` with
+  that result, so there is no retry storm.
+- The Pi is authoritative: a state that shows another profile applied, or
+  this one not applied, restarts the upload unless a rejection is settled.
+- A rejection is remembered by the Pi per id. `resubmitProfile()` with the
+  same document gets the same answer; change the profile to clear it.
+- `profileConfigured()`, `profileApplied()` and `profile()` report it.
+
+### Runtime change
+
+`setProfile(profile)` (on `ProsLink` and `LinkDriver`; `Client::setProfile`
+takes the document) replaces the configured profile, for example when
+localization-test applies a wheel calibration:
+
+- A profile the Brain check refuses returns false and the running profile
+  stays. With no valid profile running, the refused one is kept as `kInvalid`
+  so its reason shows.
+- The same document again returns true and changes nothing.
+- A new id goes through the sync above. The Pi applies it as a new profile:
+  a new odometry epoch, history cleared, unplaced, any unapplied SET_POSE
+  withdrawn. The program must place the robot again; nothing places
+  automatically.
+
+## Field map and estimate
+
+The Pi publishes the field map (kind 1, `doc_id` = `map_id`) and field
+estimate snapshots (kind 2) as documents; GET_STATE names the current ids
+([Field documents](interfaces.md#field-documents-read_doc)).
+
+**Map**
+- Read when the state's `map_id` is nonzero and differs from the complete map
+  held. Chunks of up to 96 bytes are assembled by `DocAssembly` into a buffer
+  of `kFieldMapMaxLen` (128 objects, 3608 bytes) allocated once.
+- Every chunk must name the same kind and id, repeat the first chunk's
+  `total_len` and `crc32`, start where the previous one ended and stay inside
+  `total_len`. The complete document must match its CRC, have CRC-32 equal to
+  `map_id`, and pass `validateFieldMap`.
+- The complete map is cached by `map_id` across sessions and Pi restarts (not
+  across Brain restarts). A new map id replaces it.
+
+**Estimate**
+- Read when the map is current, the state's `estimate_id` is new, and
+  `field_period` (0.5 s) has passed since the last read started; a read in
+  progress continues.
+- It must name the held map and pass `validateFieldEstimate` against it: the
+  same count and ids in map order, fixed objects nominal, source none exactly
+  when not valid.
+- Stale (the Pi no longer holds that id) restarts from the newest id at once.
+  Three failures of one kind in a row wait `transfer_backoff` (1 s).
+  Unavailable waits `field_period`.
+- Estimate ids restart in each Pi process, so the client keys the published
+  estimate by (`pi_instance`, `estimate_id`).
+
+**Publication**
+- A map and an estimate checked against it are published together as one
+  `FieldPublication` generation. A partial document is never visible.
+- A session loss drops documents in progress and keeps the published pair.
+
+### Field for planning (`LinkDriver::field`)
+
+`field(out)` copies the newest publication into an `investigatr::Field`:
+
+- mm to m, centidegrees to rad wrapped to (-pi, pi];
+- the boundary, every object with kind, obstacle, estimated and reference
+  flags, nominal pose, collision box, estimate source, validity and pose;
+- `generation` changes with every publication, and `out` is left alone when
+  it already holds it;
+- `frame` numbers the estimate's anchor (`pi_instance`, `session`,
+  `odometry_epoch`, `anchor_revision`) the same way `robot()` numbers the
+  robot's, so `field.frame == robot.frame` exactly when the estimate is
+  under the robot's current anchor;
+- `received_at` is when the estimate completed.
+
+Observed ages. The Pi takes a new estimate only when its content changes, so
+an estimate's `age_ms` is the age at the snapshot. The client records the
+send time of the last state poll that did not show the id yet
+(`snapshot_after`), and the driver reports `age_ms + (completed_at -
+snapshot_after)` at `received_at`, an upper bound. An estimate that was
+already current at the first state of a session has an unknown snapshot time
+and an infinite observed age, so consumers that bound the age treat it as
+stale until the Pi takes a new one.
+
+Landmark counts come from the Pi's field definition: 0 to 128 objects, one
+READ_DOC chunk for small maps and up to 38 for the largest.
+
+## Robot state
+
+`LinkDriver::robot(now)` (and `ProsLink::robot`) returns an
+`investigatr::RobotState`. The status is the first unmet condition:
+
+| Status | Condition |
+|---|---|
+| `kNoLink` | not connected: no session with a state reply, or no reply within `link_timeout` |
+| `kNoProfile` | a profile is configured and not applied |
+| `kCalibrating` | Pi calibration running, waiting for stillness, or waiting for data |
+| `kUnplaced` | not localized, the anchor is not accepted, or a placement is in flight |
+| `kNoPose` | the Pi has no pose or its age is unknown |
+| `kValid` | pose, age and frame are filled |
+
+- Units: mm to m, centidegrees to rad wrapped to (-pi, pi].
+- Age: `robot_age_ms / 1000 + round_trip + (now - received_at)`, where
+  `round_trip` is the matched GET_STATE's write to its reply. No clock value
+  of one device is subtracted from another's.
+- Frame: a number that changes whenever (`pi_instance`, `session`,
+  `odometry_epoch`, `anchor_revision`) changes: a Pi restart or reset, a new
+  Brain session, a new odometry epoch on the Pi (new profile,
+  reinitialization, source restart), or a placement. Any change is a
+  coordinate discontinuity; actuGATR fails a running command with
+  `kFrameChanged`.
+- Anchors: a pose anchored by a Brain SET_POSE (any session of this Pi
+  instance) is accepted. `LinkDriverConfig::accept_configured_anchor` also
+  accepts the Pi's configured initial placement; it is off by default.
+- A failed Pi calibration (`kCalibrationFailed`) does not block the pose;
+  readiness shows it.
+
+## Readiness
+
+`readinessOf(client, now, accept_configured_anchor)`, also
+`LinkDriver::readiness(now)` and `ProsLinkStatus::readiness`, gives the first
+unmet condition in this order. Both programs show it; it never acts.
+
+| `Readiness` | Condition | What it takes |
+|---|---|---|
+| `kConnecting` | no state reply yet since start | the Pi service, the link |
+| `kReconnecting` | had one; link or session lost now | automatic |
+| `kProfileRejected` | refused by the Brain check or the Pi | fix the profile (reason and detail in `ProfileStatus`) |
+| `kProfilePending` | configured profile not applied yet | automatic |
+| `kSensorsUnavailable` | profile encoders not fresh, or the profile's IMU source not fresh or failed | Pico link, encoders, IMU |
+| `kSensorsInitializing` | Pico IMU starting or aligning, Brain VEX IMU calibrating, or placed with no pose yet | hold still |
+| `kWaitingStill` | Pi IMU calibration saw movement | hold the robot still |
+| `kCalibrating` | Pi IMU calibration collecting a window, or waiting for data | hold still |
+| `kCalibrationFailed` | no qualified window within the Pi's bound | hold still, then recalibrate |
+| `kNeedsPlacement` | not placed, anchor not accepted, or a placement in flight | place the robot |
+| `kReady` | placed pose from the Pi | |
+
+- Only the configured profile's IMU source counts. An absent or failed Pico
+  IMU never holds back a Brain VEX IMU profile; a three-wheel profile without
+  IMU checks none. Without a Brain profile the Pi XML decides and the IMU is
+  not checked.
+- `LinkReadiness` also carries the IMU use, the decoded health bits
+  (`HealthBits`: encoders fresh, IMU fresh, vision, bias calibrated, Pico
+  link, IMU initializing, IMU failed, stationary), the calibration state
+  (`calibrationName`), whether the Brain IMU is calibrating, localized and
+  pose valid.
+
+## Placement
+
+`place(pose)` (`ProsLink`, `LinkDriver`) sends the robot origin's field pose
+as SET_POSE, rounded to mm and centidegrees with the heading in (-18000,
+18000]. It returns a ticket, or 0 when refused: no session with a state
+reply, the configured profile not applied, another placement pending, or a
+pose that is not finite or outside the wire range. Only the latest ticket is
+tracked.
 
 | `PlacementResult` | Meaning |
 |---|---|
-| `kPending` | queued, in flight, or Ok and waiting for a GET_STATE that shows its anchor |
-| `kApplied` | a GET_STATE after the Ok reports `anchor_revision` at or after the Ok's |
-| `kRejected` | error result; `PlacementStatus::result` has it |
-| `kTimedOut` | attempts or deadline used up; outcome unknown, it may still apply |
+| `kPending` | queued, in flight, or Ok and waiting for a state that shows its anchor |
+| `kApplied` | a state after the Ok reports the Ok's anchor revision |
+| `kRejected` | error result in `PlacementStatus::result` (NotReady when the Pi has no applied profile) |
+| `kTimedOut` | `placement_attempts` or `placement_deadline` used up; outcome unknown, it may still apply |
 | `kSessionLost` | the session ended first; never resent |
 
-`PlacementStatus` also carries the `odometry_epoch` and `anchor_revision` from
-the Ok reply. A timed out placement that applies later changes the anchor
-revision, so the driver reports a new frame generation.
+- SET_POSE is resent with the same bytes on timeout, before any other
+  request (a newer id would make it stale on the Pi), and after
+  `pending_retry` on Pending. With a Brain bench IMU one state poll goes
+  between Pending resends, so the Pi keeps receiving IMU samples.
+- The robot reads `kUnplaced` from submission until the ticket settles, so a
+  pose from before the placement is never used after it.
+- Program start and recovery are different: `StartupPlacement` (application
+  helper) allows one automatic placement at the configured start pose per
+  program start, after the link, profile and sensors are ready. After a
+  reconnect, a Pi restart, a profile change or a reinitialization the
+  program shows Needs placement and waits for the operator
+  ([Placement](brain_setup.md#6-placement)).
 
-### Selection, readiness, errors
+## Control: calibration and recovery actions
 
-- `selectLandmark(id)` sets the wanted wire id (0 = none); the driver calls it
-  from `request()`. `selection()`: `kNotRequested`, `kPending`, `kActive`,
-  `kUnknownLandmark`, `kUnsupported`. Unknown and unsupported are settled until
-  the wanted id or the session changes.
-- `ready()`: session open and a GET_STATE Ok received in it.
-- `error()`: `kUnsupportedVersion` or `kUnsupportedOp`. Terminal: the session
-  is dropped and HELLO repeats every `hello_backoff`. Cleared when ready again.
-  `peerVersion()` gives the Pi's version.
-- `stats()`: `requests`, `resends`, `replies`, `timeouts`, `uncorrelated`,
-  `bad_frames`, `drained_bytes`, `read_errors`, `write_errors`, `sessions`,
-  `session_losses`, `pi_restarts`, `stale_hellos`, `unexpected`.
+| Call | Action | On the Pi | Pose |
+|---|---|---|---|
+| `recalibrate()` | 1 | stationary check, then restart the IMU bias calibration; Ok with calibration none for a Brain VEX IMU profile | holds |
+| `reinitialize()` | 2 | stationary check, then a localization reset: new odometry epoch, unplaced | placement needed |
+| `reinitImu()` | 3 | Pico IMU reinitialization, then recalibration; needs a Pico IMU profile and v2 Pico firmware | holds |
+| `restartAcquisition()` | 4 | stationary check, then the Pico zeroes its counters under a new acquisition epoch; localization rebases | holds |
 
-## Sessions and restarts
+Each returns a ticket, or 0 when refused (no session with a state reply, or
+another control pending). `control(ticket)` (`controlStatus` on `Client`)
+gives:
 
-A session is one Brain application run. The protocol rules are in
-[interfaces.md](interfaces.md#sessions); this is what the Brain side does.
+| `ControlResult` | Meaning |
+|---|---|
+| `kPending` | queued, in flight, or the Pi answered Pending (Pico or calibration working) |
+| `kOk` | done; `calibration` is the Pi calibration state after it |
+| `kFailed` | ran and failed; `detail` is a `gatr2::ControlDetail` (PicoLink, ImuAbsent, ImuUnused, PicoRefused, TimedOut, Calibration) |
+| `kNotStationary` | the robot moved in the Pi's stationary window; nothing started |
+| `kNotReady` | the Pi has no applied robot profile |
+| `kRejected` | another error result, in `result` |
+| `kTimedOut` | before any reply: no reply to `control_attempts` sends or within `control_deadline` of the first send. After a reply: no final result within `control_wait` (20 s) of the first send. Outcome unknown |
+| `kSessionLost` | the session ended first; never resent |
 
-Brain reboot (the Pi keeps running):
+- A CONTROL is resent with the same request id and bytes, never a new id.
+  Before the first reply the Pi may not have it, so a timeout resends it at
+  once, before any other request. Once the Pi has answered it holds the
+  record and answers that id after newer ones, so a timeout or a failed write
+  resends it after `control_retry` (0.1 s) with state polls in between, and
+  while the Pi answers Pending it is asked again every `control_retry`. Only
+  `control_wait` or a session loss ends it then: a pulled cable costs time,
+  not the outcome. The Pi deduplicates it, so a lost reply never runs the
+  action twice or restarts a Pico command.
+- The stationary condition is the Pi's (over the last 300 ms, every profile
+  encoder moved less than 1 mm and, with a Pico IMU, the yaw rate stayed
+  under 2 deg/s). The Brain never assumes stillness from zero motor
+  commands.
 
-1. The new program creates a new client: no session, request ids from 1, no
-   cached input. `latest()` reports frame 0, not connected, robot invalid.
-2. HELLO with a fresh nonce opens a new session. The Pi clears the old
-   session's selection, target latch and duplicate records; localization is
-   untouched.
-3. The first GET_STATE Ok makes the client ready. If the Pi's anchor came from
-   a SET_POSE of an earlier boot, the pose is valid at once, in a new frame
-   generation.
-4. The application's starting SET_POSE applies even when its request id and
-   pose equal the old boot's, because dedupe and placement identity include
-   the session.
-5. Delayed replies to the old session fail correlation and are counted.
-   Delayed old-session requests get `kResultUnknownSession` on the Pi.
-6. Nothing resumes: the Navigator is new, and only the new program issues
-   commands.
+### Brain VEX IMU recalibration
 
-Pi restart or `System::reset()` (the Brain stays on):
+VEX firmware calibrates the Brain VEX IMU (`pros::Imu::reset`); the Pi judges
+stillness. `VexImuRecalibration` joins the two so the calibration never
+starts while the robot moves:
 
-- The next correlated reply carries a different `pi_instance` (or
-  `kResultUnknownSession`). The client drops the session: cached state is
-  cleared, so the driver reports frame 0 and not connected; a pending
-  placement becomes `kSessionLost` and is never resent; the selection is
-  cleared.
-- An active Navigator command fails with `kInputLost`.
-- The client opens a new session. The restarted Pi has no anchor, so the robot
-  stays invalid until the application submits a new placement.
+1. `begin(link.recalibrate())`: CONTROL recalibrate. For a Brain VEX IMU
+   profile the Pi runs its stationary check and calibrates nothing itself.
+2. The Pi's Ok: `update()` returns `kStart`; the program calls
+   `ProsVexImu::recalibrate()` and passes its result to `started()`.
+   NotStationary ends the run as `kMoving` with nothing started; any other
+   answer, or none, as `kRefused`.
+3. `kCalibrating` until the IMU sample stops reporting calibrating, then
+   `kDone` with a valid sample, else `kImuFailed` (also when the IMU does not
+   report calibrating within 1 s of the start, or calibrates longer than the
+   limit, 10 s by default).
 
-Link loss (cable, Pi process stalled):
+```cpp
+communigatr::VexImuRecalibration g_recal;   // one per program
 
-- No correlated replies: after `link_timeout` the driver reports not
-  connected, the robot pose ages out, and the landmark is `kStale`. An active
-  command fails with `kInputLost`.
-- The session stays open. When replies resume in the same session the frame
-  generation is unchanged and the driver is connected again. Nothing resumes;
-  the application must issue a new command.
+// On the button:
+if (!g_recal.begin(g_link->recalibrate())) { /* refused: no link, or a control pending */ }
 
-Placement acknowledgement:
+// Every loop, in the program's task (recalibrate() may block about 1 s):
+if (g_recal.active()) {
+    const auto s = g_recal.update(g_link->control(g_recal.ticket()), g_vex->sample(),
+                                  communigatr::ProsLink::now());
+    if (s == communigatr::VexRecalibrationState::kStart) {
+        g_recal.started(g_vex->recalibrate(), communigatr::ProsLink::now());
+    }
+}
+// Screen: communigatr::toString(g_recal.state())
+```
 
-- `kResultOk` from the Pi means localization applied that placement. The
-  client still waits for a GET_STATE that shows its anchor before `kApplied`,
-  and the driver reports the robot invalid until then, so a pose from before
-  the placement is never used after `kApplied`.
-- `kTimedOut` does not mean "not applied". Check the robot pose, or place
-  again.
+- `ProsVexImu::recalibrate()` alone starts the calibration at once with no
+  stillness check; programs call it only from `kStart`.
+- The check covers the moment before the start. The VEX calibration then
+  takes about 2 s, and the helper does not watch the wheels during it; keep
+  the robot still until it shows done. Samples are invalid meanwhile, so the
+  Pi invalidates the pose (a used sensor lost, spec rule in
+  [Brain setup section 8](brain_setup.md#8-sensor-loss-and-recovery)); place
+  the robot again afterwards.
+- With a Pico IMU profile, CONTROL recalibrate itself is the recalibration
+  (the Pi's windowed bias calibration); the helper is not used.
+- The Pi applies no bias to the VEX source, so the calibration is never
+  applied twice.
+
+## Wheel readings
+
+`requestWheels()` asks for one READ_WHEELS read (scheduled after control and
+the due state poll) and returns a ticket, or 0 when refused: no session, or
+another read pending. `wheels(ticket)` (`wheelStatus` on `Client`) follows it
+until it settles; only the latest ticket is tracked.
+
+| `WheelResult` | Meaning |
+|---|---|
+| `kPending` | queued or in flight |
+| `kOk` | answered; `WheelStatus::readings` holds this read |
+| `kRejected` | error result in `WheelStatus::result`: NotReady without an applied profile, Unavailable on a Pi config without a Brain profile |
+| `kTimedOut` | no reply to the one send (lost request or reply, failed write, cable out); ask again |
+| `kSessionLost` | the session ended first |
+
+A read is sent once and never resent; a caller that needs it asks again with
+a new ticket.
+
+| `WheelReadings` | Meaning |
+|---|---|
+| `sequence` | Ok replies so far, 0 = none |
+| `received_at`, `round_trip` | poll time of the reply and its request's round trip |
+| `result` | in `wheelReadings()`: the last reply's result |
+| `count`, `wheels[]` | one `gatr2::WheelReading` per profile wheel, in profile order |
+| `busy` | `ProsLink::wheelReadings()` only: the link was busy and nothing above is current |
+
+`wheelReadings()` keeps the readings of the latest Ok reply of any read, for
+display. A calibration step uses the readings of its own ticket.
+
+A reading has the port, fresh and valid flags, the encoder discontinuity
+counter, raw counts, `travel_um` (counts per revolution, gearing, polarity and
+radius applied, travel scale not) and the Pi-side age. `WheelCalibration`
+(application helper) turns two readings around a measured push into a
+proposed `travel_scale`, with its rejection rules
+([Per-wheel calibration](brain_setup.md#4-per-wheel-calibration)).
+
+## Path reports
+
+`reportPath(command, path)` (`PathSink`) sends the plan's vertices for the Pi
+viewer: every segment start and translation end, in field mm, repeats
+removed. More than 13 points are thinned evenly to 13 with the first and last
+kept. An empty path clears the report. It is best effort: one attempt, a newer
+report replaces an unsent one, and it is dropped without a session. It never
+changes localization.
+
+## Reconnect and recovery
+
+A timeout means the link was lost, not that a device restarted. Restarts are
+seen from identities: the Pi's `pi_instance`, the session, the odometry
+epoch, the anchor revision, and on the Pi the Pico's boot and epochs.
+
+| Event | What the Brain does |
+|---|---|
+| USB cable out and back in | the session stays; status reads not connected after `link_timeout`; replies resume in the same session. With a Brain VEX IMU profile an outage over 250 ms stops the IMU samples, so the Pi invalidates the pose: placement needed |
+| RS-485 port errors | the port closes after 50 errors in a row and reopens at most once a second |
+| Pi silent (process stalled) | as a cable cut; the session is never dropped for silence alone |
+| Brain program restart | new client, new session, no command carried over; the first state shows the profile applied, so nothing is uploaded. With a Brain VEX IMU profile the IMU samples stopped during the restart, so the pose is invalid: placement needed (startup placement does it at program start) |
+| Pi restart or reset | the new `pi_instance` (or UnknownSession) ends the session: in-flight placement and control become `kSessionLost` and are never resent; new session, profile uploaded again, placement needed |
+| Profile upload cut | resumes at the Pi's `received` in the same session, from 0 in a new one; a Pi restart mid-upload starts over |
+| Map or estimate transfer cut | the partial document is dropped; the read starts again; the published field stays |
+| Pico restart or acquisition restart | a used sensor restarted: the Pi invalidates the pose (new odometry epoch, unplaced); placement needed |
+| Unsupported version or op | terminal error: the session is dropped and HELLO repeats every `hello_backoff`, no retry storm |
+
+What never happens automatically:
+- a movement command resuming after any of these (actuGATR fails it);
+- a placement after a reconnect, Pi restart, profile change or
+  reinitialization;
+- a resend of a SET_POSE or CONTROL from a lost session;
+- a recalibration while the robot moves: the Pi refuses CONTROL recalibrate,
+  and `VexImuRecalibration` starts the Brain VEX IMU calibration only after
+  the Pi's Ok.
+
+A CONTROL the Pi has answered survives a cable pull in the same session: its
+request id is asked again until the final result, up to `control_wait`.
 
 ## Timing
 
-- `ProsDriver` polls every 2 ms at `TASK_PRIORITY_DEFAULT + 1`. `poll` never
-  waits.
-- `response_timeout` must satisfy the budget in
-  [interfaces.md](interfaces.md#bus-ownership-and-timing):
-  `T >= A_req + W + A_rep + R + L`. With the defaults, V5 plus Pi latency and
-  margin `L` may be up to 12.4 ms. Poll period granularity adds up to one
-  period to the measured round trip.
-- A robot pose is typically `Pi age + round trip + up to state_period +
-  request_gap` old when used. `NavigatorConfig::max_pose_age` (0.25 s) must be
-  at least that, and `max_link_age` at least `state_period + response_timeout`.
-- A GET_STATE Ok reply is 59 bytes, 5.1 ms at 115200 baud.
+**Scheduling.** One request outstanding. Before each send the client drains
+its receive buffer and resets its frame reader. Priority:
 
-## PROS packaging and import
+1. HELLO while no session is open.
+2. Placement.
+3. Control.
+4. Profile sync.
+5. The due state poll (every `state_period`, 20 ms).
+6. READ_WHEELS.
+7. Map chunk.
+8. Estimate chunk.
+9. Path report.
+
+Items 6 to 9 go while the state poll is not due. When exchanges outlast the
+poll period the poll is always due, so a waiting transfer goes after 4 due
+polls in a row instead of never. In host tests on the default RS-485 bus,
+state polls stay at most 43 ms apart while a 128-object map moves.
+
+**Timeout per request.**
+
+```
+T = response_timeout + byte_time * max(0, request_frame + max_reply_frame(op) - 85)
+```
+
+With the defaults (60 ms, 10/115200 s per byte) T is 60 ms for HELLO,
+SET_POSE, GET_STATE, PROFILE_APPLY and CONTROL, 61.1 ms for READ_WHEELS,
+65.6 ms for READ_DOC, and at most 65.9 ms (a full PROFILE_WRITE chunk).
+`Client::responseTimeout(op, len)` computes it. The budget behind it is in
+[Bus ownership and timing](interfaces.md#bus-ownership-and-timing). The same
+formula is used on USB.
+
+**Retries.**
+- HELLO: same bytes after every timeout, no limit (the normal connecting
+  state). Stale means a new nonce.
+- SET_POSE and CONTROL: same bytes, as above.
+- READ_WHEELS and PATH_REPORT: one send, never resent.
+- Everything else (GET_STATE, profile writes and applies, READ_DOC) is
+  idempotent by content and gets a new request id each time.
+- Request ids count from 1 per program start and wrap 65535 to 1.
+
+**Pose age.** A pose is typically `Pi age + round trip + up to state_period
++ request_gap` old when used; a poll cycle adds up to `poll_period_ms`.
+actuGATR's input age limits must allow that.
+
+### ClientConfig
+
+| Field | Default | Meaning |
+|---|---|---|
+| `response_timeout` | 0.060 s | base of the per-request timeout, from the write call's return |
+| `byte_time` | 10/115200 s | per byte beyond the 85-byte v3 budget pair |
+| `request_gap` | 0.005 s | after a reply or a timeout |
+| `state_period` | 0.020 s | GET_STATE poll period |
+| `link_timeout` | 0.25 s | connected while a correlated reply is this recent |
+| `pending_retry` | 0.020 s | SET_POSE and PROFILE_APPLY resend after Pending |
+| `placement_attempts` | 10 | sends per placement |
+| `placement_deadline` | 1.0 s | first send through the confirming state |
+| `control_attempts` | 5 | sends per control before its first reply |
+| `control_deadline` | 1.0 s | first send through its first reply |
+| `control_retry` | 0.1 s | CONTROL resend after Pending, or after a lost reply once answered |
+| `control_wait` | 20 s | first send through the final result, once the Pi answered |
+| `hello_backoff` | 1.0 s | HELLO period after an unsupported version or op |
+| `field_period` | 0.5 s | between field estimate reads |
+| `transfer_backoff` | 1.0 s | after 3 failed transfers of one kind in a row |
+| `profile` | none | `ProfileDocument`; `LinkConfig::profile` fills it from a `RobotProfile` |
+| `bench_imu` | empty | Brain bench IMU sample for every GET_STATE; empty sends flags 0 |
+
+`BenchImuSample`: `valid`, `stamp_ms` (Brain clock at the read), `rotation_mdeg`
+(continuous, CCW), and `calibrating` (not sent; readiness uses it). The Pi
+pairs these samples with Pico encoder data by arrival time only; that is a
+bench approximation and does not synchronize the Brain and the Pico clocks.
+
+`ClientStats` counts requests, resends, replies, timeouts, uncorrelated and
+bad frames, drained bytes, read and write errors, sessions opened and lost,
+Pi restarts, stale HELLOs, unexpected replies, profile writes, document
+chunks, rejects and stale answers, maps and estimates completed, and path
+reports sent and dropped.
+
+## Client (portable)
+
+```cpp
+Client     client(port, nonce_function, ClientConfig{});
+LinkDriver driver(client);  // StateSource and PathSink, no I/O
+client.poll(now);           // every few ms from one task; never blocks
+```
+
+`poll(now)` reads and correlates replies, times out the outstanding request,
+then sends at most one request; `now` also stands for the write call's return.
+A reply is accepted only when its op and request id match the outstanding
+request and, for HELLO, the nonce, else the session. Only a correlated reply
+can signal a Pi restart. `ProsLink` wraps exactly this pair; host tests and
+the Pi end-to-end test use them directly.
+
+## PROS packaging
 
 A PROS project compiles the libraries in place from this repository through
 [brain/gatr2_brain.mk](../brain/gatr2_brain.mk). Nothing is copied: the PROS
-build and the host build use the same source files.
+build and the host build use the same files.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GATR2_ROOT` | `../..` | repository root, as a path relative to the PROS project |
-| `GATR2_BRAIN_LIBS` | `investigatr communigatr` | libraries to compile; `communigatr` needs `investigatr` |
-| `GATR2_SRC_investigatr` | explicit list | `brain/investiGATR/src/*.cpp` |
-| `GATR2_SRC_communigatr` | explicit list | `brain/communiGATR/src/*.cpp`, `brain/communiGATR/pros/*.cpp`, `common/frame_codec.cpp` |
+| `GATR2_ROOT` | `../..` | repository root as a path relative to the PROS project |
+| `GATR2_BRAIN_LIBS` | `investigatr communigatr actugatr` | libraries to compile; `communigatr` and `actugatr` need `investigatr` |
+| `GATR2_SRC_communigatr` | explicit list | `src/*.cpp` and `pros/*.cpp` of communiGATR, `common/frame_codec.cpp`, `common/link_documents.cpp` |
 | `GATR2_WARNFLAGS` | `-Wall -Wextra` | warnings for library sources |
 
-The fragment is included twice. Before `common.mk` it adds the library
-objects (`bin/gatr2/<path>.o`) to the link and the include paths
-`brain/investiGATR/include`, `brain/communiGATR/include` and the repository
-root. After `common.mk` it adds one compile rule per source, with the
-project's `CXXFLAGS` and a dependency file next to the object, so a header
-change rebuilds what uses it.
+The fragment is included twice from the project Makefile. Before `common.mk`
+it adds the library objects (`bin/gatr2/<path>.o`) to the link and the include
+paths (the three libraries' `include/`, `brain/robot` and the repository
+root, so `#include "common/frame_codec.h"` works). After `common.mk` it adds
+one compile rule per source with the project's flags and a dependency file
+next to the object.
 
 Import into another PROS project:
 
@@ -392,7 +848,7 @@ Import into another PROS project:
    C_STANDARD:=gnu17
    CXX_STANDARD:=gnu++20
    GATR2_ROOT ?= ../..
-   GATR2_BRAIN_LIBS := investigatr communigatr
+   GATR2_BRAIN_LIBS := investigatr communigatr actugatr
    ```
 
 3. Replace its last line, `-include ./common.mk`, with:
@@ -403,260 +859,105 @@ Import into another PROS project:
    include $(GATR2_ROOT)/brain/gatr2_brain.mk
    ```
 
-4. Include `"investigatr/navigator.h"` and `"communigatr/pros_driver.h"` and
-   use them as in [PROS use](#pros-use). `brain/testing` is a complete example.
-5. Build with `pros make`.
+4. Include `"communigatr/pros_link.h"` and use it as in [PROS use](#pros-use).
+   `brain/localization-test` and `brain/testing` are complete examples.
+5. Build with `pros make`. Build and upload steps for this repository's
+   programs: [Build and upload](brain_setup.md#2-build-and-upload).
 
 Notes:
 
 - `GATR2_ROOT` must be relative. A drive letter path (`C:/...`) breaks the
-  `-iquote` flags in the toolchain's shell and the headers are not found.
-- A new library source file must be added to its list in `gatr2_brain.mk`.
+  `-iquote` flags in the toolchain's shell.
+- A new library source must be added to its list in `gatr2_brain.mk`, and to
+  `pi/navigatr/tests/CMakeLists.txt` when the Pi end-to-end test needs it.
   Headers need no listing.
-- The fragment uses its own compile rule. The dependency steps in `common.mk`
-  (`DEPFLAGS`, `MAKEDEPFOLDER`, `RENAMEDEPENDENCYFILE`) assume sources under
-  `src/`; for a source elsewhere their `mv` would write the dependency file
-  over the `.cpp`.
+- The fragment has its own compile rule: `common.mk`'s dependency steps
+  assume sources under `src/` and would write over library sources.
 - The template defaults `gnu23` and `gnu++26` are rejected by the PROS arm gcc
   13.3, and the kernel headers need C++20. Library code is C++17 on the host
   and compiles as gnu++20 here.
-- Without liblvgl `pros::lcd` prints nothing; use `pros::screen::print`. The
-  `-D` flag above silences the kernel's lcd deprecation warning.
-- Linking uses `--gc-sections`: library code the program never calls is
-  compiled, so errors still show, but left out of the image.
-
-PROS library templates (`IS_LIBRARY`) are not used. A template packages
-sources from the project's own `src/` and headers from `include/<LIBNAME>`.
-These libraries live in `brain/` and are built and tested on the host with
-CMake, so a template would need a second copy of the sources, a template
-rebuild for every change and `pros c apply` in every consumer. Compiling in
-place keeps one copy, and every PROS build uses the tested sources.
-
-Verified with PROS CLI 3.5.6, arm gcc 13.3.1 and kernel 4.2.2: `pros make` in
-`brain/testing`, and a copy of that project outside the repository layout with
-a relative `GATR2_ROOT`, both without warnings.
-
-## Testing application and hardware bring-up
-
-[brain/testing](../brain/testing/README.md) is a minimal PROS program using
-both libraries. It has been built with `pros make`, never run on a Brain.
-
-| Callback | What it does |
-|---|---|
-| `initialize()` | creates `ProsDriver` and `DriveControl`, checks the `NavigatorConfig`, opens the link, waits up to 3 s for `connected`, submits `kStartPose`, waits up to 2 s for the placement result and shows it; without a link it places nothing |
-| `autonomous()` | the demo: `goTo(kDemoGoal)`, then `follow(kDemoPath)`, then `goToRelative(kDemoLandmarkId, kDemoLandmarkOffset)` |
-| `opcontrol()` | manual driving; button A runs the demo, B cancels it |
-| `disabled()` | `stop()`: cancels the command and stops the motors |
-| `competition_initialize()` | nothing |
-
-`DriveControl` (`include/drive_control.h`) owns the Navigator and the drive
-motors:
-
-- One task every 10 ms at `TASK_PRIORITY_DEFAULT + 1` is the only code that
-  writes the drive motors. Modes: disabled (zero), navigate (Navigator
-  demand), manual (latest manual demand).
-- Each period: `Navigator::update(ProsDriver::now())` in every mode, so the
-  status stays current; `mixTank`; each side times `kMaxVoltageMv` through
-  `move_voltage`. Zero on both sides calls `brake()`, which acts per
-  `kBrakeMode`. Motor directions come from signed ports.
-- `goTo`, `goToRelative` and `follow` switch to navigate. `manual(demand)`
-  switches to manual and cancels navigation. `stop()` cancels, clears the
-  manual demand and brakes at once in the caller's task. Every call takes one
-  mutex and returns at once.
-
-Each demo step uses `MotionOptions{kDemoTimeout, kDemoRequireObserved}`. Its
-wait loop compares `status().command_id` with the step's id and gives up one
-second after the motion timeout. A step that fails, is aborted or runs out
-stops the drive and ends the demo. `autonomous()` needs a competition switch
-or field control; without one PROS runs `opcontrol()` after `initialize()`,
-and button A runs the same demo.
-
-| Control | Effect |
-|---|---|
-| left stick Y | forward, + drives robot +x |
-| right stick X | turn, right = clockwise |
-| A | run the demo; manual driving pauses until it ends |
-| B | cancel the demo: the motors stop at once |
-
-| Screen line | Shows |
-|---|---|
-| 0 | title |
-| 1 | `init: placement applied, result 0`, `init: no link, robot not placed`, `init: port N not opened, errno E` or `init: navigator config invalid: <why>` |
-| 2 | `link up s <session> pi <pi_instance> <link age> ms`, or `link down ready R err E tx <requests> rx <replies>` |
-| 3 | `pose <x> <y> m <heading> deg <age> ms f<frame>`, or `pose invalid f<frame>` |
-| 4 | `cmd <id> <state> <reason> <distance error> m` |
-| 5 | demo step: `goal: running`, `path: completed`, `landmark: failed landmark unknown`, `goal: stopped` |
-
-Lines 2 to 4 refresh every 100 ms while `initialize()`, the demo or
-`opcontrol()` is waiting.
-
-### Configuration
-
-Everything robot specific is in `include/robot_config.h`, namespace
-`robot_config`. Values marked PLACEHOLDER are not measured.
-
-| Name | Meaning |
-|---|---|
-| `kLeftMotorPorts`, `kRightMotorPorts` | smart ports; a negative port reverses that motor |
-| `kGearset`, `kBrakeMode` | motor cartridge; behavior at zero demand |
-| `kMaxVoltageMv` | voltage at full demand, at most 12000 |
-| `kNavigatrPort`, `kNavigatrBaud` | smart port wired to the RS-485 link; baud equal to the Pi resource's `<Baud>` |
-| `kStartPose` | starting placement, field frame |
-| `navigatorConfig()` | `NavigatorConfig` overrides: tolerances, output limits, minimum outputs, PID gains ([tuning](investigatr.md#tuning)) |
-| `kDemoGoal`, `kDemoPath` | demo goal and path, field frame |
-| `kDemoLandmarkId`, `kDemoLandmarkOffset` | landmark wire id (1..255), equal to a Pi `FieldObject` `wire_id`; wanted robot pose in the landmark frame |
-| `kDemoRequireObserved` | false also accepts the Pi's nominal (map) landmark pose |
-| `kDemoTimeout` | motion timeout per demo step |
-| `kDemoButton`, `kCancelButton`, `kStickDeadband` | controller |
-
-### Set up and build
-
-The kernel files (`firmware/`, `include/pros/`) are not in git. After a clone,
-in `brain/testing`:
-
-```
-pros c apply kernel@4.2.2 --force-apply --no-download
-git checkout -- .gitignore
-pros make
-```
-
-- The first command restores the kernel files offline from the local PROS
-  template cache. Without `--force-apply` the CLI reports the kernel as
-  installed and restores nothing. On a machine without kernel 4.2.2 in its
-  cache, run it without `--no-download` (network; not verified here).
-- The CLI keeps `Makefile`, `src/main.cpp` and `include/main.h`, but replaces
-  `.gitignore` with its template copy, which drops the `firmware/` and
-  `include/pros/` lines; the checkout puts it back.
-- With the kernel files missing, `make` stops with a message naming these
-  commands.
-- Windows, Git Bash: `pros make` needs `PROS_TOOLCHAIN` set to the toolchain
-  folder in Windows form; adding it to `PATH` is not enough.
+- Without liblvgl `pros::lcd` prints nothing; use `pros::screen::print`.
+- Linking uses `--gc-sections`: everything listed is compiled, so errors
+  still show, but unused code stays out of the image.
+- Windows, Git Bash: the PROS CLI needs `PROS_TOOLCHAIN` set to the toolchain
+  folder in Windows form; `PATH` alone is not enough.
 
   ```
   TC="$HOME/AppData/Roaming/Code/User/globalStorage/sigbots.pros/install/pros-toolchain-windows/usr"
   export PROS_TOOLCHAIN="$(cygpath -w "$TC")"
   ```
 
-  Plain `make` works with `PATH="$TC/bin:$PATH"`. The toolchain's `make` and
-  shell are MSYS programs with their own root, so do not pass `/c/...` paths
-  to them.
-- Output goes to `bin/` and `.d/` (ignored); `make clean` removes both. The hot
-  image is about 24 KB of code; the cold package (kernel, libc) about 1.3 MB.
-- Upload with `pros upload` or the PROS VS Code extension (not exercised
-  here).
-
-Pi side: a profile with the `brain_link` command collection and publishing on
-one serial resource, run threaded, with the baud equal to `kNavigatrBaud`; see
-[Connect the Brain](../pi/navigatr/docs/setup.md#connect-the-brain). The
-landmark step needs a `FieldObject` whose `wire_id` equals `kDemoLandmarkId`;
-no supplied profile has one.
-
-### Hardware bring-up checklist
-
-In order. Keep the robot on blocks (wheels off the ground) until step 2
-passes, keep the controller in hand, and start with a low `kMaxVoltageMv`.
-
-1. Ports: drive motors on `kLeftMotorPorts` and `kRightMotorPorts`, the RS-485
-   link on `kNavigatrPort`, `kGearset` equal to the fitted cartridges. Check
-   on the Brain's device screen.
-2. Motor directions, on blocks, in `opcontrol()`: a small push forward on the
-   left stick turns every wheel in the robot's forward direction; the right
-   stick to the right drives the left side forward and the right side
-   backward (clockwise seen from above). Negate the port of a wrong motor.
-   Releasing the sticks stops the motors.
-3. Link: line 2 shows `link up` with a session within a second of the Pi
-   running. `link down` with `tx` rising and `rx` at 0 means nothing answers:
-   check the Pi profile pairing, baud, wiring, the DriverEnable GPIO and the
-   Pi's link counters ([Check the link](../pi/navigatr/docs/setup.md#check-the-link)).
-   `err 1`: the Pi speaks another brain link version; `err 2`: it does not
-   know one of the requests.
-4. Placement: line 1 shows `init: placement applied`, and line 3 shows
-   `kStartPose`, an age well under `max_pose_age` (0.25 s) and a frame number.
-   `timed out`: the placement was not confirmed within the placement deadline
-   (for example no valid pose on the Pi because the Pico is not streaming); it
-   may still apply later. `rejected`:
-   see the result code in [interfaces.md](interfaces.md#brain-link-v3).
-   `no link`: fix step 3 and restart the program; nothing is placed without
-   the link.
-5. Pose signs: push the robot straight forward by hand at heading 0: x grows.
-   Turn it counterclockwise seen from above: the heading grows. Otherwise fix
-   the Pi's wheel and IMU signs
-   ([Measure the wheels and IMU sign](../pi/navigatr/docs/setup.md#measure-the-wheels-and-imu-sign));
-   the Brain does not correct them.
-6. Brain reboot: power cycle the Brain while the Pi keeps running. Line 2
-   shows a new session with the same `pi_instance`, and the placement applies
-   again. A Pi restart changes `pi_instance` instead.
-7. First motion, off blocks, on clear floor: put `kDemoGoal` a short distance
-   straight ahead and press A. Line 4 shows the phases (`turning`, `driving`,
-   `aligning`) and ends with `completed`. Press B during a move: the motors
-   stop at once and line 5 shows `goal: stopped`. Disabling from the
-   competition switch also stops them. Then tune in the order of
-   [tuning](investigatr.md#tuning).
-8. Path: `kDemoPath` in clear floor space. The robot passes the first points
-   and settles only at the last.
-9. Landmark: map `kDemoLandmarkId` on the Pi. `landmark unknown`: no mapping
-   for that id. `landmark unsupported`: the profile's world estimation is
-   noop. `landmark unavailable`: no usable estimate in time; with
-   `kDemoRequireObserved` the camera must see the landmark, without it the
-   map pose is accepted. Measure the final robot pose against the landmark.
-10. Link loss: unplug the link cable during a move. The robot stops within
-    about 0.25 s (`max_pose_age`, `link_timeout`) and the command fails with
-    `input lost`. Plug it back in: nothing resumes; run the demo again.
-
-### Not validated
-
-The program has only been built. Not validated on hardware: motor ports,
-directions, gearset, brake mode and voltage limit; gains, tolerances and
-timeouts; the demo destinations; controller mapping and screen layout; the
-10 ms control task and 2 ms poll task under load on the V5; the V5 smart port's
-RS-485 direction handling and serial latency; placement and landmark behavior
-against a real Pi; `pros upload`.
+PROS library templates (`IS_LIBRARY`) are not used: a template needs a second
+copy of the sources and a `pros c apply` in every consumer after each change.
+Compiling in place keeps one copy, and every PROS build uses the host-tested
+sources.
 
 ## Host build and tests
 
-The host project is `brain/CMakeLists.txt` (see
-[investigatr.md](investigatr.md#build-and-tests) for the commands).
+The host project is `brain/CMakeLists.txt`, with the commands in
+[brain/README.md](../brain/README.md). The codec's own tests are in
+`common/tests` (`cmake -S common/tests`).
 
 | Target | Contents |
 |---|---|
-| `communigatr` | `src/client.cpp`, `src/driver.cpp`, `common/frame_codec.cpp`; links `investigatr` |
-| `communigatr_fakes` | `sim/`: `FakePi`, `FakeBus`, `LinkRig` |
-| `communigatr_tests` | the tests below |
+| `communigatr` | `src/*.cpp`, `common/frame_codec.cpp`, `common/link_documents.cpp`; links `investigatr_types` |
+| `communigatr_fakes` | `sim/`: `FakePi`, `FakeBus`, `FakeUsb`, `LinkRig` |
+| `communigatr_tests` | the test files below, listed explicitly |
 
 Fakes (host only):
 
-- `FakePi`: the Pi's brain link rules (sessions, dedupe, placement, selection,
-  restart) over the real common codec, with a scripted robot state, a landmark
-  table and a configurable placement delay.
-- `FakeBus`: a timed half-duplex bus with byte airtime, Brain latencies, the
-  Pi reply window, scripted faults (dropped request or reply, duplicate,
-  corrupt, fragmented, truncated then valid, delayed) and a transmission log
-  with collision detection.
-- `LinkRig`: fake Pi, fake bus and a client on a stepped clock;
-  `rebootBrain()` replaces the client as a power cycle does.
+- `FakePi`: the Pi's v4 rules over the real codec: sessions and dedupe,
+  placement with an apply delay, profile staging and apply with capability
+  rejection and apply delay, field documents with any object count (including
+  maps of many chunks), estimate replacement and Stale, control with
+  NotStationary, Pending and Pico failures, READ_WHEELS, path reports,
+  restart, other versions and unsupported ops.
+- `FakeBus`: a timed half-duplex RS-485 bus with byte airtime, Brain
+  latencies, the Pi reply window, scripted faults (dropped, duplicated,
+  corrupt, fragmented, truncated, delayed) and collision detection.
+- `FakeUsb`: the V5 USB console with NG1 lines through the real line codec
+  both ways, latencies, console text mixed in, a cable that can be pulled,
+  and the Pi's no-answer-after-reopen rule.
+- `LinkRig`: a fake Pi behind either transport, a `Client` and `LinkDriver`,
+  a stepped clock, and `rebootBrain()`.
 
 | Test file | Covers |
 |---|---|
-| `fake_pi_gtest.cpp` | the fake Pi's session, dedupe, placement, selection and restart rules |
-| `client_gtest.cpp` | readiness after a correlated state, fresh GET_STATE ids, fragmented, truncated, corrupt, duplicate and dropped replies, same-byte retries, stale replies (old id, old session, old nonce, bytes before send), Pi restart, unknown session, in-flight placement lost and never resent, Brain reboot, placement applied only after its anchor, request id wrap, stale HELLO, unsupported version and op, link loss, write failures, selection statuses and retries |
-| `client_timing_gtest.cpp` | the default timeout meets the budget, no Brain transmission while a reply can start, retry after the latest possible reply, gap and poll period, a too short timeout collides |
-| `driver_gtest.cpp` | empty start, units, placement range and heading normalization, validity flags and anchor rules, pose gated while a placement is pending, timed out placement, ages, frame generations, landmark statuses, stale measurement and link loss seen by a Navigator, nothing resumes |
-| `equivalence_gtest.cpp` | one Navigator scenario (absolute goal, landmark relative goal, waypoint path) on `SimulatedSource` and on `Driver` through the fake Pi; both complete at the same pose |
+| `usb_line_gtest.cpp` | NG1 encoding and refusals, carriage return, text before the marker and the last marker, bad digits drop the line, digit and line limits, reset, round trip of every frame size |
+| `fake_pi_gtest.cpp` | the fake Pi's session, dedupe, placement, profile staging and rejection memory, documents, control and path rules |
+| `client_gtest.cpp` | readiness only after a correlated state, fresh state ids, fragmented, truncated, corrupt, duplicate and dropped replies, same-byte placement and control retries, uncorrelated and drained bytes, Pi restart, unknown session, lost placement never resent, stale HELLO and repeated nonces, Brain reboot, placement applied only after its anchor, placement expiry and replacement, bench IMU samples, control Pending and Failed, an answered control through more lost replies than `control_attempts` and through failed writes, wheel read tickets (Ok, one at a time, NotReady, lost send, failed write, session loss), path thinning, request id wrap, unsupported version and op, link loss, write failures |
+| `client_timing_gtest.cpp` | every op's timeout meets the budget, replies anywhere in the window, retry after the latest possible reply, gap and poll period, transfers only while the poll is not due, polling stays responsive during transfers, a too short timeout collides |
+| `robot_profile_gtest.cpp` | SI to wire units, rounding and angle wrapping, the three kinds of wheel value kept apart, gearing, scale and calibration ranges, supported topologies, Brain side rejections with the Pi's reason codes, document id |
+| `doc_assembly_gtest.cpp` | documents of every size up to capacity, chunk sizes, inconsistent chunks, first chunk bounds, CRC, restart |
+| `profile_sync_gtest.cpp` | chunked upload through Pending, lost chunks resumed, idempotent Brain restart, changed profile needs placement, rejection settled, Pi without Brain profiles, Brain-invalid profile never sent, Pi restart, upload interrupted across sessions, replaced staging, an APPLY Ok that counts only with a state showing it |
+| `field_sync_gtest.cpp` | every object count arrives whole and checked, no field, inconsistent chunks, malformed map, estimate for another map or count, replaced estimate Stale, backoff, field period, map cache across sessions and Pi restarts, new map, interrupted transfers, Unavailable |
+| `link_driver_gtest.cpp` | status order, configured anchors, pending placement hides the pose, units and ages, placement rounding, frame numbers, field in SI units, field frame equals robot frame under one anchor, pre-session estimate age, path reports |
+| `recovery_gtest.cpp` | on both transports: Brain restart keeps profile, placement and map; restarts during profile upload or apply; placement refused before the profile; control through lost replies runs once; a Pending control across a 1.5 s cut ends Ok with one request id and one execution; an answered control ends at `control_wait` while cut; a wheel read lost to a cut settles and the next one reads; Pi restart; cable cut resumes the same session; interrupted transfers and profile exchange; replies from before a cut ignored; Pico restart changes the frame, not the placement; explicit reinitialize; IMU reinit followed to its outcome; interrupted commands never resumed. USB only: console text and prefixes ignored |
+| `readiness_gtest.cpp` | names and health bits, connecting then reconnecting, profile pending and rejected, Brain-refused profile, VEX profile ignores the Pico IMU, Pico IMU health and every calibration state, three wheels without IMU, placement in flight and first pose, no Brain profile |
+| `profile_change_gtest.cpp` | on both transports: new travel scale applied as a new profile that needs placement, same profile, Brain-refused profile, invalid first profile, change during an upload or while the Pi applies; with Pi apply delays 0 to 5, neither a runtime change nor a Brain restart with an edited profile ever shows the old placement as valid, ready or localized |
+| `vex_imu_recalibration_gtest.cpp` | the VEX calibration starts only after the Pi's Ok; movement, refusals and lost answers start nothing; an IMU that does not start, does not finish or ends invalid; on both transports against the fake Pi |
+| `wheel_calibration_gtest.cpp`, `startup_placement_gtest.cpp`, `link_events_gtest.cpp` | the application helpers |
 
-The real Pi runtime is tested against the real `Client`, `Driver` and
-`Navigator` in `pi/navigatr/tests/brain_link_e2e_gtest.cpp`
-(`ctest -R BrainLinkEndToEnd` in the Navigatr build): Brain reboot while the Pi
-keeps running, Pi restart and reset, placement retries, and a placement
-followed at once by a command. That test compiles the Brain sources from an
-explicit list in `pi/navigatr/tests/CMakeLists.txt`, so a new or renamed
-library source must be added there as well as in `gatr2_brain.mk`.
+`pi/navigatr/tests/brain_link_e2e_gtest.cpp` exercises the real Pi runtime
+against the real `Client`, `LinkDriver` and NG1 codec. Its CMake target
+(`brain_link_e2e_tests`, compiling the Brain sources it needs from an explicit
+list) is added to `pi/navigatr/tests/CMakeLists.txt` in Phase C
+integration; until then the Pi test build does not run it.
 
 ## Limitations and unvalidated items
 
-- Host tested only. Not validated: the V5 smart port switching its own RS-485
-  direction, whether it hears its own transmission (echoed request frames
-  would only count as `bad_frames`), real V5 serial write and read latency,
-  PROS task timing under load, and every robot-specific value.
-- Landmark wire ids are 1..255.
-- One placement at a time; only the latest ticket is tracked.
+- Host tested only. Not validated: the V5 USB console under load and across
+  unplugging, PROS stdin behavior, the smart port settle retries and reopen,
+  the V5 smart port's RS-485 direction switching (an echoed request would only
+  count as a bad frame), V5 serial latency, task timing and stack sizes under
+  load, and `pros::Imu::reset` timing.
+- The VEX IMU sample carries the Brain read time, not a measurement time, and
+  a repeated IMU value counts as a new sample at the Pi. This is the bench
+  arrival-time approximation.
+- One placement, one control and one wheel read at a time; only the latest
+  ticket of each is tracked.
+- `VexImuRecalibration` checks stillness before the VEX calibration starts,
+  not during its roughly 2 s.
 - No latency compensation: ages are reported, not used to predict the pose.
+- A competition task deleted while it holds the link mutex leaves the link
+  answering busy until the program restarts.

@@ -96,16 +96,23 @@ and timestamps; they need not be contemporaneous with the latest robot pose.
 ```text
 type, contract ("navigatr.inspect/1"), host_ms
 session         {id, reset_count}
-configuration   {id, name, digest (hex), loop_rate_hz}
+configuration   {id, name, digest (hex), loop_rate_hz, commands_type,
+                brain_profile}      brain_profile: localization comes from a Brain profile
 inspection      {snapshot_hz, preview_hz, preview_quality, preview_max_width}
 robot_body      {length_m, width_m, height_m, origin_x_m, origin_y_m}
 fields[]        one per configured field_map resource
   resource_id, name
+  revision      human-bumped field revision, 0 when undeclared
+  map_id        null or the map document id a Brain reads (8 hex digits)
+  map_error     null, or why this field cannot be served as a map
+  boundary      null or {min_x_m, min_y_m, max_x_m, max_y_m, note}   planning, field frame
+  obstacles[]   {id, wire_id|null, pose {x_m, y_m, heading_deg}, collision_box|null, note}
   dimensions    null or {inside_x_m, inside_y_m, wall_height_m, wall_thickness_m,
                 tile_m, source, revision, units_note}
   features[]    {id, kind (box|tape), x_m, y_m, z_m, size_x_m, size_y_m, size_z_m,
                 yaw_deg, color, note}      static display geometry, never observed
-  landmarks[]   {id, nominal {x_m, y_m, heading_deg},
+  landmarks[]   {id, wire_id|null, nominal {x_m, y_m, heading_deg},
+                collision_box|null (landmark frame),
                 visual null or {shape (octagonal_prism|box), height_m,
                   base_across_flats_m, top_across_flats_m, size_x_m, size_y_m,
                   size_z_m, tag_plate_width_m, tag_plate_height_m,
@@ -121,6 +128,12 @@ localization    {estimator_type, functions[] {id, type},
                 history {retention_ms, capacity, max_interpolation_gap_ms, attitude_gap_ms}}
 warnings[]      build warnings
 ```
+
+A `collision_box` is `{x_m, y_m, yaw_deg, size_x_m, size_y_m, note}`: center
+and yaw in its owner's frame, `size_x_m` along its own x. These are the
+declared values; the map document the Brain reads rounds box sizes up and the
+boundary inward to whole mm ([field assets](field_assets.md#planning-data)). An element
+with no box is not an obstacle.
 
 Transforms are `{x_m, y_m, z_m, roll_deg, pitch_deg, yaw_deg, R}` with
 `R = Rz(yaw) Ry(pitch) Rx(roll)` row-major, the convention in
@@ -143,7 +156,11 @@ robot           valid, initialized, placement_origin ("command", "configuration"
                   measured_at_host_ms|null, measured_at_source {clock, ms}, age_ms|null,
                   roll_deg, pitch_deg, yaw_deg, q_wxyz[4]}
 localization    estimator_type, updates, history_size, clock_mapped, publication,
-                all_ready, functions[] {id, type, ready, note}
+                all_ready, stationary, continuity_breaks, last_break,
+                functions[] {id, type, ready, note,
+                  stillness {monitored, stationary, calibration (none|collecting|done|
+                    waiting for stillness|waiting for data|failed), reason, progress_ms,
+                    window_ms, windows, restarts, attempts, steps, bias_dps|null}}
 trail[]         oldest first, bounded: {host_ms, x_m, y_m, heading_deg, epoch,
                 attitude_valid, roll_deg?, pitch_deg?}   odometry frame
 field_snapshot  {invocation, at_host_ms, age_ms, status, diagnostic}
@@ -174,6 +191,35 @@ target          null or {active, target_id, wire_id, generation, status, latched
                 T_odom_robot_target {...}, odometry_epoch, activated_host_ms}
 command         null or {session, init_sequence, init_session, init_pose {...},
                 object_requested, object_wire_id, object_sequence}
+brain_link      null without a brain_link CommandCollection, else
+                takes_profile, link_open, session, pi_instance,
+                last_request_host_ms|null, last_request_age_ms|null,
+                state null or {flags {pose_valid, localized, age_known, anchor_command,
+                  anchor_configured}, health {encoders_fresh, gyro_fresh, vision_alive,
+                  bias_calibrated, pico_link, imu_initializing, imu_failed, stationary},
+                  calibration, profile_state, profile_id|null, map_id|null, estimate_id,
+                  odometry_epoch, anchor_revision}
+                profile {state (none|applying|applied|rejected), id|null, applied_id|null,
+                  reason, detail,
+                  running null or {id, generation, topology, summary,
+                    wheels[] {port, sensor_id, counts_per_rev, gear, reversed, radius_m,
+                      x_m, y_m, angle_deg, travel_scale},
+                    imu {source (none|pico|brain_vex), port, vex_smart_port, inverted,
+                      bias_function},
+                    footprint {front_m, back_m, left_m, right_m},
+                    calibration {window_ms, still_rate_dps, still_travel_m}}}
+                calibration null or {function, ready, stillness {...}}
+                wheels[] {port, valid, fresh, counts, travel_m, discontinuity, age_ms,
+                  counts_per_rev, gear, reversed, radius_m, travel_scale}
+                operation null or {action, result, detail, started_host_ms, age_ms}
+                path null or {session, command_id, mode (direct|avoiding),
+                  received_host_ms, age_ms, points[] {x_m, y_m}}
+pico            null or {resource_id, frames_fresh, identity, boot_id, acq_epoch,
+                imu_epoch, reboots, restarts, imu_restarts, last_frame_age_ms|null,
+                status_known, last_status_age_ms|null, firmware|null, uptime_ms|null,
+                imu null or {enabled, state, reason, attempts},
+                last_command null or {request_id, op, status, detail}}
+events[]        oldest first, the newest 32: {sequence, host_ms|null, text}
 sources[]       {kind (resource|sensor), id, state (no_data_yet|valid|unavailable|fault),
                 diagnostic, payload, has_sample, measured_at {clock, ms},
                 received_host_ms|null, receipt_age_ms|null, last_polled_host_ms|null,
@@ -229,6 +275,32 @@ Meaning of a few fields:
   `init_session == session`. `robot.placement_*` is what localization actually
   applied. `object_wire_id` is the Brain's landmark wire id and
   `object_sequence` counts selections, releases and new sessions.
+- `localization.stationary` is true while some function's stationary window
+  qualified and nothing moved since; velocity is then reported as zero and the
+  pose is left alone (gated stationary handling, not a ZUPT filter).
+  `continuity_breaks` counts poses ended by a lost sensor, `last_break` names
+  the newest. `stillness.calibration` is the gyro bias calibration of that
+  function; `bias_dps` is null until a bias exists. See
+  [Brain robot profiles](brain_profile.md#calibration-and-stationary-handling).
+- `brain_link.state` is exactly the GET_STATE block the Pi would answer now,
+  rebuilt every cycle, so it matches what the Brain reads. `profile.id` is the
+  newest id reported (applying or rejected); `applied_id` is the running one.
+  Profile and map ids are 8 lowercase hex digits (the generated Brain header's
+  `Field::kMapId` is the same map id).
+- `brain_link.calibration` is the function that owns the IMU bias for the
+  running profile; null when nothing calibrates on the Pi (Brain VEX IMU).
+- `brain_link.wheels` is READ_WHEELS as the Brain would read it, with the
+  running profile's corrections beside each reading. `travel_m` applies counts
+  per revolution, gearing, polarity and radius, never the travel scale.
+- `brain_link.operation` is a CONTROL 3 or 4 the Pi is running on the Pico.
+- `brain_link.path` is the Brain's newest PATH_REPORT, for display only; the
+  Pi does nothing else with it. A report with mode none clears it.
+- `pico` is the Pico link the brain_link CommandCollection names, else the
+  first Pico telemetry resource. `identity` false with fresh frames is Pico
+  firmware without boot identity (v1 frames): no status and no commands.
+- `events` is the bounded lifecycle log: Brain session and link changes,
+  profile applies and refusals, Pico reboots, epochs and commands, calibration
+  results, and sensor loss ("place again").
 - `links[]` is keyed by the serial resource id. A frame failing its checksum
   or CRC is skipped by the frame reader and not counted anywhere. `packets`
   counts decoded sensor frames on a Pico link and every CRC-valid frame on
@@ -264,17 +336,36 @@ only when the header's `(camera, epoch, sequence)` equals the snapshot's.
 
 `viewer/` is a static ES-module app over the pinned three.js: an orbit /
 top-down / robot-follow 3D field built from `hello.fields` (dimensions,
-features, landmark visuals, tag plates), the robot body from
-`hello.robot_body` at `robot.field` with measured tilt when
-`robot.attitude.valid`, a bounded odometry trail re-expressed under the current
-anchor, nominal landmark ghosts beside the estimated poses, the camera mount
-and calibrated frustum, the camera panel with tag outlines bound to image
-identity, and a diagnostics panel from `sources`, `workers` and
-`diagnostics`. Status badges: connecting, live, stale (newest snapshot older
-than 1 s of browser time), disconnected, no image, no tags, localization
-unavailable, attitude unavailable/assumed, missing metric calibration data, metric
-unavailable. The page never estimates anything; it draws what the documents
-say and ages it.
+features, landmark visuals, tag plates), the robot outline at `robot.field`
+with measured tilt when `robot.attitude.valid`, a bounded odometry trail
+re-expressed under the current anchor, nominal landmark ghosts beside the
+estimated poses, the camera mount and calibrated frustum, the camera panel
+with tag outlines bound to image identity, and a diagnostics panel from
+`sources`, `workers`, `localization` (with each function's stillness and
+calibration) and `diagnostics`. Status badges: connecting, live, stale
+(newest snapshot older than 1 s of browser time), disconnected, no image, no
+tags, localization unavailable, attitude unavailable/assumed, missing metric
+calibration data, metric unavailable. The page never estimates anything; it
+draws what the documents say and ages it.
+
+Planning and the Brain link:
+
+- The field boundary (green), fixed obstacle boxes (red) and landmark boxes
+  (orange) are drawn as outlines. A landmark box follows the landmark: at its
+  estimate when observed, else at nominal. The `planning` button hides and
+  shows them together with the path.
+- The robot outline is the running profile's footprint once a profile is
+  applied, else the display-only `RobotBody`.
+- The Brain's reported path is a polyline, cyan for direct and magenta for
+  avoiding.
+- The Brain link panel shows a readiness line (link, profile, sensors, map,
+  calibration, placement), the running profile, the bias calibration, the
+  wheel readings with their corrections, the Pico link and the event log,
+  newest first. The first item that is not ready is also a status badge, and
+  `#status` carries it as `data-readiness` (`ready` when everything is).
+
+All of this works with no camera and noop world estimation: the Brain-profile
+configs run exactly that way.
 
 Camera scene objects use stable camera identity, not image sequence or epoch.
 Detection metadata supplies the mounted camera once available; a matching camera

@@ -194,5 +194,90 @@ TEST_P(ProfileChange, ChangeWhileThePiAppliesTheOldOneEndsWithTheNewOne) {
     EXPECT_EQ(rig.pi.appliedProfile(), rig.client().profile().id);
 }
 
+// The APPLY Ok can arrive while the newest state still predates the Pi's
+// swap. The profile counts as applied only with a state that shows it, so
+// the old profile's frame and placement never pass as valid or ready.
+TEST_P(ProfileChange, NewProfileNeverShowsTheOldPlacement) {
+    for (int delay = 0; delay <= 5; ++delay) {
+        SCOPED_TRACE(delay);
+        LinkRig r(config(), FakeBusConfig{}, GetParam());
+        r.pi.setProfileMode(true);
+        r.pi.robot().health = gatr2::kHealthEncodersFresh | gatr2::kHealthGyroFresh;
+        ASSERT_TRUE(r.driver().setProfile(benchProfile()));
+        ASSERT_TRUE(r.runUntil([&] { return r.client().profileApplied(); }, kLimit));
+        const PlacementTicket ticket = r.driver().place(Pose{0.5, 0.4, 0.0});
+        ASSERT_TRUE(r.runUntil(
+            [&] { return r.client().placementResult(ticket) == PlacementResult::kApplied; },
+            kLimit));
+        ASSERT_EQ(r.driver().readiness(r.now()).state, Readiness::kReady);
+        const uint32_t epoch = r.pi.robot().odometry_epoch;
+
+        r.pi.setProfileApplyDelay(delay);
+        RobotProfile scaled           = benchProfile();
+        scaled.wheels[1].travel_scale = 1.0125;
+        ASSERT_TRUE(r.driver().setProfile(scaled));
+        int  valid = 0, ready = 0, placed_after = 0, other_profile = 0;
+        bool applied = false;
+        for (int i = 0; i < 1500; ++i) {
+            r.step();
+            valid += r.driver().robot(r.now()).status == RobotStatus::kValid ? 1 : 0;
+            const LinkReadiness rd = r.driver().readiness(r.now());
+            ready += rd.state == Readiness::kReady ? 1 : 0;
+            if (r.client().profileApplied()) {
+                applied = true;
+                placed_after += rd.localized ? 1 : 0;
+                other_profile += r.client().state().state.profile_id != r.client().profile().id;
+            }
+        }
+        EXPECT_TRUE(applied);
+        EXPECT_EQ(valid, 0);
+        EXPECT_EQ(ready, 0);
+        EXPECT_EQ(placed_after, 0);
+        EXPECT_EQ(other_profile, 0);
+        EXPECT_EQ(r.pi.robot().odometry_epoch, epoch + 1);
+        EXPECT_EQ(r.pi.profilesApplied(), 2);
+    }
+}
+
+// A Brain restart with an edited profile while the Pi still runs the old
+// one, placed: the old placement never shows under the edited profile.
+TEST_P(ProfileChange, BrainRestartWithAnEditedProfileNeverShowsTheOldPlacement) {
+    for (int delay = 0; delay <= 5; ++delay) {
+        SCOPED_TRACE(delay);
+        LinkRig r(config(), FakeBusConfig{}, GetParam());
+        r.pi.setProfileMode(true);
+        r.pi.robot().health = gatr2::kHealthEncodersFresh | gatr2::kHealthGyroFresh;
+        ASSERT_TRUE(r.driver().setProfile(benchProfile()));
+        ASSERT_TRUE(r.runUntil([&] { return r.client().profileApplied(); }, kLimit));
+        const PlacementTicket ticket = r.driver().place(Pose{0.5, 0.4, 0.0});
+        ASSERT_TRUE(r.runUntil(
+            [&] { return r.client().placementResult(ticket) == PlacementResult::kApplied; },
+            kLimit));
+
+        r.pi.setProfileApplyDelay(delay);
+        RobotProfile edited     = benchProfile();
+        edited.wheels[0].radius = 0.025;
+        ClientConfig c          = config();
+        c.profile               = makeProfileDocument(edited);
+        r.rebootBrain(c);
+        int  valid = 0, placed = 0;
+        bool applied = false;
+        for (int i = 0; i < 1500; ++i) {
+            r.step();
+            valid += r.driver().robot(r.now()).status == RobotStatus::kValid ? 1 : 0;
+            const LinkReadiness rd = r.driver().readiness(r.now());
+            if (r.client().profileApplied()) {
+                applied = true;
+                placed += rd.localized || rd.state == Readiness::kReady ? 1 : 0;
+            }
+        }
+        EXPECT_TRUE(applied);
+        EXPECT_EQ(valid, 0);
+        EXPECT_EQ(placed, 0);
+        EXPECT_EQ(r.pi.appliedProfile(), r.client().profile().id);
+        EXPECT_EQ(r.pi.robot().robot_flags & gatr2::kRobotLocalized, 0);
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(Transports, ProfileChange,
                          testing::Values(RigTransport::kRs485, RigTransport::kUsb), name);

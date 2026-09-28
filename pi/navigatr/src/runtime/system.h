@@ -57,7 +57,25 @@
 // pi_instance, world estimation, publishing and inspection survive. A new
 // profile advances the odometry epoch, clears history, leaves the robot
 // unplaced and withdraws every earlier placement request; re-applying the
-// running profile changes nothing.
+// running profile changes nothing. The latest APPLY wins: a candidate still
+// waiting for the boundary when the running profile is applied again, or
+// another profile is refused, is dropped.
+//
+// Recovery. Every cycle the sources the running profile uses (its encoders,
+// the Pico IMU or the Brain VEX IMU) are checked for loss (sensor_loss.h):
+// stale longer than sensor_loss_ms, restarted, or a used Pico IMU not ready.
+// A loss while the robot is placed ends pose continuity like a new profile:
+// odometry epoch + 1, unplaced, earlier placement requests withdrawn, an
+// event naming the source; on_sensor_loss="warn" only logs it. With
+// <Pico resource_id=.../> on the brain_link CommandCollection the System
+// runs CONTROL 3 (reinitialize the Pico IMU, then recalibrate) and 4
+// (restart acquisition, done once the new acquisition epoch arrives)
+// through PicoControl, each Pending until the Pico reports completion and
+// bounded by kPicoOperationMs; both restart a used source, so both need a
+// placement afterwards. Lifecycle events (links, Pico identity, calibration,
+// sensor loss) go to events(). Each reporting cycle also publishes what the
+// Brain would read (the state block, the wheel readings, the running Pico
+// operation) in reportingSnapshot(), for inspection.
 
 #pragma once
 #include <atomic>
@@ -65,6 +83,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -78,6 +97,7 @@
 #include "core/diagnostics.h"
 #include "core/function_registry.h"
 #include "core/records.h"
+#include "resources/pico_control.h"
 #include "resources/resource_store.h"
 #include "runtime/brain_profile_builder.h"
 #include "runtime/build_options.h"
@@ -88,6 +108,7 @@
 #include "runtime/resource_stage.h"
 #include "runtime/sensor_catalog.h"
 #include "runtime/sensor_stage.h"
+#include "runtime/sensor_loss.h"
 #include "runtime/stationary_precheck.h"
 #include "runtime/world_estimation_stage.h"
 #include "state/command_state.h"
@@ -112,12 +133,29 @@ struct FieldSnapshot {
     std::string    diagnostic;
 };
 
-// Command and target state as the estimation worker last left them.
+// A CONTROL 3 or 4 running on the Pico, wire codes.
+struct PicoOperation {
+    bool          active = false;
+    uint8_t       action = 0;   // gatr2::ControlAction
+    uint32_t      handle = 0;
+    MonotonicTime started;
+    uint8_t       acq_epoch = 0;   // at submit, RestartAcquisition
+    uint64_t      restarts  = 0;
+    uint8_t       result    = 0;   // gatr2::BrainResult, Pending until settled
+    uint8_t       detail    = 0;   // gatr2::ControlDetail
+};
+
+// Command and target state as the estimation worker last left them, and
+// what the Brain link would report now.
 struct ReportingSnapshot {
     CommandState  command;
     TargetState   target;
     MonotonicTime at;
     uint64_t      cycle = 0;
+
+    std::optional<gatr2::BrainState> brain_state;   // GET_STATE now; brain_link only
+    std::vector<gatr2::WheelReading> wheels;        // READ_WHEELS now, profile order
+    PicoOperation                    pico_operation;
 };
 
 // What the running configuration binds, for readers on any thread. Replaced
@@ -140,6 +178,9 @@ struct RuntimeEvent {
 class System
 {
 public:
+    static constexpr int64_t kPicoOperationMs = 15000;   // CONTROL 3/4 bound
+    static constexpr int64_t kWheelFreshMs    = 150;     // READ_WHEELS fresh flag
+
     static std::unique_ptr<System> buildFromFile(const std::string& path,
                                                  const FunctionRegistry& functions,
                                                  std::string&            err,
@@ -183,8 +224,9 @@ public:
 
     // Worker mode profile boundary, called periodically by the thread that
     // owns start(): swaps in a prepared profile (workers stop, the candidate
-    // moves in, workers restart). False when nothing was pending. Inline,
-    // step() does this itself.
+    // moves in, workers restart). False when nothing was pending. A
+    // candidate a later APPLY superseded is dropped. Inline, step() does
+    // this itself.
     bool applyPendingProfile();
 
     // The running Brain profile, null when none; any thread.
@@ -192,6 +234,10 @@ public:
 
     // Newest lifecycle events, oldest first, bounded; any thread.
     std::vector<RuntimeEvent> events() const;
+
+    // The Pico link the brain_link CommandCollection names, null when none.
+    // Fixed at build; link() is safe on any thread.
+    const std::shared_ptr<PicoControl>& picoControl() const { return pico_; }
 
     double   loopRateHz() const { return loop_rate_hz_; }
     uint64_t cycle() const { return cycle_.load(); }
@@ -276,6 +322,15 @@ private:
     bool    prepareProfile(const gatr2::RobotProfileDoc& profile, uint32_t id, uint8_t& reason,
                            uint8_t& detail);
     uint8_t controlProfile(uint8_t action, uint8_t arg, MonotonicTime now, uint8_t& detail);
+    uint8_t controlProgress(uint8_t action, MonotonicTime now, uint8_t& detail);
+    uint8_t readWheels(MonotonicTime now, uint8_t& count, gatr2::WheelReading* wheels) const;
+
+    // Pico commands and recovery bookkeeping, on the estimation worker.
+    uint32_t submitPico(uint8_t op, uint8_t arg, MonotonicTime now, uint8_t& detail);
+    void     updatePicoOperation(MonotonicTime now);
+    void     watchSensors(const SensorMap& sensors, MonotonicTime now);
+    void     loseSensor(MonotonicTime now, const std::string& why, bool note);
+    void     noteRecovery(MonotonicTime now);
 
     // Boundary work: workers stopped or inline.
     void swapProfile();
@@ -337,6 +392,22 @@ private:
     uint64_t                 placement_floor_ = 0;   // init_sequence withdrawn up to here
     StationaryPrecheck       precheck_;
     std::vector<std::string> profile_warnings_;
+
+    // Pico link and recovery, estimation worker
+    std::shared_ptr<PicoControl> pico_;   // <Pico resource_id> on the CommandCollection
+    PicoOperation     pico_op_;
+    SensorLossMonitor sensor_loss_;           // the running profile's used sources
+    bool              loss_warned_ = false;   // a level loss was already noted
+    struct RecoverySeen {
+        bool     pico_known = false;
+        bool     pico_fresh = false;
+        uint64_t reboots = 0, restarts = 0, imu_restarts = 0;
+        uint32_t session           = 0;
+        bool     brain_active      = false;
+        MonotonicTime last_request;
+        std::vector<StillnessStatus> stillness;   // per observation function
+    };
+    RecoverySeen seen_;
 
     // a prepared profile, handed from the estimation worker to the boundary
     mutable std::mutex                    profile_mutex_;

@@ -10,7 +10,8 @@
 namespace navigatr
 {
 
-void StationaryPrecheck::configure(const std::vector<Wheel>& wheels, const SensorId& imu) {
+void StationaryPrecheck::configure(const std::vector<Wheel>& wheels, const SensorId& imu,
+                                   std::shared_ptr<const BrainImuBench> vex) {
     sources_.clear();
     for (const Wheel& w : wheels) {
         Source s;
@@ -21,31 +22,55 @@ void StationaryPrecheck::configure(const std::vector<Wheel>& wheels, const Senso
     if (!imu.empty()) {
         Source s;
         s.sensor = imu;
-        s.gyro   = true;
+        s.kind   = Kind::kGyro;
+        sources_.push_back(s);
+    }
+    vex_ = std::move(vex);
+    if (vex_ != nullptr) {
+        Source s;
+        s.sensor = SensorId{"brain VEX IMU"};
+        s.kind   = Kind::kRotation;
         sources_.push_back(s);
     }
 }
 
+void StationaryPrecheck::record(Source& s, const Sample& sample, uint64_t sequence,
+                                uint64_t epoch) {
+    if (s.seen && sequence == s.sequence && epoch == s.epoch) {
+        return;   // a retained record is not new evidence
+    }
+    s.seen     = true;
+    s.sequence = sequence;
+    s.epoch    = epoch;
+    s.samples.push_back(sample);
+}
+
 void StationaryPrecheck::update(const SensorMap& sensors, MonotonicTime now) {
     for (Source& s : sources_) {
+        if (s.kind == Kind::kRotation) {
+            const BrainImuBench& vex = *vex_;
+            if (!vex.valid || vex.received.domain != ClockDomain::kHost) {
+                continue;
+            }
+            Sample sample;
+            sample.at_ms         = vex.received.ms;
+            sample.value         = vex.rotation_mdeg / 1000.0 * 3.14159265358979323846 / 180.0;
+            sample.discontinuity = vex.epoch;
+            record(s, sample, vex.sequence, vex.epoch);
+            continue;
+        }
         const auto it = sensors.find(s.sensor);
         if (it == sensors.end() || it->second.state != SourceState::kValid ||
             !it->second.latest.has_value()) {
             continue;
         }
         const StoredSample& stored = *it->second.latest;
-        if (s.seen && stored.sequence == s.sequence && stored.epoch == s.epoch) {
-            continue;   // a retained record is not new evidence
-        }
-        s.seen     = true;
-        s.sequence = stored.sequence;
-        s.epoch    = stored.epoch;
         if (stored.receivedAt.domain != ClockDomain::kHost) {
             continue;
         }
         Sample sample;
         sample.at_ms = stored.receivedAt.ms;
-        if (s.gyro) {
+        if (s.kind == Kind::kGyro) {
             const ImuSample* imu = stored.payload.get<ImuSample>();
             if (imu == nullptr) {
                 continue;
@@ -60,7 +85,7 @@ void StationaryPrecheck::update(const SensorMap& sensors, MonotonicTime now) {
             sample.value         = enc->angle_rad * s.radius_m;
             sample.discontinuity = enc->discontinuity_epoch + (stored.epoch << 32);
         }
-        s.samples.push_back(sample);
+        record(s, sample, stored.sequence, stored.epoch);
     }
     // keep the window plus the newest sample before it as its baseline
     const int64_t start = now.ms - kWindowMs;
@@ -101,12 +126,15 @@ bool StationaryPrecheck::still(MonotonicTime now, std::string* why) const {
             }
             lo = std::min(lo, a.value);
             hi = std::max(hi, a.value);
-            if (s.gyro && std::fabs(a.value) >= kMaxRateRadS) {
+            if (s.kind == Kind::kGyro && std::fabs(a.value) >= kMaxRateRadS) {
                 return fail(s, "turning");
             }
         }
-        if (!s.gyro && hi - lo >= kMaxTravelM) {
+        if (s.kind == Kind::kWheel && hi - lo >= kMaxTravelM) {
             return fail(s, "moving");
+        }
+        if (s.kind == Kind::kRotation && hi - lo >= kMaxRateRadS * kWindowMs / 1000.0) {
+            return fail(s, "turning");
         }
     }
     return true;

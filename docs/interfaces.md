@@ -39,13 +39,13 @@ window, and listens otherwise. Every request gets an explicit result code or no
 reply at all; status bits are never acknowledgements. See
 [bus ownership and timing](#bus-ownership-and-timing).
 
-Validation status: the codec, the Pi runtime, the Brain library and the Pico
-command logic are implemented and host tested (`common/tests`, Navigatr, Brain
-and Pico host tests with fake links and clocks). Nothing here is validated on
-hardware: V5 smart port RS-485 direction handling, the V5 USB console under
-load and across unplugging, turnaround and transmitter empty timing on the Pi
-UART, the DE GPIO, the Pico command wire on the HAT, and every latency figure
-below are unmeasured.
+Validation status: host tests only. The codec is tested in `common/tests`
+with independently packed known-byte vectors, the Brain library against a fake
+Pi in `brain/communiGATR/tests`, and the Pi and Pico sides in their own host
+suites. Nothing here is validated on hardware: V5 smart port RS-485 direction
+handling, the V5 USB console under load and across unplugging, turnaround and
+transmitter empty timing on the Pi UART, the DE GPIO, the Pico command wire on
+the HAT, and every latency figure below are unmeasured.
 
 ## Global rules
 
@@ -483,7 +483,9 @@ Request bodies (offsets from the body start, payload offset 8):
 - GET_STATE: `imu_flags` at 0 (bit 0 `kBenchImuValid`, other bits must be 0),
   `imu_stamp_ms` at 1 (the Brain's clock when it read the sample),
   `imu_rotation_mdeg` at 5 (continuous rotation, CCW). Flags 0 when the
-  Brain has no bench IMU; the other fields are then 0.
+  Brain has no bench IMU sample; the other fields are then 0. The Pi puts a
+  valid sample in its Brain IMU mailbox when its configuration has one and
+  ignores it otherwise.
 - PROFILE_WRITE: `profile_id` at 0, `total_len` at 4, `offset` at 6, data at 8
   (the rest of the payload, `kProfileChunkMax` = 106 bytes at most).
 - PROFILE_APPLY: `profile_id` at 0, `total_len` at 4.
@@ -495,6 +497,11 @@ Request bodies (offsets from the body start, payload offset 8):
   avoiding), `count` at 5 (0..13), points at 6, field frame mm. The length
   must equal `14 + 8 * count`.
 - READ_WHEELS: no body.
+
+The Pi answers `kResultInvalidArgument` for a body it cannot use: unknown
+GET_STATE flag bits; a PROFILE_WRITE or PROFILE_APPLY `total_len` outside
+[32, 240], or a chunk that ends past it; an unknown READ_DOC kind or
+`max_len` 0; a CONTROL action outside 1..4; a PATH_REPORT mode above 2.
 
 Decoding (`decodeBrainRequest`): the frame must pass the envelope, len and CRC
 checks and carry at least the 8-byte header. A version other than 4 decodes
@@ -736,8 +743,13 @@ receives XML or file paths. `profile_id` is the CRC-32 of the document.
 Connect -> first GET_STATE shows profile_id and profile_state
   -> PROFILE_WRITE chunks (skipped when the Pi already runs this id)
   -> PROFILE_APPLY -> Pending ... -> Ok (applied)
+  -> a GET_STATE that shows it applied (the Brain's confirmation)
   -> sensors and calibration ready -> SET_POSE -> normal operation
 ```
+
+A state reply written before the swap still carries the old profile's
+epoch and placement, so the Brain counts a new profile as applied only from a
+GET_STATE that reports it, never from the APPLY Ok alone.
 
 PROFILE_WRITE (Pi):
 
@@ -809,17 +821,18 @@ Brain rules for assembling one document:
 
 | Action | Constant | Effect on the Pi |
 |--------|----------|------------------|
-| 1 | `kControlRecalibrate` | Stationary check, then restart the IMU bias calibration in the active model. Pose holds. With a Brain VEX IMU profile: Ok with calibration None (the Brain resets its own IMU) |
+| 1 | `kControlRecalibrate` | Stationary check, then restart the IMU bias calibration in the active model. Pose holds. With a Brain VEX IMU profile: Ok with calibration None: only the stationary check, after which the Brain resets its own IMU |
 | 2 | `kControlReinitialize` | Stationary check, then a localization reset: `odometry_epoch` + 1, unplaced, unapplied SET_POSE withdrawn, bias recalibration |
-| 3 | `kControlReinitImu` | Needs a Pico IMU profile and v2 Pico firmware. Sends REINIT_IMU to the Pico; Pending while it runs; Ok when it completed and the recalibration restarted. Pose holds |
-| 4 | `kControlRestartAcquisition` | Stationary check, then RESTART_ACQUISITION on the Pico; Pending until the new `acq_epoch` appears in sensor frames; Ok. Localization rebases, pose holds |
+| 3 | `kControlReinitImu` | Needs a Pico IMU profile and v2 Pico firmware, else Failed with ImuUnused or PicoLink. Sends REINIT_IMU to the Pico; Pending while it runs; Ok when it completed and the recalibration restarted; Failed with the Pico's reason or after 15 s. Pose holds |
+| 4 | `kControlRestartAcquisition` | Stationary check, then RESTART_ACQUISITION on the Pico (v2 firmware, else Failed with PicoLink); Pending until the new `acq_epoch` appears in sensor frames; Ok. The used encoders restarted, so the pose is invalid (unplaced, new odometry epoch): place again |
 
 - Without an applied profile: NotReady.
 - Stationary check: over the last 300 ms every profile encoder moved less than
   1 mm of wheel travel and, with a Pico IMU, |yaw rate| < 2 deg/s. Otherwise
   NotStationary and nothing starts.
 - The CONTROL record is deduplicated like SET_POSE. The Brain asks again with
-  the same request id while the answer is Pending; the duplicate reports
+  the same request id while the answer is Pending, and after a lost reply
+  (also across a cable pull in the same session); the duplicate reports
   current progress and never resubmits to the Pico.
 
 | Value | `ControlDetail` | Meaning |

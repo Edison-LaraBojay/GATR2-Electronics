@@ -1,15 +1,29 @@
 # Raspberry Pi setup and automatic startup
 
-This setup runs the VEX IMU bench configuration whenever the Pi boots. Internet
-is needed to install build packages once. Afterwards localization and the 3D
-viewer work offline; Ethernet is only needed to view or manage the Pi. Power the
-Pi separately from the Ethernet cable.
+This setup runs naviGATR with a Brain-profiled configuration whenever the Pi
+boots. Internet is needed to install build packages once. Afterwards
+localization and the 3D viewer work offline; Ethernet is only needed to view or
+manage the Pi. Power the Pi separately from the Ethernet cable.
 
-The bench uses Pico encoder channels 0/1, a VEX IMU on Brain port **1**, and the
-Brain-Pi link on port **10**. Keep the current Pico firmware and build/upload the
-[Brain localization-test app](../brain/localization-test/README.md). The Pi
-service does not start a program on the Brain: start that app there too. See the
-[bench guide](../pi/navigatr/docs/vex_imu_bench.md) for wheel settings and limits.
+The robot is described on the Brain, in
+[brain/robot/gatr2_robot.h](../brain/robot/gatr2_robot.h), and sent to the Pi as
+a robot profile each time the Brain connects; the Pi config names only its own
+devices. The current bench: Pico encoder ports 0 (forward) and 1 (sideways),
+the VEX IMU on Brain Smart Port **1**, and the Brain-Pi link over **USB**. The
+Pi needs the config that matches the Brain's link:
+
+| Brain link (`kUseUsb` in `gatr2_robot.h`) | Pi config |
+|---|---|
+| USB (`true`, the bench) | `config/override/brain_profile_usb.xml` |
+| RS-485 on a Smart Port (`false`, `kLinkPort`) | `config/override/brain_profile_rs485.xml` |
+
+That is the only Brain setting the Pi must match; nothing detects the
+transport automatically. Build and upload the
+[Brain localization-test app](brain_setup.md#2-build-and-upload); the Pi service
+does not start a program on the Brain. See
+[Brain robot profiles](../pi/navigatr/docs/brain_profile.md) for what the Pi does
+with the profile and [USB bench](../pi/navigatr/docs/usb_localization_bench.md)
+for the bench procedure.
 
 ## 1. Get the Pi online once, over Ethernet
 
@@ -92,16 +106,17 @@ Reboot with `sudo reboot`, reconnect by SSH, and inspect the UART devices:
 ls -l /dev/serial* /dev/ttyAMA*
 ```
 
-The [bench XML](../pi/navigatr/config/override/diagnostics/bench_vex_imu.xml)
-uses `/dev/ttyAMA0` for the Pico and `/dev/ttyAMA5` for the Brain, both at 115200
-baud. Confirm these paths on the Pi. On Pi 4, the primary header UART can be
+Both Brain-profile configs use `/dev/ttyAMA0` for the Pico at 115200 baud;
+`brain_profile_rs485.xml` also uses `/dev/ttyAMA5` for the Brain (UART5 is only
+needed for RS-485; USB finds the Brain's USB port itself). Confirm these paths
+on the Pi. On Pi 4, the primary header UART can be
 `/dev/ttyS0` rather than `/dev/ttyAMA0` depending on Bluetooth/UART overlays;
 `/dev/serial0` identifies the primary UART when that alias is available. Update
 the XML to match the hardware instead of assuming the suffixes. The official
 [UART documentation](https://www.raspberrypi.com/documentation/computers/configuration.html#configuring-uarts)
 describes the primary UART aliases and overlays.
 
-The Brain link also uses an RS-485 driver-enable pin. Its XML `gpio` value is a
+The RS-485 Brain link also uses a driver-enable pin. Its XML `gpio` value is a
 **sysfs GPIO number**, which may differ from the BCM number: on a kernel whose
 GPIO chip starts at 512, BCM GPIO6 is **518**, not 6. Check
 `/sys/class/gpio/gpiochip*/base` and the chip labels. See
@@ -123,26 +138,36 @@ sudo journalctl -u navigatr -n 50 --no-pager
 ```
 
 The installer defaults to `build-bench/navigatr` and
-`config/override/diagnostics/bench_vex_imu.xml`. It enables and starts
+`config/override/brain_profile_usb.xml`. It enables and starts
 `navigatr.service`, which runs without an SSH session or network connection and
 restarts after a process exit. Logs go to the journal. It uses absolute paths to
 this checkout; rerun the installer if you move it.
 
-To select another build or configuration:
+The same with the config named explicitly, and the RS-485 variant:
 
 ```sh
-sudo bash tools/install_service.sh --user "$USER" \
-  --binary build-bench/navigatr \
-  --config config/override/diagnostics/bench_vex_imu.xml
+sudo bash tools/install_service.sh --user "$USER" --config config/override/brain_profile_usb.xml
+sudo bash tools/install_service.sh --user "$USER" --binary build-bench/navigatr \
+  --config config/override/brain_profile_rs485.xml
 ```
+
+Changing the robot's geometry, encoders, IMU source or footprint is a Brain
+upload; the service keeps running and applies the new profile when the Brain
+connects. Changing between USB and RS-485, or editing the Pi XML, needs the
+installer (or `sudo systemctl restart navigatr` after an XML edit).
 
 Add `--dry-run` to inspect the unit without installing it. The unit grants the
 existing Raspberry Pi OS `dialout` and `gpio` groups to the service; installation
 reports an error if either required group is missing. A green
 service status alone does **not** prove either link is working: check the journal
 for UART/GPIO permission or device faults, then confirm changing encoder/IMU
-readings and pose in the Brain app and viewer. Required bench serial devices
-cause startup to fail and retry if they are unavailable.
+readings and pose in the Brain app and viewer. The Pico UART (and the RS-485
+UART) are `required`: startup fails and the service retries if they are
+unavailable. The Brain USB port is optional and retried once per second.
+
+The journal shows the lifecycle as `event: ...` lines: the Brain session,
+`profile <id> applied (...)` or `refused: <reason>`, calibration results, Pico
+restarts and `sensor lost: ...: place again`.
 
 Useful commands:
 
@@ -159,9 +184,10 @@ compete for the UARTs or viewer port. For source updates: stop, transfer/rebuild
 then start it again. Reboot once to confirm startup and the viewer return without
 manually launching naviGATR.
 
-If the Brain app started before the Pi was ready and its initial connection
-window expired, press controller **A** or its screen placement button once the
-link connects. That sets the starting pose without restarting the Pi service.
+The Brain app places the robot at its start pose once, when the link, profile
+and sensors are ready. If it gave up waiting (the Pi booted too slowly), or the
+pose was lost later, put the robot at the start pose and press controller
+**A**. That places it without restarting the Pi service.
 
 ## 5. Set up direct Windows-to-Pi Ethernet
 
@@ -215,7 +241,8 @@ Open **http://127.0.0.1:8765/** on Windows. Keep this SSH window open while view
 To forward the viewer without an interactive terminal, add `-N`. Closing the
 viewer or disconnecting Ethernet does not stop the Pi service. The
 [inspection guide](../pi/navigatr/docs/inspection.md) explains the field, pose,
-and diagnostics. This bench profile has no live camera or AprilTag updates.
+Brain link readiness and diagnostics. The Brain-profile configs have no live
+camera or AprilTag updates.
 
 ## 6. Return to router Ethernet when you need internet
 

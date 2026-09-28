@@ -21,11 +21,11 @@
 
 using namespace navigatr;
 
-namespace
+// Minimal recursive-descent JSON syntax check: enough to prove a document
+// parses, deliberately not a JSON library. brain_profile_gtest.cpp uses it.
+namespace inspection_test
 {
 
-// Minimal recursive-descent JSON syntax check: enough to prove a document
-// parses, deliberately not a JSON library.
 struct JsonCheck {
     const std::string& s;
     std::size_t        i = 0;
@@ -153,6 +153,13 @@ bool validJson(const std::string& s) {
     JsonCheck check{s};
     return check.run();
 }
+
+} // namespace inspection_test
+
+using inspection_test::validJson;
+
+namespace
+{
 
 // A small system with one camera, driven by the synthetic rig so real frames
 // and detections exist without hardware.
@@ -383,6 +390,15 @@ TEST(InspectionDocuments, HelloCarriesConfigurationFieldAndCameras) {
     // the rig is not a CameraDevice resource: no device entry, but the
     // frame sensor is listed and every snapshot names the frame identity
     EXPECT_NE(hello.find("\"cameras\":[]"), std::string::npos);
+    // a display-only field: no planning data, and no map for a Brain
+    EXPECT_NE(hello.find("\"boundary\":null"), std::string::npos);
+    EXPECT_NE(hello.find("\"obstacles\":[]"), std::string::npos);
+    EXPECT_NE(hello.find("\"map_id\":null,\"map_error\":\""), std::string::npos) << hello;
+    EXPECT_NE(hello.find("\"id\":\"goal\",\"wire_id\":null"), std::string::npos) << hello;
+    EXPECT_NE(hello.find("\"collision_box\":null"), std::string::npos);
+    EXPECT_NE(hello.find("\"commands_type\":\"noop\",\"brain_profile\":false"),
+              std::string::npos)
+        << hello;
 }
 
 TEST(InspectionDocuments, SnapshotBindsDetectionsToTheirFrameIdentity) {
@@ -433,6 +449,12 @@ TEST(InspectionDocuments, SnapshotBindsDetectionsToTheirFrameIdentity) {
               std::string::npos)
         << snap;
     EXPECT_EQ(snap.find("nan"), std::string::npos);
+    // no Brain link and no Pico link here; the calibration window still shows
+    EXPECT_NE(snap.find("\"brain_link\":null"), std::string::npos);
+    EXPECT_NE(snap.find("\"pico\":null"), std::string::npos);
+    EXPECT_NE(snap.find("\"events\":["), std::string::npos);
+    EXPECT_NE(snap.find("\"stillness\":{\"monitored\":true"), std::string::npos) << snap;
+    EXPECT_NE(snap.find("\"continuity_breaks\":0"), std::string::npos);
 
     const std::string header =
         frameHeaderDocument(f, f.width_px / 2, f.height_px / 2, 70, 1.5, hostTime(now));

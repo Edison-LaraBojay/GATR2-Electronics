@@ -208,6 +208,84 @@ TEST_P(Recovery, ControlPendingThroughLostRepliesRunsOnce) {
     rig.pi.setControlFailure(gatr2::kControlDetailNone);
 }
 
+// A cut much longer than control_attempts round trips while the Pi works on
+// a Pending control: the session and the Pi's record survive, so the same
+// request id gets the final answer once the cable is back.
+TEST_P(Recovery, PendingControlSurvivesALongCut) {
+    ready();
+    const int executed = rig.pi.controlsExecuted();
+    rig.pi.setControlPendingRequests(40);
+    const ControlTicket ticket = rig.client().reinitImu();
+    ASSERT_NE(ticket, 0u);
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return rig.client().controlStatus(ticket).result == gatr2::kResultPending; },
+        kLimit));
+    const uint32_t session = rig.client().session();
+    cut(true);
+    rig.run(1.5);
+    EXPECT_TRUE(rig.client().controlPending());
+    cut(false);
+    ASSERT_TRUE(rig.runUntil([&] { return !rig.client().controlPending(); }, kLimit));
+    EXPECT_EQ(rig.client().controlStatus(ticket).state, ControlResult::kOk);
+    EXPECT_EQ(rig.pi.controlsExecuted(), executed + 1);
+    EXPECT_EQ(rig.client().session(), session);
+    uint16_t id = 0;
+    for (const gatr2::BrainRequest& r : rig.pi.requests()) {
+        if (r.op == gatr2::kOpControl) {
+            if (id == 0) {
+                id = r.request_id;
+            }
+            EXPECT_EQ(r.request_id, id); // never a new id for the same control
+        }
+    }
+}
+
+// With the cable out for good the answered control still ends, at
+// control_wait from its first send.
+TEST_P(Recovery, PendingControlEndsAtControlWaitWhileCut) {
+    ClientConfig config = benchConfig();
+    config.control_wait = 1.0;
+    rig.rebootBrain(config);
+    ready();
+    rig.pi.setControlPendingRequests(1000000);
+    const Seconds       start  = rig.now();
+    const ControlTicket ticket = rig.client().restartAcquisition();
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return rig.client().controlStatus(ticket).result == gatr2::kResultPending; },
+        kLimit));
+    cut(true);
+    ASSERT_TRUE(rig.runUntil([&] { return !rig.client().controlPending(); }, kLimit));
+    EXPECT_EQ(rig.client().controlStatus(ticket).state, ControlResult::kTimedOut);
+    EXPECT_NEAR(rig.now() - start, 1.0, 0.05);
+}
+
+// A wheel read lost to a cut settles kTimedOut instead of waiting forever;
+// the next read after the cable is back gets the readings.
+TEST_P(Recovery, WheelReadLostToACutSettlesAndReadsAgain) {
+    ready();
+    gatr2::WheelReading reading;
+    reading.flags     = gatr2::kWheelFresh | gatr2::kWheelValid;
+    reading.travel_um = 1234;
+    rig.pi.setWheels({reading});
+    const uint32_t sequence = rig.client().wheelReadings().sequence;
+    cut(true);
+    const WheelTicket lost = rig.client().requestWheels();
+    ASSERT_NE(lost, 0u);
+    ASSERT_TRUE(rig.runUntil([&] { return !rig.client().wheelsPending(); }, kLimit));
+    EXPECT_EQ(rig.client().wheelStatus(lost).state, WheelResult::kTimedOut);
+    EXPECT_EQ(rig.client().wheelReadings().sequence, sequence);
+    cut(false);
+    ASSERT_TRUE(rig.runUntil([&] { return rig.client().connected(rig.now()); }, kLimit));
+    const WheelTicket again = rig.client().requestWheels();
+    ASSERT_NE(again, 0u);
+    ASSERT_TRUE(rig.runUntil([&] { return !rig.client().wheelsPending(); }, kLimit));
+    const WheelStatus s = rig.client().wheelStatus(again);
+    ASSERT_EQ(s.state, WheelResult::kOk);
+    ASSERT_EQ(s.readings.count, 1);
+    EXPECT_EQ(s.readings.wheels[0].travel_um, 1234);
+    EXPECT_EQ(rig.client().wheelReadings().sequence, sequence + 1);
+}
+
 TEST_P(Recovery, PiRestartReappliesProfileAndAsksForPlacement) {
     ready();
     rig.pi.restart(0x0D15EA5E);

@@ -2,7 +2,10 @@
 
 #include "runtime/system.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <random>
 #include <set>
@@ -11,6 +14,9 @@
 #include "config/composition.h"
 #include "config/config_node.h"
 #include "core/host_clock.h"
+#include "payloads/pico_telemetry_samples.h"
+#include "payloads/sensor_samples.h"
+#include "runtime/pico_control_ref.h"
 #include "tinyxml2/tinyxml2.h"
 
 namespace navigatr
@@ -66,26 +72,6 @@ std::string hexId(uint32_t id) {
     return buf;
 }
 
-const char* reasonName(uint8_t reason) {
-    switch (reason) {
-    case gatr2::kProfileReasonFormat: return "format";
-    case gatr2::kProfileReasonTopology: return "topology";
-    case gatr2::kProfileReasonWheelCount: return "wheel count";
-    case gatr2::kProfileReasonEncoderPort: return "encoder port";
-    case gatr2::kProfileReasonWheelGeometry: return "wheel geometry";
-    case gatr2::kProfileReasonObservability: return "observability";
-    case gatr2::kProfileReasonImuSource: return "IMU source";
-    case gatr2::kProfileReasonImuPort: return "IMU port";
-    case gatr2::kProfileReasonImuCombination: return "IMU combination";
-    case gatr2::kProfileReasonCamera: return "camera";
-    case gatr2::kProfileReasonFootprint: return "footprint";
-    case gatr2::kProfileReasonBuild: return "build";
-    case gatr2::kProfileReasonNotAccepted: return "not accepted";
-    case gatr2::kProfileReasonCalibration: return "calibration";
-    default: return "unknown";
-    }
-}
-
 } // namespace
 
 // The System as the brain_link commands slot sees it.
@@ -105,6 +91,15 @@ public:
 
     uint8_t control(uint8_t action, uint8_t arg, MonotonicTime now, uint8_t& detail) override {
         return system_.controlProfile(action, arg, now, detail);
+    }
+
+    uint8_t controlProgress(uint8_t action, uint8_t, MonotonicTime now,
+                            uint8_t& detail) override {
+        return system_.controlProgress(action, now, detail);
+    }
+
+    uint8_t readWheels(MonotonicTime now, uint8_t& count, gatr2::WheelReading* wheels) override {
+        return system_.readWheels(now, count, wheels);
     }
 
 private:
@@ -356,6 +351,9 @@ bool System::buildProfileHost(const ConfigNode& pipeline, const ConfigNode& prof
                                  profile_config_, err)) {
         return false;
     }
+    if (!parsePicoReference(commands, resources_, pico_, err)) {
+        return false;
+    }
     const std::string bench = commands.child("BenchImu").attr("resource_id");
     if (!profile_config_.brain_imu.empty() && bench != profile_config_.brain_imu.value) {
         err = profile.path() + ": BrainImu " + profile_config_.brain_imu.value +
@@ -405,7 +403,7 @@ LocalizationRequests System::requestsFrom(const CommandState& command) const {
 bool System::prepareProfile(const gatr2::RobotProfileDoc& profile, uint32_t id, uint8_t& reason,
                             uint8_t& detail) {
     if (!checkProfileCapabilities(profile_config_, profile, reason, detail)) {
-        noteEvent(last_now_, "profile " + hexId(id) + " refused: " + reasonName(reason) +
+        noteEvent(last_now_, "profile " + hexId(id) + " refused: " + profileReasonName(reason) +
                                  " (index " + std::to_string(detail) + ")");
         return false;
     }
@@ -458,30 +456,324 @@ bool System::prepareProfile(const gatr2::RobotProfileDoc& profile, uint32_t id, 
 
 uint8_t System::controlProfile(uint8_t action, uint8_t, MonotonicTime now, uint8_t& detail) {
     detail = gatr2::kControlDetailNone;
-    if (profileBinding() == nullptr) {
+    const std::shared_ptr<const ProfileBinding> binding = profileBinding();
+    if (binding == nullptr) {
         return gatr2::kResultNotReady;
     }
-    if (action != gatr2::kControlRecalibrate && action != gatr2::kControlReinitialize) {
-        return gatr2::kResultNotReady;   // Pico commands arrive with the Pico link
-    }
-    const char* name = action == gatr2::kControlRecalibrate ? "recalibrate" : "reinitialize";
-    std::string why;
-    if (!precheck_.still(now, &why)) {
+    const auto stationary = [&](const char* name) {
+        std::string why;
+        if (precheck_.still(now, &why)) {
+            return true;
+        }
         noteEvent(now, std::string(name) + " refused, not stationary: " + why);
-        return gatr2::kResultNotStationary;
-    }
-    if (action == gatr2::kControlRecalibrate) {
+        return false;
+    };
+    switch (action) {
+    case gatr2::kControlRecalibrate: {
+        if (!stationary("recalibrate")) {
+            return gatr2::kResultNotStationary;
+        }
         const bool any = execute_localization_.recalibrate();
         noteEvent(now, any ? "IMU bias recalibration started; pose holds"
                            : "recalibrate: nothing to calibrate on the Pi for this profile");
         return gatr2::kResultOk;
     }
-    execute_localization_.reset();
-    placement_floor_ = command_.init_sequence;
-    noteEvent(now, "localization reinitialized: odometry epoch " +
-                       std::to_string(execute_localization_.state().odometry_epoch) +
-                       ", placement withdrawn, bias recalibrating");
+    case gatr2::kControlReinitialize:
+        if (!stationary("reinitialize")) {
+            return gatr2::kResultNotStationary;
+        }
+        execute_localization_.reset();
+        placement_floor_ = command_.init_sequence;
+        noteEvent(now, "localization reinitialized: odometry epoch " +
+                           std::to_string(execute_localization_.state().odometry_epoch) +
+                           ", placement withdrawn, bias recalibrating");
+        return gatr2::kResultOk;
+    case gatr2::kControlReinitImu: {
+        if (binding->profile.imu_source != gatr2::kImuSourcePico) {
+            detail = gatr2::kControlDetailImuUnused;
+            noteEvent(now, "IMU reinitialization refused: the profile does not use the Pico IMU");
+            return gatr2::kResultFailed;
+        }
+        const uint32_t handle =
+            submitPico(gatr2::kPicoOpReinitImu, binding->profile.imu_port, now, detail);
+        if (handle == 0) {
+            return gatr2::kResultFailed;
+        }
+        pico_op_         = PicoOperation{};
+        pico_op_.active  = true;
+        pico_op_.action  = action;
+        pico_op_.handle  = handle;
+        pico_op_.started = now;
+        pico_op_.result  = gatr2::kResultPending;
+        noteEvent(now, "Pico IMU reinitialization requested");
+        return gatr2::kResultPending;
+    }
+    case gatr2::kControlRestartAcquisition: {
+        if (!stationary("acquisition restart")) {
+            return gatr2::kResultNotStationary;
+        }
+        const PicoLinkState link = pico_ != nullptr ? pico_->link() : PicoLinkState{};
+        const uint32_t handle = submitPico(gatr2::kPicoOpRestartAcquisition, 0, now, detail);
+        if (handle == 0) {
+            return gatr2::kResultFailed;
+        }
+        pico_op_           = PicoOperation{};
+        pico_op_.active    = true;
+        pico_op_.action    = action;
+        pico_op_.handle    = handle;
+        pico_op_.started   = now;
+        pico_op_.acq_epoch = link.acq_epoch;
+        pico_op_.restarts  = link.restarts;
+        pico_op_.result    = gatr2::kResultPending;
+        noteEvent(now, "Pico acquisition restart requested");
+        return gatr2::kResultPending;
+    }
+    default: return gatr2::kResultInvalidArgument;
+    }
+}
+
+uint32_t System::submitPico(uint8_t op, uint8_t arg, MonotonicTime now, uint8_t& detail) {
+    detail = gatr2::kControlDetailPicoLink;
+    if (pico_ == nullptr) {
+        noteEvent(now, "Pico command refused: no Pico link configured");
+        return 0;
+    }
+    const PicoLinkState link = pico_->link();
+    if (!link.identity || !link.frames_fresh) {
+        noteEvent(now, link.frames_fresh ? "Pico command refused: the Pico firmware takes no "
+                                           "commands (no v2 identity)"
+                                         : "Pico command refused: no Pico frames");
+        return 0;
+    }
+    const uint32_t handle = pico_->submit(op, arg, now, kPicoOperationMs / 1000.0);
+    if (handle == 0) {
+        noteEvent(now, "Pico command refused by the Pico link");
+        return 0;
+    }
+    detail = gatr2::kControlDetailNone;
+    return handle;
+}
+
+uint8_t System::controlProgress(uint8_t action, MonotonicTime now, uint8_t& detail) {
+    updatePicoOperation(now);
+    if (!pico_op_.active || pico_op_.action != action) {
+        detail = gatr2::kControlDetailPicoLink;   // nothing is running under this request
+        return gatr2::kResultFailed;
+    }
+    detail = pico_op_.detail;
+    return pico_op_.result;
+}
+
+void System::updatePicoOperation(MonotonicTime now) {
+    PicoOperation& op = pico_op_;
+    if (!op.active || op.result != gatr2::kResultPending || pico_ == nullptr) {
+        return;
+    }
+    const bool reinit = op.action == gatr2::kControlReinitImu;
+    const auto settle = [&](uint8_t result, uint8_t detail, const std::string& text) {
+        op.result = result;
+        op.detail = detail;
+        noteEvent(now, text);
+    };
+    const PicoRequestStatus status = pico_->request(op.handle);
+    const PicoLinkState     link   = pico_->link();
+    switch (status.state) {
+    case PicoRequestState::kFailed:
+        settle(gatr2::kResultFailed,
+               status.detail != gatr2::kControlDetailNone
+                   ? status.detail
+                   : static_cast<uint8_t>(gatr2::kControlDetailPicoRefused),
+               reinit ? "Pico IMU reinitialization failed" : "Pico acquisition restart failed");
+        return;
+    case PicoRequestState::kUnknown:
+        settle(gatr2::kResultFailed, gatr2::kControlDetailPicoLink,
+               reinit ? "Pico IMU reinitialization lost with the Pico link"
+                      : "Pico acquisition restart lost with the Pico link");
+        return;
+    case PicoRequestState::kCompleted:
+        // a used source restarted: the pose needs a placement again (8.10)
+        if (reinit) {
+            execute_localization_.recalibrate();
+            settle(gatr2::kResultOk, gatr2::kControlDetailNone,
+                   "Pico IMU reinitialized; bias recalibration started");
+            loseSensor(now, "pico_imu reinitialized", true);
+            return;
+        }
+        if (link.acq_epoch != op.acq_epoch || link.restarts != op.restarts) {
+            settle(gatr2::kResultOk, gatr2::kControlDetailNone,
+                   "Pico acquisition restarted (acquisition epoch " +
+                       std::to_string(link.acq_epoch) + "); encoders rebased");
+            loseSensor(now, "Pico acquisition restarted", true);
+            return;
+        }
+        break;   // completed on the Pico; waiting for frames of the new epoch
+    case PicoRequestState::kSending:
+    case PicoRequestState::kRunning: break;
+    }
+    if (sameDomain(now, op.started) && now - op.started > kPicoOperationMs) {
+        settle(gatr2::kResultFailed, gatr2::kControlDetailTimedOut,
+               reinit ? "Pico IMU reinitialization timed out"
+                      : "Pico acquisition restart timed out");
+    }
+}
+
+uint8_t System::readWheels(MonotonicTime now, uint8_t& count, gatr2::WheelReading* wheels) const {
+    count = 0;
+    const std::shared_ptr<const ProfileBinding> binding = profileBinding();
+    if (binding == nullptr) {
+        return gatr2::kResultNotReady;
+    }
+    const SensorMap&   sensors   = execute_sensors_.retained();
+    const ResourceMap& resources = execute_resources_.retained();
+    const auto         resource  = resources.find(profile_config_.encoder_resource);
+    for (uint8_t i = 0; i < binding->profile.wheel_count && i < gatr2::kWheelReadingsMax; ++i) {
+        const gatr2::ProfileWheel& w = binding->profile.wheels[i];
+        gatr2::WheelReading        r;
+        r.port = w.encoder_port;
+        if (resource != resources.end() && w.encoder_port < kProfileEncoderPorts) {
+            const auto out = resource->second.outputs.find(profile_config_.ports[w.encoder_port]);
+            if (out != resource->second.outputs.end() && out->second.latest.has_value()) {
+                const PicoEncoderCounts* raw =
+                    out->second.latest->payload.get<PicoEncoderCounts>();
+                r.counts = raw != nullptr ? raw->counts : 0;
+            }
+        }
+        const auto it = i < binding->encoders.size() ? sensors.find(binding->encoders[i])
+                                                     : sensors.end();
+        if (it != sensors.end() && it->second.latest.has_value()) {
+            const StoredSample&  stored = *it->second.latest;
+            const EncoderSample* sample = stored.payload.get<EncoderSample>();
+            if (sample != nullptr) {
+                r.flags |= gatr2::kWheelValid;
+                // wheel angle already carries counts per revolution, gearing
+                // and polarity; the radius makes it raw travel, no travel scale
+                const double um = std::round(sample->angle_rad * w.radius_um);
+                r.travel_um = static_cast<int32_t>(std::clamp(um, -2147483648.0, 2147483647.0));
+                r.discontinuity =
+                    static_cast<uint16_t>((sample->discontinuity_epoch + stored.epoch) & 0xFFFF);
+                const bool host = stored.receivedAt.domain == ClockDomain::kHost &&
+                                  now.domain == ClockDomain::kHost;
+                const int64_t age = host ? now - stored.receivedAt : 0;
+                r.age_ms = static_cast<uint16_t>(std::clamp<int64_t>(age, 0, 65535));
+                if (it->second.state == SourceState::kValid && host && age <= kWheelFreshMs) {
+                    r.flags |= gatr2::kWheelFresh;
+                }
+            }
+        }
+        wheels[count++] = r;
+    }
     return gatr2::kResultOk;
+}
+
+void System::watchSensors(const SensorMap& sensors, MonotonicTime now) {
+    if (!sensor_loss_.active()) {
+        return;
+    }
+    PicoLinkState        link;
+    const PicoLinkState* pico = nullptr;
+    if (pico_ != nullptr) {
+        link = pico_->link();
+        pico = &link;
+    }
+    const SensorLossMonitor::Result r = sensor_loss_.update(sensors, pico, now);
+    if (!r.edge.empty()) {
+        loseSensor(now, r.edge, true);
+    } else if (!r.level.empty()) {
+        loseSensor(now, r.level, !loss_warned_);
+    }
+    loss_warned_ = !r.level.empty();
+}
+
+void System::loseSensor(MonotonicTime now, const std::string& why, bool note) {
+    if (!robot_.initialized) {
+        return;   // nothing placed, nothing to lose
+    }
+    if (!profile_config_.unplace_on_sensor_loss) {
+        if (note) {
+            noteEvent(now, "sensor lost: " + why + " (warn only; the pose is kept)");
+        }
+        return;
+    }
+    execute_localization_.loseContinuity("sensor lost: " + why);
+    robot_           = execute_localization_.state();
+    placement_floor_ = command_.init_sequence;
+    noteEvent(now, "sensor lost: " + why + ": place again (odometry epoch " +
+                       std::to_string(robot_.odometry_epoch) + ")");
+}
+
+void System::noteRecovery(MonotonicTime now) {
+    RecoverySeen& s = seen_;
+
+    // Brain link
+    if (command_.reply.pending) {
+        if (!s.brain_active && s.last_request.isSet()) {
+            noteEvent(now, "Brain link requests resumed");
+        }
+        s.brain_active = true;
+        s.last_request = now;
+    } else if (s.brain_active && sameDomain(now, s.last_request) &&
+               now - s.last_request > 1000) {
+        s.brain_active = false;
+        noteEvent(now, "Brain link quiet for 1 s");
+    }
+    if (command_.session != s.session) {
+        if (command_.session != 0) {
+            noteEvent(now, "Brain session opened");
+        }
+        s.session = command_.session;
+    }
+
+    // Pico identity
+    if (pico_ != nullptr) {
+        const PicoLinkState link = pico_->link();
+        if (s.pico_known) {
+            if (link.frames_fresh != s.pico_fresh) {
+                noteEvent(now, link.frames_fresh ? "Pico frames restored" : "Pico frames lost");
+            }
+            if (link.reboots != s.reboots) {
+                noteEvent(now, "Pico rebooted (boot " + std::to_string(link.boot_id) +
+                                   "); encoders rebased, IMU bias recalibrates");
+            }
+            if (link.restarts != s.restarts) {
+                noteEvent(now, "Pico acquisition epoch " + std::to_string(link.acq_epoch));
+            }
+            if (link.imu_restarts != s.imu_restarts) {
+                noteEvent(now, "Pico IMU restarted (epoch " + std::to_string(link.imu_epoch) + ")");
+            }
+        }
+        s.pico_known   = true;
+        s.pico_fresh   = link.frames_fresh;
+        s.reboots      = link.reboots;
+        s.restarts     = link.restarts;
+        s.imu_restarts = link.imu_restarts;
+    }
+
+    // calibration of every function with a window
+    const std::vector<ObservationFunctionStatus> functions = feed_->status().functions;
+    if (s.stillness.size() != functions.size()) {
+        s.stillness.assign(functions.size(), StillnessStatus{});
+        for (std::size_t i = 0; i < functions.size(); ++i) {
+            s.stillness[i] = functions[i].stillness;
+        }
+        return;
+    }
+    for (std::size_t i = 0; i < functions.size(); ++i) {
+        const StillnessStatus& now_s = functions[i].stillness;
+        StillnessStatus&       was   = s.stillness[i];
+        if (now_s.calibration != was.calibration &&
+            (now_s.calibration == BiasCalibration::kDone ||
+             now_s.calibration == BiasCalibration::kFailed)) {
+            noteEvent(now, functions[i].id + ": IMU bias calibration " +
+                               toString(now_s.calibration) +
+                               (now_s.calibration == BiasCalibration::kFailed
+                                    ? " (" + now_s.reason + ")"
+                                    : std::string()));
+        } else if (now_s.attempts != was.attempts && now_s.attempts > 1) {
+            noteEvent(now, functions[i].id + ": IMU bias calibration restarted (" +
+                               now_s.reason + ")");
+        }
+        was = now_s;
+    }
 }
 
 bool System::applyPendingProfile() {
@@ -505,6 +797,13 @@ void System::swapProfile() {
     if (c == nullptr) {
         return;
     }
+    ProfileStatus& status = command_.profile;
+    if (status.state != gatr2::kProfileApplying || status.id != c->binding->id) {
+        // a later APPLY (the running profile again, or a refused one) won
+        noteEvent(last_now_, "profile " + hexId(c->binding->id) +
+                                 " dropped: superseded before the boundary");
+        return;
+    }
     execute_sensors_.replaceProfile(std::move(c->sensors));
     c->localization.continueFrom(execute_localization_);
     execute_localization_ = std::move(c->localization);
@@ -512,20 +811,25 @@ void System::swapProfile() {
     // placement requests made under the previous odometry never re-apply
     placement_floor_ = command_.init_sequence;
 
-    ProfileStatus& status = command_.profile;
-    status.applied_id     = c->binding->id;
-    if (status.id == c->binding->id) {
-        status.state  = gatr2::kProfileApplied;
-        status.reason = gatr2::kProfileReasonNone;
-        status.detail = 0;
-    }
+    status.applied_id = c->binding->id;
+    status.state      = gatr2::kProfileApplied;
+    status.reason     = gatr2::kProfileReasonNone;
+    status.detail     = 0;
     c->binding->generation = ++profile_applies_;
 
     std::vector<StationaryPrecheck::Wheel> wheels;
     for (uint8_t i = 0; i < c->binding->profile.wheel_count; ++i) {
         wheels.push_back({c->binding->encoders[i], c->binding->profile.wheels[i].radius_um * 1e-6});
     }
-    precheck_.configure(wheels, c->binding->imu);
+    precheck_.configure(wheels, c->binding->imu, c->binding->bench_imu);
+    std::vector<SensorLossMonitor::Wheel> used;
+    for (uint8_t i = 0; i < c->binding->profile.wheel_count; ++i) {
+        used.push_back({c->binding->encoders[i], c->binding->profile.wheels[i].encoder_port});
+    }
+    sensor_loss_.configure(used, c->binding->imu, c->binding->profile.imu_port,
+                           c->binding->bench_imu, profile_config_.sensor_loss_ms, last_now_);
+    loss_warned_ = false;
+    seen_.stillness.clear();
     field_handoff_.clear();
     profile_warnings_ = std::move(c->warnings);
     {
@@ -554,7 +858,10 @@ void System::swapToWaiting() {
     }
     robot_           = execute_localization_.state();
     placement_floor_ = 0;
-    precheck_.configure({}, SensorId{});
+    precheck_.configure({}, SensorId{}, nullptr);
+    sensor_loss_.clear();
+    seen_.stillness.clear();
+    pico_op_        = PicoOperation{};
     profile_warnings_.clear();
     publishBindingView();
 }
@@ -679,8 +986,17 @@ void System::estimationCycle(MonotonicTime now) {
     CommandsOutput commands_out = commands_->run({command_, now, &diagnostics_});
     command_                    = commands_out.command;
     diagnostics_.note(slot_labels_[0], commands_out.status);
+    if (profiled_) {
+        // with this cycle's Brain IMU sample, before any placement request
+        // reaches localization
+        watchSensors(sensor_map, now);
+    }
 
     robot_ = execute_localization_(sensor_map, requestsFrom(command_), context);
+    noteRecovery(now);
+    if (pico_ != nullptr) {
+        updatePicoOperation(now);
+    }
 
     publishSourceHealth(now);
 }
@@ -699,12 +1015,21 @@ void System::reportingCycle(MonotonicTime now) {
          status, field->field, command_, target_, now, &diagnostics_});
     diagnostics_.note(slot_labels_[2], pub_out.status);
 
-    auto reporting     = std::make_shared<ReportingSnapshot>();
-    reporting->command = command_;
-    reporting->target  = target_;
-    reporting->at      = now;
-    reporting->cycle   = cycle_.load();
-    auto diagnostics   = std::make_shared<DiagnosticsSnapshot>();
+    auto reporting            = std::make_shared<ReportingSnapshot>();
+    reporting->command        = command_;
+    reporting->target         = target_;
+    reporting->at             = now;
+    reporting->cycle          = cycle_.load();
+    reporting->brain_state    = pub_out.brain_state;
+    reporting->pico_operation = pico_op_;
+    if (profiled_) {
+        std::array<gatr2::WheelReading, gatr2::kWheelReadingsMax> wheels{};
+        uint8_t                                                    count = 0;
+        if (readWheels(now, count, wheels.data()) == gatr2::kResultOk) {
+            reporting->wheels.assign(wheels.begin(), wheels.begin() + count);
+        }
+    }
+    auto diagnostics = std::make_shared<DiagnosticsSnapshot>();
     diagnostics->estimation = diagnostics_;
     {
         std::lock_guard<std::mutex> lock(snapshot_mutex_);

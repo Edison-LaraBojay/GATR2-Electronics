@@ -641,6 +641,13 @@ TEST(PlannerRandom, AvoidingPathsAreClearAndRefusalsHonest) {
             r.goal          = endPose(rng, f, r.model);
             r.allow_reverse = rng.chance(0.8);
             r.field         = &f;
+            if (rng.chance(0.15)) {
+                // Within min_turn of the line to the goal: the first turn is
+                // dropped, and exits may join the leg.
+                const Radians line = std::atan2(r.goal.y - r.start.y, r.goal.x - r.start.x);
+                r.start.heading = wrapAngle(line + rng.uniform(-config.min_turn, config.min_turn));
+                r.goal.heading  = rng.chance(0.5) ? line : r.start.heading;
+            }
             SCOPED_TRACE("seed " + std::to_string(seed) + " trial " + std::to_string(trial));
 
             const PlanResult p      = planner.plan(r);

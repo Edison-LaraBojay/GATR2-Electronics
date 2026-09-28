@@ -14,6 +14,7 @@ add_library(communigatr STATIC
     src/robot_profile.cpp
     src/startup_placement.cpp
     src/usb_line.cpp
+    src/vex_imu_recalibration.cpp
     src/wheel_calibration.cpp
     ${GATR2_REPO_ROOT}/common/frame_codec.cpp
     ${GATR2_REPO_ROOT}/common/link_documents.cpp
@@ -49,6 +50,7 @@ set(COMMUNIGATR_TEST_SOURCES
     tests/recovery_gtest.cpp
     tests/readiness_gtest.cpp
     tests/profile_change_gtest.cpp
+    tests/vex_imu_recalibration_gtest.cpp
     tests/wheel_calibration_gtest.cpp
     tests/startup_placement_gtest.cpp
     tests/link_events_gtest.cpp

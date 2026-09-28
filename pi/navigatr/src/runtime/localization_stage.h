@@ -66,6 +66,14 @@ public:
     // holds. False when none does.
     bool recalibrate();
 
+    // Ends pose continuity when motion may have gone unmeasured: the odometry
+    // epoch moves on (history clears with it) and the robot is unplaced; the
+    // pose shown holds. The caller withdraws earlier placement requests.
+    // Estimation worker stopped, inline, or between cycles on it.
+    void               loseContinuity(const std::string& why);
+    uint64_t           continuityBreaks() const { return continuity_breaks_; }
+    const std::string& lastBreak() const { return last_break_; }
+
     // Readers on any thread.
     std::shared_ptr<RobotStateFeed> feed() const { return feed_; }
 
@@ -103,6 +111,8 @@ private:
     RobotObservationMap             pending_;
     uint64_t                        publication_ = 0;
     uint64_t                        updates_     = 0;
+    uint64_t                        continuity_breaks_ = 0;
+    std::string                     last_break_;
 };
 
 // node is the <Localization> element. Nothing on failure.

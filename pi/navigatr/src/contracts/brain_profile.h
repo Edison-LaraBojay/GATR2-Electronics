@@ -6,8 +6,8 @@
 // controlled boundary. No host means this configuration takes no profile.
 //
 // The host also answers what depends on the running profile: the sensors
-// its health reports on, and CONTROL. Called on the estimation worker,
-// except applied(), which any thread may call.
+// its health reports on, CONTROL and READ_WHEELS. Called on the estimation
+// worker, except applied(), which any thread may call.
 
 #pragma once
 #include <cstdint>
@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "common/frames.h"
 #include "common/link_documents.h"
 #include "core/ids.h"
 #include "core/time.h"
@@ -50,9 +51,19 @@ public:
     virtual std::shared_ptr<const ProfileBinding> applied() const = 0;
 
     // CONTROL action (gatr2::ControlAction). Returns a gatr2::BrainResult;
-    // detail is a gatr2::ControlDetail.
+    // detail is a gatr2::ControlDetail. Pending: the Pico is still working.
     virtual uint8_t control(uint8_t action, uint8_t arg, MonotonicTime now,
                             uint8_t& detail) = 0;
+
+    // Progress of the CONTROL a duplicate request names, whose recorded
+    // result was Pending. Reports only; never starts or resubmits anything.
+    virtual uint8_t controlProgress(uint8_t action, uint8_t arg, MonotonicTime now,
+                                    uint8_t& detail) = 0;
+
+    // READ_WHEELS: one reading per profile wheel, profile order, into
+    // wheels[0..count). A gatr2::BrainResult; NotReady before an apply.
+    virtual uint8_t readWheels(MonotonicTime now, uint8_t& count,
+                               gatr2::WheelReading* wheels) = 0;
 };
 
 } // namespace navigatr

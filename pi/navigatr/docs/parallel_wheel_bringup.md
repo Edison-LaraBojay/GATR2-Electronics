@@ -1,9 +1,20 @@
 # Bring up two parallel wheels + BNO08X
 
-The systems-test path for the current robot: Pi HAT v2, a Raspberry Pi Pico, a
-GY-BNO08X IMU, and two tracking wheels that both measure forward/backward
-travel. Get localization working first with profile A, then add the camera
-with profile B. Neither profile uses a third wheel or encoder channel 2.
+Pi HAT v2, a Raspberry Pi Pico, a GY-BNO08X IMU, and two tracking wheels that
+both measure forward/backward travel, configured in Pi XML. Get localization
+working first with profile A, then add the camera with profile B. Neither
+profile uses a third wheel or encoder channel 2.
+
+**The primary path is a Brain profile.** The same hardware runs from
+`brain_profile_usb.xml` or `brain_profile_rs485.xml` with a Brain profile of
+two forward wheels and the Pico IMU: the Pi then builds the same models
+(`tracking_wheel_motion` with the heading constraint and zero lateral motion)
+from the Brain's description, and a geometry change is a Brain upload. See
+[Brain robot profiles](brain_profile.md). The current Brain programs always
+send a profile; these XML profiles refuse it (reason "not accepted"), and the
+Brain then refuses to place, so use them with a Brain client built without a
+profile or for camera work. The wiring, Pico and sensor-check sections below
+apply to both paths.
 
 | Profile | Main file | Adds |
 |---|---|---|
@@ -144,8 +155,8 @@ reads "no camera configured".
 1. **Hold stationary and level for alignment and bias.** Wait until the
    localization table shows `tracking_motion` ready, normally about 6 s.
    Pico alignment requires at least 2 s and 200 acceleration samples with
-   quiet, fresh gyro XYZ. Its checks allow gravity magnitude within 0.5 m/s²
-   of 9.80665, acceleration-vector variation up to 0.25 m/s², and gyro magnitude
+   quiet, fresh gyro XYZ. Its checks allow gravity magnitude within 0.5 m/s^2
+   of 9.80665, acceleration-vector variation up to 0.25 m/s^2, and gyro magnitude
    up to 0.10 rad/s; motion restarts collection. The Pi then collects 200 yaw
    samples, about 4 s at 50 Hz, restarting its bias collection if the wheels
    move. Until then no usable pose is produced. If it never becomes ready,
@@ -176,9 +187,11 @@ reads "no camera configured".
 
 Restart navigatr after editing the XML. Each start calibrates the gyro bias
 again; restarting the Pico or BNO08X also repeats startup gravity alignment.
-An IMU reset alone does not restart the Pi's bias collection. After remounting
-the IMU, restart it and localization, then repeat the level, stationary startup.
-The Brain's placement supplies field heading because gravity only defines up.
+A Pico reboot, or an IMU restart that the Pico firmware reports (its IMU
+epoch), invalidates the Pi's bias and collects it again; older firmware shows a
+hub reset only as a gap, which keeps the old bias. After remounting the IMU,
+restart it and localization, then repeat the level, stationary startup. The
+Brain's placement supplies field heading because gravity only defines up.
 
 ## 6. Brain placement
 
@@ -191,19 +204,16 @@ placement relocates it.
 
 The field axes come from [field.xml](../config/override/field.xml) and never
 change with the starting side. Starting on the other side means sending a
-different x, y and heading, not mirroring the axes. In the testing
-application the starting pose is `kStartPose` in `brain/testing/include/robot_config.h`
-(meters, radians counterclockwise from field +x). It is a placeholder until you
-measure where the robot sits. See [docs/investigatr.md](../../../docs/investigatr.md)
-for the Brain side.
+different x, y and heading, not mirroring the axes. The Brain programs'
+starting pose is `kStartPose` in
+[brain/robot/gatr2_robot.h](../../../brain/robot/gatr2_robot.h) (meters,
+degrees counterclockwise from field +x). It is a placeholder until you measure
+where the robot sits. See [Brain setup](../../../docs/brain_setup.md) for the
+Brain side.
 
-Navigation behavior in profile A:
-
-- A field-coordinate `goTo` works once the robot is placed.
-- A robot-relative move uses localization alone and needs no landmarks.
-- A landmark-relative request fails immediately as unsupported, because world
-  estimation is off. A nominal landmark drawn in the viewer is never used as a
-  target.
+In profile A world estimation is off: the field documents the Brain reads keep
+every landmark at its nominal pose, so landmark-relative moves use the nominal
+map. A nominal landmark drawn in the viewer is never an observation.
 
 ## 7. Add the camera: profile B
 

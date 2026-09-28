@@ -51,9 +51,10 @@ public:
 
     // True when every segment of path stays clear of field for model: the
     // check that decides whether a correction forces a replan. Exact
-    // segments are checked by their swept footprint; the first may start,
-    // and the last end, nearer than the clearance, never overlapping at the
-    // end.
+    // segments are checked by their swept footprint with the clearance;
+    // within 2R of the path's start and goal poses (R the enclosing radius)
+    // the first and last may come as near as those poses already are, never
+    // overlapping at the end.
     virtual bool clear(const Path& path, const Field& field, const MotionModel& model) const = 0;
 };
 
@@ -61,11 +62,12 @@ struct GeometricPlannerConfig {
     Meters      vertex_margin = 0.005; // vertices pushed out beyond the grown boxes
     std::size_t max_vertices  = 512;   // graph bound, kNoPath beyond it; work grows as its square
     Meters      min_segment   = 0.005; // shorter translations are dropped
-    Radians     min_turn      = 0.01;  // smaller turns are dropped
+    Radians     min_turn      = 0.01;  // smaller turns dropped (not onto exact moves), <= 0.1
 };
 
 // Visibility graph over obstacle boxes grown by the enclosing radius of the
-// model, with straight exact exits for a start or goal nearer than that. See
+// model, with straight exact exits for a start or goal nearer than that; the
+// search starts from every exit and ends at every approach. See
 // docs/investigatr.md for the method and its limits.
 class GeometricPlanner : public PathPlanner {
 public:

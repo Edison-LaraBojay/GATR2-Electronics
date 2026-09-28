@@ -1,5 +1,6 @@
 // diagnostics.js
-// The diagnostics panel: sources, workers, localization function readiness,
+// The diagnostics panel: sources, workers, localization function readiness
+// with each function's stationary window and IMU bias calibration,
 // diagnostics function counters and link counters from each snapshot, plus
 // the preview budget control that sends {"type":"preview",...} to the
 // server. Tables are rebuilt at most a few times a second; the snapshot
@@ -121,13 +122,27 @@ export class Diagnostics {
         this.workers.appendChild(ir);
 
         const loc = snap.localization || {};
-        fill(this.loc, ['id', 'type', 'ready', 'note'],
-            (loc.functions || []).map((f) => [f.id, f.type, [f.ready ? 'ready' : 'not ready', f.ready ? 'state-ok' : 'state-no_data'], f.note || '']));
+        const still = (f) => {
+            const s = f.stillness;
+            if (!s || !s.monitored) {
+                return ['-', '-', '-'];
+            }
+            return [
+                s.stationary ? 'yes' : 'no',
+                `${s.calibration} ${fmt(s.progress_ms / 1000, 1)}/${fmt(s.window_ms / 1000, 1)} s, ${s.attempts} att`,
+                typeof s.bias_dps === 'number' ? fmt(s.bias_dps, 3) : '-',
+            ];
+        };
+        fill(this.loc, ['id', 'type', 'ready', 'still', 'calibration', 'bias dps', 'note'],
+            (loc.functions || []).map((f) => [f.id, f.type, [f.ready ? 'ready' : 'not ready', f.ready ? 'state-ok' : 'state-no_data'],
+                ...still(f), f.note || '']));
         const lr = el('tr');
         const lt = el('td');
-        lt.colSpan = 4;
+        lt.colSpan = 7;
         lt.textContent = `${loc.estimator_type}: ${loc.updates} updates, history ${loc.history_size}, publication ${loc.publication}, ` +
-            `clock ${loc.clock_mapped ? 'mapped' : 'unmapped'}, ${loc.all_ready ? 'all ready' : 'not all ready'}`;
+            `clock ${loc.clock_mapped ? 'mapped' : 'unmapped'}, ${loc.all_ready ? 'all ready' : 'not all ready'}, ` +
+            `${loc.stationary ? 'stationary' : 'moving or unknown'}, ${loc.continuity_breaks || 0} continuity breaks` +
+            (loc.last_break ? ` (last: ${loc.last_break})` : '');
         lr.appendChild(lt);
         this.loc.appendChild(lr);
 
@@ -151,6 +166,7 @@ export class Diagnostics {
         const cfg = h.configuration || {};
         const fs = snap.field_snapshot || {};
         const target = snap.target;
+        const link = snap.brain_link;
         fill(this.session, ['key', 'value'], [
             ['session', `${snap.session.id} reset ${snap.session.reset_count}`],
             ['configuration', `${cfg.id || ''} ${cfg.digest ? 'digest ' + cfg.digest : ''}`],
@@ -158,6 +174,9 @@ export class Diagnostics {
             ['cycle', `${snap.cycle} (${snap.running ? 'running' : 'stopped'}) host ${snap.host_ms} ms`],
             ['field snapshot', `${fs.status || 'n/a'} inv ${fs.invocation} age ${fmtMs(fs.age_ms)} ${fs.diagnostic || ''}`],
             ['target', target ? `${target.active ? target.target_id + ' ' + target.status : 'none'}` : 'n/a'],
+            ['brain link', link ? `${link.link_open ? 'open' : 'closed'}, session ${link.session}, pi ${link.pi_instance}, ` +
+                `last request ${fmtMs(link.last_request_age_ms)}` : 'none'],
+            ['path', link && link.path ? `${link.path.mode} #${link.path.command_id}, ${link.path.points.length} points` : 'none'],
             ['warnings', `${(h.warnings || []).length}`],
         ]);
     }

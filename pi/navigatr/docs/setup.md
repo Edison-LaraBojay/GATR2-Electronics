@@ -1,17 +1,57 @@
 # Set up and run Navigatr
 
 Start here to bring up a Raspberry Pi 4, Pico, IMU, tracking wheels, and camera,
-then see robot localization and landmark estimates in the browser. This guide
-covers **three tracking wheels + IMU + camera**. The current robot, **two
-parallel tracking wheels + BNO08X** with or without the camera, has its own
-step-by-step [bring-up guide](parallel_wheel_bringup.md). The linked XML files
-are templates: actual wheel measurements, camera calibration, mounting, and
-starting position must be supplied.
+then see robot localization and landmark estimates in the browser.
+
+**The primary path is a Brain-profiled config**: the robot is described in
+Brain C++ and sent to the Pi as a robot profile, so the Pi XML holds no robot
+geometry. That path is the next section. The rest of this guide covers the
+XML-configured profiles (**three tracking wheels + IMU + camera**, and the
+**two parallel tracking wheels + BNO08X** [bring-up guide](parallel_wheel_bringup.md)),
+which still run and are needed for a camera. Their XML files are templates:
+actual wheel measurements, camera calibration, mounting, and starting position
+must be supplied.
+
+## Brain-profiled robot (primary)
+
+This runs the current bench setup (forward wheel on encoder port 0, sideways
+wheel on port 1, Brain VEX IMU, USB) and every other supported setup the Brain
+selects: two wheels or two forward wheels with the Pico IMU or the VEX IMU, and
+three wheels with or without the Pico IMU. No camera or AprilTags are needed.
+
+1. Prepare the Pi and Pico as in [Prepare the Pi and Pico](#prepare-the-pi-and-pico).
+   The Pico UART is `/dev/ttyAMA0`; RS-485 also needs UART5 and the DE GPIO.
+2. Build without the camera backend and install the service with the config
+   that matches the Brain's link (see [Pi setup](../../../docs/pi_setup.md)):
+
+   ```sh
+   cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DNAVIGATR_BUILD_TESTS=OFF -DNAVIGATR_WITH_LIBCAMERA=OFF
+   cmake --build build-bench -j2
+   sudo bash tools/install_service.sh --user "$USER" --config config/override/brain_profile_usb.xml
+   ```
+
+   For RS-485 use `config/override/brain_profile_rs485.xml` instead. The two
+   differ only in the Brain link; this is the one setting the Brain cannot
+   change for the Pi.
+3. Before a Brain connects the Pi waits: the log and the viewer show no pose,
+   profile none, and the raw encoder counts in the sources table.
+4. Start the Brain program (`brain/localization-test` or `brain/testing`, see
+   [Brain setup](../../../docs/brain_setup.md)). It sends the profile; the Pi
+   logs `event: profile <id> applied (...)` with the wheels, IMU and footprint,
+   or the refusal reason. Hold the robot still while the IMU starts.
+5. The Brain places the robot at its start pose. The viewer's Brain link panel
+   then reads `ready`.
+
+Edit robot geometry, encoder settings, the IMU source and the footprint in
+[brain/robot/gatr2_robot.h](../../../brain/robot/gatr2_robot.h), then rebuild
+and upload the Brain program; no Pi change or restart. Details, refusals,
+calibration and recovery: [Brain robot profiles](brain_profile.md).
 
 ## Choose your configuration
 
 | Hardware | Main configuration template | Robot measurement template | Pipeline template |
 |---|---|---|---|
+| Any supported setup, robot described on the Brain | [brain_profile_usb.xml](../config/override/brain_profile_usb.xml) or [brain_profile_rs485.xml](../config/override/brain_profile_rs485.xml) | none: the Brain sends it | inside the main file |
 | Three wheels + IMU + camera | [three_wheel_imu_camera.xml.in](../config/override/diagnostics/three_wheel_imu_camera.xml.in) | [gatr2_as5047_imu.xml.in](../config/shared/robots/gatr2_as5047_imu.xml.in) | [three_wheel_imu_camera_pipeline.xml.in](../config/override/diagnostics/three_wheel_imu_camera_pipeline.xml.in) |
 | Two parallel wheels + BNO08X, no camera | [parallel_wheels_bno08x.xml](../config/override/diagnostics/parallel_wheels_bno08x.xml) | [gatr2_parallel_wheels_bno08x.xml.in](../config/shared/robots/gatr2_parallel_wheels_bno08x.xml.in) | [parallel_wheels_bno08x_no_camera.xml](../config/shared/pipelines/parallel_wheels_bno08x_no_camera.xml) |
 | Two parallel wheels + BNO08X + camera | [parallel_wheels_bno08x_camera.xml](../config/override/diagnostics/parallel_wheels_bno08x_camera.xml) | same | [parallel_wheels_bno08x_camera.xml](../config/shared/pipelines/parallel_wheels_bno08x_camera.xml) |
@@ -23,7 +63,7 @@ profiles use encoder channels 0 and 1 only, share one localization fragment,
 get their starting field pose from the Brain, and need no third wheel; follow
 the [parallel-wheel guide](parallel_wheel_bringup.md) for them.
 
-Follow these sections in order:
+For an XML-configured profile, follow these sections in order:
 
 1. [Prepare the Pi and Pico](#prepare-the-pi-and-pico).
 2. [Build and check the viewer](#build-and-check-the-viewer).
@@ -75,7 +115,10 @@ Use the board revision's schematic and [Pico pin map](../../../pico/src/board.h)
 for connections. The firmware reads the encoder A/B quadrature channels and the
 IMU through the Pico: `hat2_bno08x` for the BNO08X, `hat2_asm330` for the
 ASM330. It sends binary telemetry to the Pi at 115200 baud. [Pico firmware](../../../pico/README.md) and
-[hardware interfaces](../../../docs/hardware.md) describe the pin map and protocol.
+[hardware interfaces](../../../docs/hardware.md) describe the pin map and protocol;
+the [Pico link](pico_link.md) describes its identity, status and commands.
+Update the Pi software before flashing new Pico firmware: the new firmware
+sends sensor frames that older Pi builds drop.
 
 The BNO08X learns a fixed up axis during a stationary, level startup and
 projects gyro XYZ onto it, supporting sideways or upside-down IMU mounting.
@@ -206,7 +249,7 @@ is positive counterclockwise viewed from above.
 |---|---|
 | Sensor `counts_per_revolution` | Counts emitted by the Pico for one shaft revolution, including its quadrature decoding. Confirm by several full turns; do not substitute an encoder datasheet number without checking the configured output. |
 | Sensor `invert` | Electrical sign normalization. Rotate in the defined positive shaft direction and check the reported direction. |
-| Wheel `radius_m` | Effective rolling radius under robot load. Measure travel over several turns; radius = travel / (2 pi × revolutions). |
+| Wheel `radius_m` | Effective rolling radius under robot load. Measure travel over several turns; radius = travel / (2 pi x revolutions). |
 | Wheel `position_x_m`, `position_y_m` | Wheel contact-point coordinates relative to the robot origin. |
 | Wheel `measurement_angle_deg` | Rolling direction measured from robot +x toward +y: 0 forward, 90 left. |
 | Wheel `direction` | Whether positive calibrated shaft rotation measures travel along (`positive`) or opposite (`negative`) that rolling direction. |
@@ -250,7 +293,7 @@ the camera before starting Navigatr.
 
 Edit [gatr2_front_camera_uncalibrated.xml](../config/shared/robots/gatr2_front_camera_uncalibrated.xml):
 select `Device index`, `Capture width_px`, `height_px`, and `frame_rate_hz`.
-The starting selection is 1280 × 960 at 30 Hz, `pixel_format="Y8"`; confirm the
+The starting selection is 1280 x 960 at 30 Hz, `pixel_format="Y8"`; confirm the
 installed camera supports the requested output and rate. Record the actual
 camera ID reported in diagnostics, particularly with multiple cameras attached.
 
@@ -272,8 +315,8 @@ explains the camera matrix and five distortion coefficients; its
 describes printable targets.
 
 Use a flat chessboard with known square size. `--cols` and `--rows` count
-**inner corners**, not squares. For example, a board of 10 × 7 squares has
-9 × 6 inner corners. Measure the printed square size instead of trusting printer
+**inner corners**, not squares. For example, a board of 10 x 7 squares has
+9 x 6 inner corners. Measure the printed square size instead of trusting printer
 scaling. Keep the same lens, focus, capture size, rate, and camera/backend settings
 for calibration and operation. Changing the sensor crop can invalidate calibration
 even when output dimensions match. Focus control is not exposed in the current
@@ -313,7 +356,7 @@ py -3 -m venv build-camera-tools/venv
 ```
 
 In the following commands, replace `python` with that environment's Python
-executable. For the 1280 × 960 example:
+executable. For the 1280 x 960 example:
 
 ```sh
 python tools/calibrate_camera.py capture --url "http://127.0.0.1:8765/api/frame.jpg?camera=front_camera" --width 1280 --height 960 --output-dir build-camera-tools/front-images
@@ -321,11 +364,11 @@ python tools/calibrate_camera.py capture --url "http://127.0.0.1:8765/api/frame.
 
 Move the board to different positions, distances, and tilts, including the image
 edges. Hold it still and press Enter for each capture; enter `q` when finished.
-Aim for 20–30 clear, varied views. The helper requires at least ten distinct
+Aim for 20-30 clear, varied views. The helper requires at least ten distinct
 usable images, but image count alone does not establish a good calibration.
 It refuses an existing output directory; use a new directory for another run.
 
-For a measured 25 mm square, 9 × 6 inner-corner board:
+For a measured 25 mm square, 9 x 6 inner-corner board:
 
 ```sh
 python tools/calibrate_camera.py calibrate --images build-camera-tools/front-images --width 1280 --height 960 --cols 9 --rows 6 --square-size-m 0.025 --calibration-id front-1280x960-run1 --frame-id front_camera_engineering --output-dir build-camera-tools/front-calibration
@@ -469,10 +512,13 @@ workers, and camera cleanly.
 
 The V5 Brain runs a PROS program built on
 [communiGATR](../../../docs/communigatr.md). The Brain asks and the Pi answers,
-one request at a time, over the HAT's RS-485 link; the Pi never sends unasked.
+one request at a time, over the Brain's USB port (`pros_usb_link`) or the
+HAT's RS-485 link; the Pi never sends unasked.
 [Brain link v4](../../../docs/interfaces.md) defines the
 requests, sessions, and the timing budget. The Pi side is implemented and host
 tested with fake links and clocks; it has not run against a real Brain yet.
+The Brain-profiled configs set up both slots as below plus the profile
+elements; see [Brain robot profiles](brain_profile.md).
 
 ### Pipeline
 
@@ -494,8 +540,14 @@ both slots (the camera inspection profile uses `noop`):
     </Health>
     <Field resource_id="override_field"                  <!-- optional -->
            estimate_period_ms="200"/>
+    <Pico resource_id="pico_telemetry"/>                 <!-- optional, Pico health bits -->
 </Publishing>
 ```
+
+With a Brain profile, `Health` takes only `fresh_ms`: the encoders and IMU it
+reports on follow the running profile. `<BenchImu>` on the CommandCollection
+receives the Brain VEX IMU samples, and `<Pico>` there enables the Pico IMU
+reinitialize and acquisition restart controls.
 
 Checked when the profile loads:
 
@@ -517,8 +569,8 @@ response timeout (budget formula in the interface document).
 Run the executable in its default threaded mode. `--inline` runs world
 estimation between a request and its reply, so replies can miss the window;
 the executable warns when it is used with the brain link. Each reply blocks the
-estimation worker for its airtime, about 5.1 ms for a state reply at 115200
-baud.
+estimation worker for its airtime at 115200 baud: 5.1 ms for a state reply,
+up to 11.1 ms for a full 128-byte document chunk.
 
 ### Serial resource
 
@@ -558,6 +610,13 @@ Localization restarted too, so the robot is unplaced until a placement applies
 again: the profile's `InitialPlacement` where configured, otherwise a new
 SET_POSE from the Brain program.
 
+With a Brain profile, SET_POSE answers NotReady until a profile is applied, a
+new profile leaves the robot unplaced, and a source the profile uses that
+drops (stale over 250 ms or restarted) ends the placement: the Brain must place
+again. A Brain VEX IMU rides on the Brain link, so with a VEX profile a Brain
+restart or a link outage over 250 ms needs a new placement. See
+[Brain robot profiles](brain_profile.md#sensor-loss-and-recovery).
+
 ### Field documents on the supplied profiles
 
 Every supplied `brain_link` profile publishes the Override field with
@@ -567,7 +626,7 @@ documents in chunks.
 
 | Profile | World estimation | Field estimate records |
 |---|---|---|
-| `three_wheel_imu` (`three_wheel_imu_no_correction.xml`), `parallel_wheels_bno08x` (`parallel_wheels_bno08x_no_camera.xml`), `bench_vex_imu`, `bench_vex_imu_usb` | `noop` | every object nominal |
+| `brain_profile_usb`, `brain_profile_rs485`, `three_wheel_imu` (`three_wheel_imu_no_correction.xml`), `parallel_wheels_bno08x` (`parallel_wheels_bno08x_no_camera.xml`), `bench_vex_imu`, `bench_vex_imu_usb` | `noop` | every object nominal |
 | `three_wheel_imu_camera`, `parallel_wheels_bno08x_camera` | `apriltag` | each landmark nominal until the camera observes it in the current odometry epoch, then observed with its age |
 
 Obstacles (loaders, toggles) are always nominal. See
@@ -578,8 +637,12 @@ Obstacles (loaders, toggles) are always nominal. See
 
 On exit the executable prints the brain link counters once a request has
 arrived (`link brain_uart ... requests, replies, ...`). The inspection
-snapshot carries the same counters in `diagnostics.estimation.links[]` and the
-Brain session in `command`; see [inspection](inspection.md).
+snapshot carries the same counters in `diagnostics.estimation.links[]`, the
+Brain session in `command`, and in `brain_link` the link state, the state block
+the Brain reads, the profile, the wheel readings and the reported path; the
+viewer's Brain link panel shows them with a readiness line. See
+[inspection](inspection.md). The service log prints lifecycle events as
+`event: ...` lines (`journalctl -u navigatr -f`).
 
 | Counter | Meaning |
 |---|---|
@@ -649,6 +712,8 @@ and history. It does not write observed displacements back into `field.xml`.
 | Tags decode but goals stay nominal | InitialPlacement, camera mounting, tag family/size, history availability, and the association rejection reason. |
 | Wrong displacement or turn direction | Encoder CPR/sign, wheel radius/geometry, gyro sign, and one shared robot origin. |
 | No browser connection | Running inspection service, matching port, SSH tunnel, and another process already using the port. |
-| Brain gets no replies | Threaded mode (no `--inline`), the `brain_uart` path and baud, a DriverEnable warning at startup (sysfs `gpio` number, GPIO access), transceiver wiring, then the link counters in [Connect the Brain](#check-the-link). |
+| Brain gets no replies | Threaded mode (no `--inline`), the `brain_uart` path and baud, a DriverEnable warning at startup (sysfs `gpio` number, GPIO access), transceiver wiring, then the link counters in [Connect the Brain](#check-the-link). Over USB: the Pi config must be `brain_profile_usb.xml` and exactly one Brain plugged in. |
+| Profile refused | The `event: profile ... refused` log line and the viewer name the reason; fix it in `gatr2_robot.h`. An encoder port or IMU the Pi config does not wire is refused, not guessed. |
+| Pose keeps becoming invalid | `event: sensor lost: ...` names the source; a VEX profile loses its IMU with the Brain link. |
 
 For the exhaustive parameter list, use [calibration inventory](calibration_inventory.md).

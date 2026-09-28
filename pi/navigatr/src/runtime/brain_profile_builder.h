@@ -14,8 +14,10 @@
 //                stale_after_ms="250"/>                     optional, the Pico IMU
 //           <BrainImu resource_id="brain_imu"/>             optional, a brain_imu_bench
 //           <Calibration bias_samples="20" window_ms="2000" max_gap_ms="250"
-//                        still_travel_m="0.001"/>           optional
-//           <Timing interval_tolerance_ms="20" max_pending_ms="500"/>   optional
+//                        still_travel_m="0.001" still_rate_dps="1" max_rate_dps="5"
+//                        evidence_gap_ms="100" attempt_s="60"/>     optional
+//           <Timing interval_tolerance_ms="20" max_pending_ms="500"
+//                   sensor_loss_ms="250" on_sensor_loss="unplace"/>   optional
 //           <Fusion max_wait_ms="100">                      three wheels with the Pico IMU
 //               <MotionNoise translation_floor_m=".." translation_per_m=".."
 //                            rotation_floor_rad=".." rotation_per_rad=".."
@@ -30,8 +32,16 @@
 // A Brain-profiled Localization holds only BrainProfile: the Pi owns the
 // devices, the wired ports and the model tuning; the profile owns geometry,
 // topology, the IMU source and the footprint. Calibration holds the Pi
-// defaults for IMU bias calibration; a profile's calibration_window_ms and
-// still_travel_um replace window_ms and still_travel_m when nonzero.
+// defaults for the stationary window every IMU bias path and the stationary
+// status use (stationary_window.h): bias_samples per source, window_ms of
+// sample time, per-wheel still_travel_m, gyro still_rate_dps and
+// max_rate_dps, evidence_gap_ms between samples, attempt_s before a
+// calibration fails; max_gap_ms is the gyro integration gap. A profile's
+// calibration_window_ms, still_rate_cdps and still_travel_um replace
+// window_ms, still_rate_dps and still_travel_m when nonzero. Timing
+// sensor_loss_ms is how long a used source may go without a sample before
+// pose continuity is lost (spec 8.10, sensor_loss.h); on_sensor_loss
+// unplace (default) unplaces the robot then, warn only logs it.
 //
 // Models per topology and IMU source; anything else is refused:
 //   two wheel, pico           tracking_wheel_motion + HeadingConstraint,
@@ -87,13 +97,19 @@ struct BrainProfileConfig {
 
     ResourceId brain_imu;   // empty = no Brain VEX IMU mailbox
 
-    long   bias_samples   = 20;
-    long   window_ms      = 2000;
-    long   max_gap_ms     = 250;
-    double still_travel_m = 0.001;
+    long   bias_samples    = 20;
+    long   window_ms       = 2000;
+    long   max_gap_ms      = 250;
+    double still_travel_m  = 0.001;
+    double still_rate_dps  = 1.0;
+    double max_rate_dps    = 5.0;
+    long   evidence_gap_ms = 100;
+    double attempt_s       = 60.0;
 
-    long interval_tolerance_ms = 20;
-    long max_pending_ms        = 500;
+    long interval_tolerance_ms  = 20;
+    long max_pending_ms         = 500;
+    long sensor_loss_ms         = 250;
+    bool unplace_on_sensor_loss = true;   // false: warn only, the pose is kept
 
     bool   fusion      = false;
     long   max_wait_ms = 100;
@@ -121,6 +137,10 @@ bool checkProfileCapabilities(const BrainProfileConfig& config,
 
 // The waiting Localization: noop estimator, the configured History.
 void writeWaitingLocalization(const BrainProfileConfig& config, tinyxml2::XMLDocument& doc);
+
+// Display names of a gatr2::LocalizationTopology and a gatr2::ProfileReason.
+const char* profileTopologyName(uint8_t topology);
+const char* profileReasonName(uint8_t reason);
 
 // <Profile><Sensors/><Localization/></Profile> for a checked profile, and the
 // binding ids it generated (encoders, imu, bias_function, summary; the

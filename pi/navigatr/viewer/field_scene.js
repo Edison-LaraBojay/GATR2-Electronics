@@ -1,7 +1,12 @@
 // field_scene.js
 // The 3D field. Static geometry, nominal landmarks and tag mounts come from
-// hello.fields; the robot, its trail, the camera mount and the estimated
-// landmark bodies from each snapshot. Scene axes are the field axes one to
+// hello.fields, and so does the planning data the Brain is served: the
+// boundary and the collision boxes (fixed obstacles in their own frame,
+// landmark boxes in the landmark frame, drawn at the estimate when observed,
+// else at nominal). The robot, its trail, the camera mount, the estimated
+// landmark bodies and the Brain's reported path come from each snapshot. The
+// robot is drawn with the running Brain profile's footprint when one is
+// applied, else with the display-only RobotBody. Scene axes are the field axes one to
 // one: THREE.Object3D.DEFAULT_UP is +z, so field x is scene x (audience
 // right), field y is scene y (toward the 0-degree wall), field z is scene z
 // (up). No mirroring anywhere, so the right-handed field stays right-handed
@@ -23,6 +28,9 @@ THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
 const TRAIL_MAX = 4000;
 const FRUSTUM_DEPTH_M = 0.45;
+const BOUNDARY_COLOR = 0x7ee787;
+const OBSTACLE_COLOR = 0xff7b72;
+const LANDMARK_BOX_COLOR = 0xffa657;
 
 function matrixFromTransform(T) {
     const R = rotationOf(T);
@@ -231,6 +239,33 @@ function frustumLines(K, color) {
         new THREE.LineBasicMaterial({ color }));
 }
 
+// A planning rectangle as a wireframe with a faint fill, in its owner's
+// frame: centered at (x, y), rotated by yaw, size_x along its own x.
+function collisionBoxObject(box, color, info) {
+    const group = new THREE.Group();
+    group.position.set(box.x_m, box.y_m, 0);
+    group.rotation.z = (box.yaw_deg || 0) * DEG;
+    const hx = box.size_x_m / 2, hy = box.size_y_m / 2, z = 0.006;
+    const outline = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(-hx, -hy, z), new THREE.Vector3(hx, -hy, z),
+            new THREE.Vector3(hx, hy, z), new THREE.Vector3(-hx, hy, z)]),
+        new THREE.LineBasicMaterial({ color }));
+    group.add(outline);
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(box.size_x_m, box.size_y_m),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.14, depthWrite: false, side: THREE.DoubleSide }));
+    fill.position.z = z - 0.001;
+    group.add(fill);
+    group.userData.info = info;
+    return group;
+}
+
+function boxInfo(owner, frame, box) {
+    return `${owner} collision box (${frame} frame, planning)\n` +
+        `${fmt(box.size_x_m, 4)} x ${fmt(box.size_y_m, 4)} m at ${fmt(box.x_m)}, ${fmt(box.y_m)} yaw ${fmt(box.yaw_deg, 1)} deg\n` +
+        `${box.note || ''}`;
+}
+
 function shortId(id) {
     return String(id).replace(/^neutral_goal_/, 'neutral ').replace(/^blue_goal_/, 'blue ').replace(/^red_goal_/, 'red ');
 }
@@ -253,6 +288,12 @@ export class FieldScene {
         this.trailKey = '';
         this.cameraMounts = new Map(); // camera id -> group
         this.highlighted = null;
+        this.landmarkBoxes = new Map(); // landmark id -> nominal collision box
+        this.planningGroup = null;      // boundary and fixed obstacles
+        this.showPlanning = true;
+        this.path = null;
+        this.pathKey = '';
+        this.robotBodyKey = '';
 
         try {
             this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -368,10 +409,14 @@ export class FieldScene {
         this.estimates.clear();
         this.nominal.clear();
         this.landmarkDecls.clear();
+        this.landmarkBoxes.clear();
         this.pickables = [];
         this.families = hello.tag_families || {};
         this.fieldGroup = new THREE.Group();
         this.scene.add(this.fieldGroup);
+        this.planningGroup = new THREE.Group();
+        this.planningGroup.visible = this.showPlanning;
+        this.fieldGroup.add(this.planningGroup);
 
         const fields = hello.fields || [];
         let span = 3.6;
@@ -401,16 +446,70 @@ export class FieldScene {
                 body.label = textSprite(shortId(lm.id) + (body.known ? ' (nominal)' : ' (nominal, no visual)'), { height_m: 0.07, bg: 'rgba(0,0,0,0.45)', color: '#d8dde6' });
                 body.label.position.set(0, 0, body.height + 0.09);
                 body.group.add(body.label);
+                if (lm.collision_box) {
+                    const box = collisionBoxObject(lm.collision_box, LANDMARK_BOX_COLOR,
+                        boxInfo(`${lm.id} (wire id ${lm.wire_id}, nominal)`, 'landmark', lm.collision_box));
+                    box.visible = this.showPlanning;
+                    body.group.add(box);
+                    this.landmarkBoxes.set(lm.id, box);
+                }
                 this.fieldGroup.add(body.group);
                 this.nominal.set(lm.id, body);
                 this.pickables.push(body.group);
             }
+            this.buildPlanning(field);
             this.buildWallLabels(field);
         }
         this.fieldCenter.set(cx, cy, 0);
         this.fieldSpan = span;
         this.buildAxes();
         this.resetView();
+    }
+
+    // Boundary and fixed obstacles; landmark boxes ride on the landmark bodies.
+    buildPlanning(field) {
+        const b = field.boundary;
+        if (b) {
+            const z = 0.008;
+            const loop = new THREE.LineLoop(
+                new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(b.min_x_m, b.min_y_m, z), new THREE.Vector3(b.max_x_m, b.min_y_m, z),
+                    new THREE.Vector3(b.max_x_m, b.max_y_m, z), new THREE.Vector3(b.min_x_m, b.max_y_m, z)]),
+                new THREE.LineBasicMaterial({ color: BOUNDARY_COLOR }));
+            this.planningGroup.add(loop);
+        }
+        for (const o of field.obstacles || []) {
+            if (!o.collision_box) {
+                continue;
+            }
+            const g = new THREE.Group();
+            g.position.set(o.pose.x_m, o.pose.y_m, 0);
+            g.rotation.z = o.pose.heading_deg * DEG;
+            const box = collisionBoxObject(o.collision_box, OBSTACLE_COLOR,
+                boxInfo(`${o.id} (wire id ${o.wire_id}, fixed)`, 'obstacle', o.collision_box));
+            g.add(box);
+            this.planningGroup.add(g);
+            this.pickables.push(box);
+        }
+    }
+
+    // Boundary, collision boxes and the reported path on or off.
+    setPlanningVisible(on) {
+        this.showPlanning = on;
+        if (this.planningGroup) {
+            this.planningGroup.visible = on;
+        }
+        for (const box of this.landmarkBoxes.values()) {
+            box.visible = on && !box.userData.observedElsewhere;
+        }
+        for (const e of this.estimates.values()) {
+            if (e.box) {
+                e.box.visible = on;
+            }
+        }
+        if (this.path) {
+            this.path.visible = on;
+        }
     }
 
     buildFloor(d) {
@@ -582,13 +681,32 @@ export class FieldScene {
 
     // --- per snapshot ---
 
+    // The running profile's footprint when one is applied, else RobotBody.
+    robotBodyFor(snap, hello) {
+        const rb = (hello && hello.robot_body) || { length_m: 0.45, width_m: 0.45, height_m: 0.3, origin_x_m: 0, origin_y_m: 0 };
+        const link = snap.brain_link;
+        const running = link && link.profile ? link.profile.running : null;
+        if (running && running.footprint) {
+            const f = running.footprint;
+            return {
+                length_m: f.front_m + f.back_m, width_m: f.left_m + f.right_m, height_m: rb.height_m || 0.3,
+                origin_x_m: (f.front_m - f.back_m) / 2, origin_y_m: (f.left_m - f.right_m) / 2,
+                source: `profile ${running.id} footprint`,
+            };
+        }
+        return { ...rb, source: 'RobotBody (display only)' };
+    }
+
     updateSnapshot(snap, hello) {
         if (!this.available) {
             return;
         }
         const robot = snap.robot;
-        if (hello && hello.robot_body && this.robotBody !== hello.robot_body) {
-            this.buildRobot(hello.robot_body);
+        const body = this.robotBodyFor(snap, hello);
+        const bodyKey = JSON.stringify(body);
+        if (bodyKey !== this.robotBodyKey) {
+            this.robotBodyKey = bodyKey;
+            this.buildRobot(body);
         }
         if (robot && robot.valid) {
             const f = robot.field;
@@ -614,7 +732,8 @@ export class FieldScene {
             const placedBy = robot.placement_origin === 'command' ? 'Brain' : robot.placement_origin;
             this.robot.userData.info = (placed ? `robot origin, placed by ${placedBy}` : 'robot origin, NOT PLACED: odometry pose, not a field position') +
                 `\nx ${fmt(f.x_m)} m  y ${fmt(f.y_m)} m  heading ${fmt(f.heading_deg, 1)} deg\n` +
-                `pose age ${fmtMs(robot.age_ms)}  confidence ${fmt(robot.confidence, 2)}\n${attText}`;
+                `pose age ${fmtMs(robot.age_ms)}  confidence ${fmt(robot.confidence, 2)}\n${attText}\n` +
+                `outline: ${this.robotBody.source || 'RobotBody'}, ${fmt(this.robotBody.length_m, 3)} x ${fmt(this.robotBody.width_m, 3)} m`;
             const attLabel = tilt ? 'robot' : (att && att.assumed_level ? 'robot (level assumed)' : 'robot (no attitude)');
             this.robotLabel = setLabel(this.robot, this.robotLabel,
                 placed ? attLabel : 'robot (not placed, odometry)',
@@ -645,6 +764,55 @@ export class FieldScene {
 
         this.updateCameraMounts(snap, hello);
         this.updateEstimates(snap);
+        this.updatePath(snap);
+    }
+
+    // The Brain's latest PATH_REPORT, field frame, inspection only.
+    updatePath(snap) {
+        const p = snap.brain_link ? snap.brain_link.path : null;
+        const key = p ? `${p.session}/${p.command_id}/${p.received_host_ms}` : '';
+        if (key === this.pathKey) {
+            return;
+        }
+        this.pathKey = key;
+        this.clearPath();
+        if (!p || !Array.isArray(p.points) || p.points.length === 0) {
+            return;
+        }
+        const color = p.mode === 'avoiding' ? 0xff66cc : 0x66e0ff;
+        const z = 0.03;
+        const group = new THREE.Group();
+        const pts = p.points.map((q) => new THREE.Vector3(q.x_m, q.y_m, z));
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+            new THREE.LineBasicMaterial({ color }));
+        line.frustumCulled = false;
+        group.add(line);
+        for (const v of pts) {
+            const dot = new THREE.Mesh(new THREE.SphereGeometry(0.015, 10, 8), new THREE.MeshBasicMaterial({ color }));
+            dot.position.copy(v);
+            group.add(dot);
+        }
+        const last = pts[pts.length - 1];
+        const label = textSprite(`path ${p.mode} #${p.command_id}`, { height_m: 0.06, color: '#ffd6f2' });
+        label.position.set(last.x, last.y, 0.12);
+        group.add(label);
+        group.userData.info = 'planned path reported by the Brain (inspection only)\n' +
+            `mode ${p.mode}, command ${p.command_id}, session ${p.session}\n` +
+            `${p.points.length} points, reported ${fmtMs(p.age_ms)} before this snapshot`;
+        group.visible = this.showPlanning;
+        this.path = group;
+        this.dynamic.add(group);
+        this.pickables.push(group);
+    }
+
+    clearPath() {
+        if (!this.path) {
+            return;
+        }
+        this.dynamic.remove(this.path);
+        disposeObject(this.path);
+        this.pickables = this.pickables.filter((q) => q !== this.path);
+        this.path = null;
     }
 
     updateCameraMounts(snap, hello) {
@@ -718,7 +886,14 @@ export class FieldScene {
                     new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
                     new THREE.LineBasicMaterial({ color: 0xffd166 }));
                 line.frustumCulled = false;
-                e = { ...body, line, label: null, id: o.id };
+                let box = null;
+                if (decl.collision_box) {
+                    box = collisionBoxObject(decl.collision_box, LANDMARK_BOX_COLOR,
+                        boxInfo(`${o.id} (wire id ${decl.wire_id}, estimate)`, 'landmark', decl.collision_box));
+                    box.visible = this.showPlanning;
+                    body.group.add(box);
+                }
+                e = { ...body, line, label: null, id: o.id, box };
                 this.dynamic.add(e.group, line);
                 this.estimates.set(o.id, e);
                 this.pickables.push(e.group);
@@ -765,6 +940,11 @@ export class FieldScene {
                 this.pickables = this.pickables.filter((p) => p !== e.group);
             }
         }
+        // a landmark box is drawn once: at the estimate when observed, else nominal
+        for (const [id, box] of this.landmarkBoxes) {
+            box.userData.observedElsewhere = seen.has(id);
+            box.visible = this.showPlanning && !seen.has(id);
+        }
     }
 
     // Everything bound to a session: estimates, trail, camera mounts.
@@ -780,6 +960,8 @@ export class FieldScene {
         this.estimates.clear();
         this.clearTrail();
         this.trailKey = '';
+        this.clearPath();
+        this.pathKey = '';
         this.robot.visible = false;
     }
 
@@ -809,7 +991,18 @@ export class FieldScene {
         this.raycaster.setFromCamera(this.pointer, this.camera);
         const hits = this.raycaster.intersectObjects(this.pickables, true);
         let info = null;
+        const shown = (o) => {
+            for (let p = o; p; p = p.parent) {
+                if (!p.visible) {
+                    return false;
+                }
+            }
+            return true;
+        };
         for (const h of hits) {
+            if (!shown(h.object)) {
+                continue;
+            }
             let o = h.object;
             while (o && !o.userData.info) {
                 o = o.parent;

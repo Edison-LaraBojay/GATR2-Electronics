@@ -3,6 +3,11 @@
 // startup gravity alignment from acceleration, then XYZ gyro projected onto
 // the learned up axis. Gyro bias remains for the Pi to calibrate.
 // Datasheet 1000-3927, SH-2 manual 1000-3625, SHTP 1000-3535.
+//
+// Bounded blocking: sh2_open (10 ms reset pulse, then up to 200 ms polling
+// for the boot) runs until it first succeeds; a failed open returns after the
+// pulse and is retried like any failed attempt. The WAKE handshake in
+// halWrite waits at most 2 ms. Everything else is non-blocking.
 
 #if defined(GATR2_IMU_BNO08X)
 
@@ -16,6 +21,7 @@
 #include "bno08x_supervisor.h"
 #include "bno08x_reports.h"
 #include "config.h"
+#include "frames.h"
 #include "shtp_header.h"
 
 extern "C" {
@@ -249,6 +255,52 @@ void enableReport() {
     }
 }
 
+// Starts an attempt. The first successful sh2_open pulses reset and polls for
+// the boot; later attempts only release reset and the supervisor waits.
+void openOrRelease() {
+    if (g_open) {
+        releaseReset();
+        return;
+    }
+    g_last_error = sh2_open(&g_hal, onEvent, nullptr);
+    g_open       = g_last_error == SH2_OK;
+    if (!g_open) {
+        holdReset();
+        g_events.open_failed = true;
+        return;
+    }
+    sh2_setSensorCallback(onSensor, nullptr);
+}
+
+void apply(bno08x::Action a) {
+    if (bno08x::dropsSamples(a)) {
+        g_reports.reset();
+    }
+    switch (a) {
+    case bno08x::Action::None:
+        break;
+    case bno08x::Action::HoldReset:
+        holdReset();
+        break;
+    case bno08x::Action::ReleaseReset:
+        openOrRelease();
+        break;
+    case bno08x::Action::Enable:
+        enableReport();
+        break;
+    }
+}
+
+DeviceView view() {
+    const bno08x::State s = g_sup.state();
+    DeviceView          d;
+    d.enabled = s != bno08x::State::Off;
+    d.up      = s == bno08x::State::Run;
+    d.ready   = d.up && g_reports.aligned();
+    d.waiting = s == bno08x::State::Reset;
+    return d;
+}
+
 } // namespace
 
 void begin() {
@@ -273,26 +325,17 @@ void begin() {
     g_hal.write     = halWrite;
     g_hal.getTimeUs = halTime;
 
-    // Only call. Resets the hub through halOpen, then polls up to 200 ms for its boot.
-    g_last_error = sh2_open(&g_hal, onEvent, nullptr);
-    g_open = g_last_error == SH2_OK;
-    if (!g_open) {
-        g_last_failure = "open_error";
-        holdReset();
-        return;
-    }
-    sh2_setSensorCallback(onSensor, nullptr);
-    g_sup.start(g_release_us);
+    openOrRelease();
+    g_sup.start(g_open ? g_release_us : time_us_32());
 }
 
 void service() {
-    if (!g_open) {
-        return;
-    }
-    for (int i = 0;
-         i < kMaxFramesPerService && g_link != Link::Held && (g_pending_len != 0 || intLow());
-         ++i) {
-        sh2_service();
+    if (g_open) {
+        for (int i = 0;
+             i < kMaxFramesPerService && g_link != Link::Held && (g_pending_len != 0 || intLow());
+             ++i) {
+            sh2_service();
+        }
     }
 
     const bno08x::Events ev = g_events;
@@ -301,7 +344,9 @@ void service() {
     const bno08x::Action a  = g_sup.step(time_us_32(), ev);
     if (a == bno08x::Action::HoldReset) {
         ++g_retries;
-        if (previous == bno08x::State::Boot) {
+        if (ev.open_failed) {
+            g_last_failure = "open_error";
+        } else if (previous == bno08x::State::Boot) {
             g_last_failure = "boot_timeout";
         } else if (previous == bno08x::State::WaitAck) {
             g_last_failure = ev.enable_failed ? "enable_error" : "feature_timeout";
@@ -309,30 +354,45 @@ void service() {
             g_last_failure = "stream_timeout";
         }
     }
-    if (bno08x::dropsSamples(a)) {
-        g_reports.reset();
+    apply(a);
+}
+
+void setEnabled(bool enabled) {
+    const bool on = g_sup.state() != bno08x::State::Off;
+    if (enabled == on) {
+        return;
     }
-    switch (a) {
-    case bno08x::Action::None:
-        break;
-    case bno08x::Action::HoldReset:
-        holdReset();
-        break;
-    case bno08x::Action::ReleaseReset:
-        releaseReset();
-        break;
-    case bno08x::Action::Enable:
-        enableReport();
-        break;
+    apply(enabled ? g_sup.restart(time_us_32()) : g_sup.stop());
+}
+
+void reinit() {
+    if (g_sup.state() != bno08x::State::Off) {
+        apply(g_sup.restart(time_us_32()));
     }
 }
+
+Status status() {
+    const DeviceView d = view();
+    Status           s;
+    s.enabled  = d.enabled;
+    s.state    = wireState(d, g_sup.retry());
+    s.reason   = wireReason(d, g_sup.retry());
+    s.attempts = g_sup.retry().attempts();
+    s.epoch    = g_sup.epoch();
+    return s;
+}
+
+uint8_t firmware() { return gatr2::kPicoFirmwareBno08x; }
 
 bool readGyroZ(uint32_t cut_us, int32_t& gyro_z_mdps) { return g_reports.take(cut_us, gyro_z_mdps); }
 
 size_t formatDiagnostics(char* output, size_t capacity) {
     const char* state = "OPEN_ERROR";
-    if (g_open) {
+    if (g_sup.state() == bno08x::State::Off) {
+        state = "DISABLED";
+    } else if (g_open) {
         switch (g_sup.state()) {
+        case bno08x::State::Off: state = "DISABLED"; break;
         case bno08x::State::Reset: state = "RESET_WAIT"; break;
         case bno08x::State::Boot: state = "WAIT_BOOT"; break;
         case bno08x::State::WaitAck: state = "WAIT_FEATURES"; break;
@@ -344,9 +404,10 @@ size_t formatDiagnostics(char* output, size_t capacity) {
         }
     }
     const int n = snprintf(output, capacity,
-        "imu=BNO08X state=%s last=%s int=%u rst=%u wake=%u boot=%lu retry=%lu "
+        "imu=BNO08X state=%s last=%s attempts=%u epoch=%u int=%u rst=%u wake=%u boot=%lu retry=%lu "
         "rx=%lu bad=%lu hdr=%02X%02X%02X%02X ack=%u a=%lu g=%lu reject=%lu cal=%lu age_us=%ld err=%d\r\n",
-        state, g_last_failure, static_cast<unsigned>(digitalRead(board::kImuIntPin)),
+        state, g_last_failure, static_cast<unsigned>(g_sup.retry().attempts()),
+        static_cast<unsigned>(g_sup.epoch()), static_cast<unsigned>(digitalRead(board::kImuIntPin)),
         static_cast<unsigned>(digitalRead(board::kImuRstPin)),
         static_cast<unsigned>(digitalRead(board::kImuWakePin)),
         static_cast<unsigned long>(g_boots), static_cast<unsigned long>(g_retries),

@@ -235,8 +235,8 @@ bool sweepFree(const Space& space, const Pose& a, Point b, Ends loose) {
         piece.near_goal  = loose.goal && mid >= len - zone;
     }
     auto allowed = [&](const Piece& piece, double at_start, double at_end) {
-        return std::min({space.clearance, piece.near_start ? at_start : kInf,
-                         piece.near_goal ? at_end : kInf});
+        return std::min(
+            {space.clearance, piece.near_start ? at_start : kInf, piece.near_goal ? at_end : kInf});
     };
 
     double from_gaps[4];
@@ -494,10 +494,10 @@ std::vector<PathSegment> shape(const std::vector<Point>& route, Radians start, R
         points.pop_back();
     }
 
-    start                  = wrapAngle(start);
-    goal                   = wrapAngle(goal);
-    const std::size_t legs = points.size() - 1;
-    auto finalTurn         = [&](Radians from) {
+    start                       = wrapAngle(start);
+    goal                        = wrapAngle(goal);
+    const std::size_t legs      = points.size() - 1;
+    auto              finalTurn = [&](Radians from) {
         const Radians by = std::fabs(wrapAngle(goal - from));
         return approach ? by > kParallel : by >= config.min_turn;
     };
@@ -627,8 +627,8 @@ std::vector<double> freeStops(const Space& space, Point p, Point u, Meters limit
 // the goal. Along each of the model's moves, the first point of every
 // circle-free stretch; a longer sweep holds a shorter one, so the first
 // unclear sweep ends that move.
-void findExits(const Space& space, const PlanRequest& r, const Pose& end, bool leaving,
-               Meters push, std::vector<PathSegment>& out) {
+void findExits(const Space& space, const PlanRequest& r, const Pose& end, bool leaving, Meters push,
+               std::vector<PathSegment>& out) {
     Move        moves[4];
     const int   n  = straightMoves(r, end.heading, moves);
     const Point at = position(end);
@@ -694,18 +694,21 @@ bool straightExact(const Space& space, const PlanRequest& r, const Pose& start, 
 }
 
 // Consecutive translations in one direction at one heading, one of them
-// exact, become one exact translation when its sweep is clear.
-void joinExact(const Space& space, std::vector<PathSegment>& segments) {
+// exact, become one exact translation when its sweep is clear and the robot
+// enters the first at that heading (entry: the heading before the path). A
+// dropped turn before it would leave the exact sweep at the wrong heading.
+void joinExact(const Space& space, Radians entry, std::vector<PathSegment>& segments) {
     std::size_t i = 0;
     while (i + 1 < segments.size()) {
-        const PathSegment& a = segments[i];
-        const PathSegment& b = segments[i + 1];
+        const PathSegment& a  = segments[i];
+        const PathSegment& b  = segments[i + 1];
+        const Radians      at = i == 0 ? entry : segments[i - 1].end.heading;
         const Point        da{a.end.x - a.start.x, a.end.y - a.start.y};
         const Point        db{b.end.x - b.start.x, b.end.y - b.start.y};
         const double       scale = std::hypot(da.x, da.y) * std::hypot(db.x, db.y);
         const bool         join =
             a.kind == SegmentKind::kTranslate && b.kind == SegmentKind::kTranslate &&
-            (a.exact || b.exact) && a.reverse == b.reverse &&
+            (a.exact || b.exact) && a.reverse == b.reverse && sameHeading(at, a.start.heading) &&
             sameHeading(a.start.heading, a.end.heading) &&
             sameHeading(a.start.heading, b.start.heading) &&
             sameHeading(a.start.heading, b.end.heading) && da.x * db.x + da.y * db.y > 0 &&
@@ -745,8 +748,7 @@ bool pathFree(const Space& space, const std::vector<PathSegment>& segments) {
 
 bool validConfig(const GeometricPlannerConfig& c) {
     auto ok = [](double v) { return std::isfinite(v) && v >= 0; };
-    return ok(c.vertex_margin) && ok(c.min_segment) && ok(c.min_turn) &&
-           c.min_turn <= kMaxMinTurn;
+    return ok(c.vertex_margin) && ok(c.min_segment) && ok(c.min_turn) && c.min_turn <= kMaxMinTurn;
 }
 
 } // namespace
@@ -877,7 +879,7 @@ PlanResult GeometricPlanner::plan(const PlanRequest& request) const {
     if (approach) {
         segments.push_back(approaches[route.to]);
     }
-    joinExact(space, segments);
+    joinExact(space, start.heading, segments);
     if (!pathFree(space, segments)) {
         result.status = PlanStatus::kNoPath;
         return result;

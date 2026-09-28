@@ -28,6 +28,11 @@ set(TEST_SOURCES
     gyro_window_gtest.cpp
     bno08x_supervisor_gtest.cpp
     shtp_header_gtest.cpp
+    imu_retry_gtest.cpp
+    asm330_supervisor_gtest.cpp
+    command_records_gtest.cpp
+    pico_commands_gtest.cpp
+    pi_link_gtest.cpp
 )
 
 # Sources under test.
@@ -36,13 +41,22 @@ set(CODE_UNDER_TEST
     ../src/gravity_alignment.cpp
     ../src/gyro_window.cpp
     ../src/bno08x_supervisor.cpp
+    ../src/imu_retry.cpp
+    ../src/asm330_supervisor.cpp
+    ../src/command_records.cpp
+    ../src/pico_commands.cpp
+    ../src/pi_link.cpp
+    ../../common/frame_codec.cpp
 )
 
 add_executable(pico_tests
     ${TEST_SOURCES}
     ${CODE_UNDER_TEST}
 )
-target_include_directories(pico_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_include_directories(pico_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../common
+)
 target_compile_options(pico_tests PRIVATE -Wall -Wextra)
 target_link_libraries(pico_tests PRIVATE GTest::gtest_main)
 

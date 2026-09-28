@@ -15,6 +15,7 @@
 //       </Health>
 //       <Field resource_id="override_field"      optional, a field_map resource
 //              estimate_period_ms="200"/>
+//       <Pico resource_id="pico_telemetry"/>     optional, the Pico link health
 //   </Publishing>
 //
 // With a Brain profile host (a Brain-profiled Localization) the health
@@ -22,7 +23,15 @@
 // encoders are the profile's, the gyro bit is the profile IMU source (the
 // Pico IMU channel or the Brain bench mailbox), BiasCal and the calibration
 // state follow the model that owns the IMU bias. Without a host they come
-// from Health's children, and calibration from BiasCal.
+// from Health's children, and calibration from BiasCal. The calibration
+// state is that model's stationary window calibration (none, collecting,
+// done, waiting for stillness, waiting for data, failed).
+//
+// Health bits 4..6 come from the Pico link: PicoLink while its frames are
+// fresh, ImuInitializing while the Pico reports its IMU initializing,
+// aligning or retrying, ImuFailed once its quick attempts are used up.
+// Bit 7 Stationary: some observation function's stationary window
+// qualified and nothing moved since.
 //
 // The state block carries the robot, the profile status, the calibration
 // state and, with a Field, the map_id and the newest estimate_id. The field documents are built by
@@ -30,7 +39,9 @@
 // Boundary and a wire_id on every Landmark), an estimate snapshot in every
 // reporting cycle whose content changed at most once per
 // estimate_period_ms, the last three retained for chunked READ_DOC. Without
-// a Field, map_id and estimate_id are 0 and READ_DOC is Unavailable.
+// a Field, map_id and estimate_id are 0 and READ_DOC is Unavailable. Every
+// cycle, request or not, the state block it would answer goes out in
+// PublishingOutput::brain_state for inspection.
 
 #pragma once
 #include <cstdint>
@@ -42,6 +53,7 @@
 #include "contracts/brain_profile.h"
 #include "contracts/publishing.h"
 #include "impl/publishing/field_documents.h"
+#include "resources/pico_control.h"
 #include "resources/serial_link.h"
 
 namespace navigatr
@@ -77,6 +89,7 @@ private:
 
     std::unique_ptr<FieldDocuments> documents_;
     BrainProfileHost*               profile_host_ = nullptr;
+    std::shared_ptr<PicoControl>    pico_;
 
     bool bias_cal_seen_ = false;
 };

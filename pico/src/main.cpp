@@ -7,6 +7,8 @@
 #include "frame_codec.h"
 #include "frames.h"
 #include "imu.h"
+#include "pi_link.h"
+#include "pico_commands.h"
 #include "quadrature.h"
 
 using namespace gatr2;
@@ -17,16 +19,90 @@ namespace
 // RP2040 UART TX FIFO depth.
 constexpr uint16_t kTxFifoLen = 32;
 
-// Largest frame sent: three encoders and the gyro.
+// Largest sensor frame sent: v2 header, three encoders and the gyro.
 constexpr uint16_t kMaxSentLen =
-    kSensorHeaderLen + kSensorWidth[0] + kSensorWidth[1] + kSensorWidth[2] + kSensorWidth[3] + 1;
-static_assert(kMaxSentLen <= kTxFifoLen, "a frame must fit the empty TX FIFO");
+    kSensorV2HeaderLen + kSensorWidth[0] + kSensorWidth[1] + kSensorWidth[2] + kSensorWidth[3] + 1;
+static_assert(kMaxSentLen <= kTxFifoLen, "a sensor frame must fit the empty TX FIFO");
+
+constexpr uint16_t kStatusFrameLen = kPicoStatusLen + kLinkEnvelopeLen;
+static_assert(kStatusFrameLen <= kTxFifoLen, "a status frame must fit the empty TX FIFO");
 
 uint8_t  g_seq       = 0;
 uint32_t g_next_tick = 0;
 
+// Acquisition identity for sensor v2 and status frames.
+uint16_t g_boot_id   = 0;
+uint8_t  g_acq_epoch = 0;
+
+FrameReader            g_rx;
+pilink::Commands       g_commands;
+pilink::StatusSchedule g_status(cfg::kStatusPeriodUs, cfg::kStatusMinGapUs,
+                                pilink::airtimeUs(kStatusFrameLen, cfg::kPiBaud) +
+                                    cfg::kStatusMarginUs);
+imu::Status            g_imu_seen;
+uint32_t               g_status_sent = 0;
+
 // Serial1.availableForWrite() only reports 0 or 1 on this core.
 bool txFifoEmpty() { return (uart_get_hw(uart0)->fr & UART_UARTFR_TXFE_BITS) != 0; }
+
+void apply(pilink::Effect e) {
+    switch (e) {
+    case pilink::Effect::None:
+        break;
+    case pilink::Effect::EnableImu:
+        imu::setEnabled(true);
+        break;
+    case pilink::Effect::DisableImu:
+        imu::setEnabled(false);
+        break;
+    case pilink::Effect::ReinitImu:
+        imu::reinit();
+        break;
+    case pilink::Effect::RestartAcquisition:
+        // Before the next sample, so every frame under the new epoch counts from zero.
+        encoder::zeroAll();
+        ++g_acq_epoch;
+        break;
+    }
+}
+
+// Parses the Pi command bytes that have arrived, without waiting for more.
+void receiveCommands() {
+    for (int i = 0; i < cfg::kRxBytesPerPass && Serial1.available() > 0; ++i) {
+        const int b = Serial1.read();
+        if (b < 0) {
+            break;
+        }
+        if (!g_rx.push(static_cast<uint8_t>(b))) {
+            continue;
+        }
+        do {
+            if (g_rx.frameType() != kFramePicoCommand) {
+                continue;
+            }
+            const pilink::Outcome out =
+                g_commands.receive(g_rx.frame(), g_rx.frameLen(), g_boot_id, imu::status().enabled);
+            apply(out.effect);
+            if (out.answered) {
+                g_status.request();
+            }
+        } while (g_rx.next());
+    }
+}
+
+// Settles running IMU commands and asks for a status frame on any change.
+void watchImu() {
+    const imu::Status s = imu::status();
+    if (g_commands.imuProgress(s.state)) {
+        g_status.request();
+    }
+    if (s.enabled != g_imu_seen.enabled || s.state != g_imu_seen.state ||
+        s.reason != g_imu_seen.reason || s.attempts != g_imu_seen.attempts ||
+        s.epoch != g_imu_seen.epoch) {
+        g_imu_seen = s;
+        g_status.request();
+    }
+}
 
 // Reads every sensor that reported and sets only those bits. One time
 // snapshot stamps the encoder latch and cuts the gyro interval.
@@ -34,8 +110,12 @@ SensorSample sample() {
     const uint64_t now_us = time_us_64();
 
     SensorSample s{};
-    s.seq      = g_seq;
-    s.stamp_ms = static_cast<uint32_t>(now_us / 1000);
+    s.seq       = g_seq;
+    s.stamp_ms  = static_cast<uint32_t>(now_us / 1000);
+    s.identity  = true;
+    s.boot_id   = g_boot_id;
+    s.acq_epoch = g_acq_epoch;
+    s.imu_epoch = imu::status().epoch;
 
     for (uint8_t ch = 0; ch < encoder::kChannels; ++ch) {
         if (encoder::started(ch)) {
@@ -53,6 +133,33 @@ SensorSample sample() {
     return s;
 }
 
+PicoStatus picoStatus() {
+    const imu::Status i = imu::status();
+    PicoStatus        st;
+    st.boot_id      = g_boot_id;
+    st.acq_epoch    = g_acq_epoch;
+    st.imu_epoch    = i.epoch;
+    st.uptime_ms    = static_cast<uint32_t>(time_us_64() / 1000);
+    st.imu_state    = i.state;
+    st.imu_reason   = i.reason;
+    st.imu_attempts = i.attempts;
+    st.flags        = i.enabled ? kPicoImuEnabled : 0;
+    st.firmware     = imu::firmware();
+    g_commands.fill(st);
+    return st;
+}
+
+void sendStatus(uint32_t now) {
+    uint8_t        buf[kStatusFrameLen];
+    const uint16_t n = encodePicoStatus(picoStatus(), buf, sizeof(buf));
+    if (n == 0) {
+        return;
+    }
+    Serial1.write(buf, n);
+    g_status.sent(now);
+    ++g_status_sent;
+}
+
 // Print the same sample sent to the Pi, without reading/consuming the IMU twice.
 // USB is optional: never wait for a monitor or for space in its transmit FIFO.
 void logUsb(const SensorSample& s) {
@@ -64,11 +171,29 @@ void logUsb(const SensorSample& s) {
 
     static uint32_t last_status_ms = 0;
     if (s.stamp_ms - last_status_ms >= 1000) {
-        char status[256];
-        const size_t length = imu::formatDiagnostics(status, sizeof(status));
+        char   status[320];
+        size_t length = imu::formatDiagnostics(status, sizeof(status));
         if (length > 0 && Serial.availableForWrite() >= static_cast<int>(length)) {
             Serial.write(reinterpret_cast<const uint8_t*>(status), length);
             last_status_ms = s.stamp_ms;
+        }
+        const PicoStatus st = picoStatus();
+        const int        n =
+            snprintf(status, sizeof(status),
+                     "link boot=%04X acq=%u imu_epoch=%u imu_state=%u reason=%u attempts=%u "
+                     "status_sent=%lu cmd=%lu dup=%lu ignored=%lu last=%u/%u/%u/%u\r\n",
+                     static_cast<unsigned>(st.boot_id), static_cast<unsigned>(st.acq_epoch),
+                     static_cast<unsigned>(st.imu_epoch), static_cast<unsigned>(st.imu_state),
+                     static_cast<unsigned>(st.imu_reason), static_cast<unsigned>(st.imu_attempts),
+                     static_cast<unsigned long>(g_status_sent),
+                     static_cast<unsigned long>(g_commands.received()),
+                     static_cast<unsigned long>(g_commands.duplicates()),
+                     static_cast<unsigned long>(g_commands.ignored()),
+                     static_cast<unsigned>(st.last_request_id), static_cast<unsigned>(st.last_op),
+                     static_cast<unsigned>(st.last_status), static_cast<unsigned>(st.last_detail));
+        length = n > 0 && static_cast<size_t>(n) < sizeof(status) ? static_cast<size_t>(n) : 0;
+        if (length > 0 && Serial.availableForWrite() >= static_cast<int>(length)) {
+            Serial.write(reinterpret_cast<const uint8_t*>(status), length);
         }
     }
 
@@ -97,7 +222,11 @@ void setup() {
     }
     Serial1.setTX(board::kPiTxPin);
     Serial1.setRX(board::kPiRxPin);
+    Serial1.setFIFOSize(cfg::kRxFifoLen);
     Serial1.begin(cfg::kPiBaud);
+
+    // pico_rand mixes ROSC random bits with the timer.
+    g_boot_id = pilink::makeBootId(rp2040.hwrand32(), time_us_64());
 
     for (uint8_t ch = 0; ch < encoder::kChannels; ++ch) {
         encoder::begin(ch, board::kEncPinA[ch], board::kEncPinB[ch]);
@@ -109,26 +238,34 @@ void setup() {
 
 void loop() {
     imu::service();
+    receiveCommands();
+    watchImu();
 
     // Signed compare so the micros rollover is handled.
-    if (static_cast<int32_t>(micros() - g_next_tick) < 0) {
-        return;
-    }
-    g_next_tick += cfg::kTickUs;
+    const uint32_t now = micros();
+    if (static_cast<int32_t>(now - g_next_tick) >= 0) {
+        g_next_tick += cfg::kTickUs;
 
-    // Skip the tick rather than block. Nothing is sampled, so the gyro
-    // interval carries into the next frame.
-    if (!txFifoEmpty()) {
+        // Skip the tick rather than block. Nothing is sampled, so the gyro
+        // interval carries into the next frame.
+        if (!txFifoEmpty()) {
+            return;
+        }
+
+        const SensorSample s = sample();
+        uint8_t            buf[kMaxFrameLen];
+        const uint16_t     n = encodeSensorFrame(s, buf, sizeof(buf));
+        if (n == 0) {
+            return;
+        }
+        Serial1.write(buf, n);
+        ++g_seq;
+        logUsb(s);
         return;
     }
 
-    const SensorSample s = sample();
-    uint8_t            buf[kMaxFrameLen];
-    const uint16_t     n = encodeSensorFrame(s, buf, sizeof(buf));
-    if (n == 0) {
-        return;
+    // Status frames use the idle time between sensor frames only.
+    if (g_status.ready(now, g_next_tick, txFifoEmpty())) {
+        sendStatus(now);
     }
-    Serial1.write(buf, n);
-    ++g_seq;
-    logUsb(s);
 }

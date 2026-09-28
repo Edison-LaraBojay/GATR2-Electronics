@@ -25,6 +25,7 @@
 #include "communigatr/pros_link.h"
 #include "communigatr/pros_vex_imu.h"
 #include "communigatr/startup_placement.h"
+#include "communigatr/vex_imu_recalibration.h"
 #include "investigatr/planner.h"
 
 namespace
@@ -121,7 +122,9 @@ void createLink() {
         config.smart_port = gatr2_robot::kLinkPort;
         config.baud       = gatr2_robot::kLinkBaud;
     }
-    config.profile = gatr2_robot::profile();
+    if (gatr2_robot::kSendProfile) {
+        config.profile = gatr2_robot::profile();
+    }
     if (gatr2_robot::usesVexImu()) {
         g_vex.reset(new communigatr::ProsVexImu(gatr2_robot::kVexImuPort));
         communigatr::ProsVexImu* vex = g_vex.get();
@@ -250,6 +253,24 @@ void display() {
     row(8, "%s", g_message);
 }
 
+// VEX IMU recalibration, after the Pi's stillness check. opcontrol only.
+communigatr::VexImuRecalibration g_recal;
+
+// Background task only.
+uint32_t g_events_seen = 0;
+
+// True when a placement loss is among the events since the last call.
+bool placementLostSinceLastCheck() {
+    bool lost = false;
+    for (uint32_t i = g_events_seen; i < g_events.total(); ++i) {
+        const std::size_t newest = g_events.total() - 1 - i;
+        lost = lost || (newest < g_events.size() &&
+                        g_events.at(newest).event == communigatr::LinkEvent::kPlacementLost);
+    }
+    g_events_seen = g_events.total();
+    return lost;
+}
+
 // Link, profile and sensors are up: the readiness got past them.
 bool sensorsReady(communigatr::Readiness r) {
     using communigatr::Readiness;
@@ -289,6 +310,11 @@ void background() {
             snap.odometry_epoch  = link.state.state.odometry_epoch;
             snap.anchor_revision = link.state.state.anchor_revision;
             g_events.update(snap, t);
+            // Pi restart, reinitialize, or travel lost in a sensor gap: the
+            // pose is invalid until the robot is placed again.
+            if (placementLostSinceLastCheck()) {
+                g_message = "POSE INVALID: put the robot at the start pose, press UP";
+            }
 
             communigatr::StartupInputs in;
             in.connected     = link.connected;
@@ -356,15 +382,23 @@ void opcontrol() {
         if (motionReady()) {
             g_task->status(drive);
         }
+        // The robot stays still while the IMU recalibrates: no tests, no sticks.
+        const bool recalibrating = g_recal.active();
         if (motionReady()) {
             if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A)) {
-                g_message = runDirect() != 0 ? "Direct test running" : "Drive busy";
+                g_message = recalibrating      ? "IMU calibrating: hold still"
+                            : runDirect() != 0 ? "Direct test running"
+                                               : "Drive busy";
             }
             if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_X)) {
-                g_message = runAvoiding() != 0 ? "Avoiding test running" : "Drive busy";
+                g_message = recalibrating        ? "IMU calibrating: hold still"
+                            : runAvoiding() != 0 ? "Avoiding test running"
+                                                 : "Drive busy";
             }
             if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_Y)) {
-                g_message = runLandmark() != 0 ? "Landmark test running" : "Drive busy";
+                g_message = recalibrating        ? "IMU calibrating: hold still"
+                            : runLandmark() != 0 ? "Landmark test running"
+                                                 : "Drive busy";
             }
             if (master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_B)) {
                 g_task->cancel();
@@ -385,11 +419,31 @@ void opcontrol() {
             if (moving(drive)) {
                 g_message = "Recalibrate refused: a movement is running";
             } else if (g_vex) {
-                g_vex->recalibrate();
-                g_message = "VEX IMU calibrating: hold still";
+                g_message = g_recal.begin(g_link->recalibrate())
+                                ? "Checking the robot is still..."
+                                : "Recalibrate refused: no link, or a request pending";
             } else {
                 g_message = g_link->recalibrate() != 0 ? "IMU recalibration requested"
                                                        : "Recalibrate refused";
+            }
+        }
+
+        // VEX IMU recalibration: starts only after the Pi's stillness check.
+        if (g_vex && g_recal.active()) {
+            using communigatr::VexRecalibrationState;
+            const VexRecalibrationState r =
+                g_recal.update(g_link->control(g_recal.ticket()), g_vex->sample(), now());
+            if (r == VexRecalibrationState::kStart) {
+                g_recal.started(g_vex->recalibrate(), now()); // blocks about 1 s at most
+                g_message = "VEX IMU calibrating: hold still";
+            } else if (r == VexRecalibrationState::kDone) {
+                g_message = "VEX IMU calibrated: put the robot at the start pose, press UP";
+            } else if (r == VexRecalibrationState::kMoving) {
+                g_message = "Recalibrate refused: robot moving";
+            } else if (r == VexRecalibrationState::kRefused) {
+                g_message = "Recalibrate refused: check the link";
+            } else if (r == VexRecalibrationState::kImuFailed) {
+                g_message = "VEX IMU did not calibrate: check the IMU";
             }
         }
 
@@ -398,6 +452,9 @@ void opcontrol() {
             d.forward = stick(master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y));
             d.strafe  = -stick(master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X));
             d.turn    = -stick(master.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X));
+            if (g_recal.active()) {
+                d = actugatr::ManualDemand{};
+            }
             const bool sticks = d.forward != 0 || d.strafe != 0 || d.turn != 0;
             // Sticks take over from a running test; otherwise the test keeps the drive.
             if (sticks || !moving(drive)) {

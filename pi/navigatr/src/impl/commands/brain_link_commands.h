@@ -8,6 +8,9 @@
 //       <Serial resource_id="brain_uart"/>
 //       <Reply window_ms="40" turnaround_guard_us="1000"/>   optional
 //       <BenchImu resource_id="brain_imu"/>                   optional
+//       <Pico resource_id="pico_telemetry"/>                  optional, Brain profiles:
+//                                                             CONTROL 3/4 (IMU reinit,
+//                                                             acquisition restart)
 //   </CommandCollection>
 //
 // Each run drains the link until a read returns nothing, stamping every read
@@ -17,7 +20,9 @@
 // No reply for a request completed in the first drain since construction or
 // reset, or followed by more bytes in the same drain; it is still applied.
 // A drain with no bytes discards a partial frame. The loop period must be at
-// most half the window.
+// most half the window. Every run records pi_instance, whether the link read
+// without closing, and the host time of the newest request in the command
+// state, for inspection.
 //
 // Dedupe: a request id that is not newer is never applied again. The last
 // SET_POSE and CONTROL are answered from their records; the newest id of a
@@ -37,8 +42,10 @@
 //
 // CONTROL goes to the profile host (NotReady without one) and is recorded
 // like SET_POSE: a duplicate reports the recorded result and never runs
-// again. READ_WHEELS is Unavailable without a profile host and NotReady with
-// one until wheel readings are served.
+// again; while that result is Pending (a Pico operation) the duplicate
+// reports the operation's current progress instead. READ_WHEELS is
+// Unavailable without a profile host; with one the host reads the profile
+// wheels (NotReady before a profile is applied).
 
 #pragma once
 #include <array>

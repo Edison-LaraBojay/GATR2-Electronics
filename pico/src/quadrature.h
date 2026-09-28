@@ -18,4 +18,7 @@ int32_t count(uint8_t ch);
 // True once begin has run for this channel.
 bool started(uint8_t ch);
 
+// Zeroes every channel at one instant with respect to the encoder interrupts.
+void zeroAll();
+
 } // namespace encoder

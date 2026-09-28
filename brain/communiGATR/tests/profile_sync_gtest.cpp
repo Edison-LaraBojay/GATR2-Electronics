@@ -1,11 +1,14 @@
 // profile_sync_gtest.cpp
 // Robot profile upload and apply against the fake Pi: chunked writes,
 // resume, Pending, idempotent retry across Brain restarts, continuity loss on
-// a changed profile, settled rejections, local rejection, and the placement
-// and state source gates that depend on it.
+// a changed profile, settled rejections, local rejection, an APPLY Ok that
+// only counts with a state showing it, and the placement and state source
+// gates that depend on it.
 
 #include "communigatr/client.h"
 
+#include <deque>
+#include <functional>
 #include <gtest/gtest.h>
 #include <vector>
 
@@ -317,4 +320,88 @@ TEST(ProfileSync, NoProfileConfiguredSendsNothing) {
     EXPECT_TRUE(requests(rig.bus, gatr2::kOpProfileWrite).empty());
     EXPECT_TRUE(requests(rig.bus, gatr2::kOpProfileApply).empty());
     EXPECT_NE(client.submitPlacement(1, 1, 1), 0u);
+}
+
+namespace
+{
+
+// Loopback to the fake Pi, with a hook on every reply.
+class HookedPort : public BytePort {
+public:
+    explicit HookedPort(FakePi& pi) : pi_(pi) {}
+
+    int read(uint8_t* buf, int max) override {
+        int n = 0;
+        while (n < max && !rx_.empty()) {
+            buf[n++] = rx_.front();
+            rx_.pop_front();
+        }
+        return n;
+    }
+
+    bool write(const uint8_t* data, int len) override {
+        gatr2::BrainRequest request;
+        if (!gatr2::decodeBrainRequest(data, static_cast<uint16_t>(len), request)) {
+            return true;
+        }
+        gatr2::BrainReply reply = pi_.answer(request);
+        if (hook) {
+            hook(request, reply);
+        }
+        uint8_t        frame[gatr2::kMaxFrameLen];
+        const uint16_t n = gatr2::encodeBrainReply(reply, frame, sizeof(frame));
+        rx_.insert(rx_.end(), frame, frame + n);
+        return true;
+    }
+
+    std::function<void(const gatr2::BrainRequest&, gatr2::BrainReply&)> hook;
+
+private:
+    FakePi&             pi_;
+    std::deque<uint8_t> rx_;
+};
+
+} // namespace
+
+// An APPLY Ok alone never makes the profile applied: the newest state could
+// predate the Pi's swap. A later state that names another profile restarts
+// the upload instead of leaving the client waiting.
+TEST(ProfileSync, ApplyOkCountsOnlyWithAStateThatShowsIt) {
+    FakePi pi;
+    pi.setProfileMode(true);
+    HookedPort port(pi);
+    int        stage          = 0; // 0 states hide the swap, 1 after the Ok, 2 honest
+    int        writes_at_bend = -1;
+    port.hook = [&](const gatr2::BrainRequest& q, gatr2::BrainReply& r) {
+        if (q.op == gatr2::kOpProfileApply && r.result == gatr2::kResultOk && stage == 0) {
+            stage = 1;
+            return;
+        }
+        if (q.op != gatr2::kOpGetState) {
+            return;
+        }
+        if (stage == 0) {
+            r.state.profile_state = gatr2::kProfileApplying;
+        } else if (stage == 1) {
+            r.state.profile_id ^= 1u; // the first state after the Ok names another profile
+            stage          = 2;
+            writes_at_bend = pi.profileWrites();
+        }
+    };
+    Client client(port, [] { return 7u; }, configFor(benchProfile()));
+
+    int applied_before_bend = 0;
+    for (Seconds now = 0; now < kLimit && !(stage == 2 && client.profileApplied());
+         now += 0.001) {
+        client.poll(now);
+        if (stage < 2 && client.profileApplied()) {
+            ++applied_before_bend;
+        }
+    }
+    ASSERT_EQ(stage, 2);
+    EXPECT_EQ(applied_before_bend, 0);
+    EXPECT_TRUE(client.profileApplied());
+    EXPECT_GT(pi.profileWrites(), writes_at_bend); // uploaded again after the bent state
+    EXPECT_EQ(client.stats().unexpected, 1u);
+    EXPECT_EQ(pi.profilesApplied(), 1);
 }

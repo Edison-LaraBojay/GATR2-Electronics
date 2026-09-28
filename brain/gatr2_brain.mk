@@ -41,6 +41,7 @@ GATR2_SRC_communigatr := \
 	$(GATR2_ROOT)/brain/communiGATR/src/robot_profile.cpp \
 	$(GATR2_ROOT)/brain/communiGATR/src/startup_placement.cpp \
 	$(GATR2_ROOT)/brain/communiGATR/src/usb_line.cpp \
+	$(GATR2_ROOT)/brain/communiGATR/src/vex_imu_recalibration.cpp \
 	$(GATR2_ROOT)/brain/communiGATR/src/wheel_calibration.cpp \
 	$(GATR2_ROOT)/brain/communiGATR/pros/pros_link.cpp \
 	$(GATR2_ROOT)/brain/communiGATR/pros/pros_serial_port.cpp \

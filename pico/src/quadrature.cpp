@@ -75,4 +75,12 @@ bool started(uint8_t ch) {
     return ch < kChannels && g_ch[ch].started;
 }
 
+void zeroAll() {
+    noInterrupts();
+    for (Channel& c : g_ch) {
+        c.count = 0;
+    }
+    interrupts();
+}
+
 } // namespace encoder

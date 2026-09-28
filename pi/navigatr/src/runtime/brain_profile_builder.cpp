@@ -174,18 +174,9 @@ std::string imuSensorId(uint8_t port) {
     return std::string(kProfileSensorPrefix) + "imu_" + std::to_string(port);
 }
 
-const char* topologyName(uint8_t topology) {
-    switch (topology) {
-    case gatr2::kTopologyTwoWheelImu: return "two wheels + IMU";
-    case gatr2::kTopologyTwoForwardWheelImu: return "two forward wheels + IMU";
-    case gatr2::kTopologyThreeWheel: return "three wheels";
-    default: return "unknown";
-    }
-}
-
 std::string summarize(const gatr2::RobotProfileDoc& p) {
     char        buf[160];
-    std::string s = topologyName(p.topology);
+    std::string s = profileTopologyName(p.topology);
     for (uint8_t i = 0; i < p.wheel_count; ++i) {
         const gatr2::ProfileWheel& w = p.wheels[i];
         std::snprintf(buf, sizeof(buf),
@@ -217,6 +208,36 @@ std::string summarize(const gatr2::RobotProfileDoc& p) {
 }
 
 } // namespace
+
+const char* profileTopologyName(uint8_t topology) {
+    switch (topology) {
+    case gatr2::kTopologyTwoWheelImu: return "two wheels + IMU";
+    case gatr2::kTopologyTwoForwardWheelImu: return "two forward wheels + IMU";
+    case gatr2::kTopologyThreeWheel: return "three wheels";
+    default: return "unknown";
+    }
+}
+
+const char* profileReasonName(uint8_t reason) {
+    switch (reason) {
+    case gatr2::kProfileReasonNone: return "none";
+    case gatr2::kProfileReasonFormat: return "format";
+    case gatr2::kProfileReasonTopology: return "topology";
+    case gatr2::kProfileReasonWheelCount: return "wheel count";
+    case gatr2::kProfileReasonEncoderPort: return "encoder port";
+    case gatr2::kProfileReasonWheelGeometry: return "wheel geometry";
+    case gatr2::kProfileReasonObservability: return "observability";
+    case gatr2::kProfileReasonImuSource: return "IMU source";
+    case gatr2::kProfileReasonImuPort: return "IMU port";
+    case gatr2::kProfileReasonImuCombination: return "IMU combination";
+    case gatr2::kProfileReasonCamera: return "camera";
+    case gatr2::kProfileReasonFootprint: return "footprint";
+    case gatr2::kProfileReasonBuild: return "build";
+    case gatr2::kProfileReasonNotAccepted: return "not accepted";
+    case gatr2::kProfileReasonCalibration: return "calibration";
+    default: return "unknown";
+    }
+}
 
 bool parseBrainProfileConfig(const ConfigNode& node, const ResourceStore& resources,
                              const ResourceCatalog& outputs, BrainProfileConfig& out,
@@ -264,7 +285,9 @@ bool parseBrainProfileConfig(const ConfigNode& node, const ResourceStore& resour
 
     const ConfigNode calibration = node.child("Calibration");
     if (calibration.valid() &&
-        (!calibration.onlyAttributes({"bias_samples", "window_ms", "max_gap_ms", "still_travel_m"},
+        (!calibration.onlyAttributes({"bias_samples", "window_ms", "max_gap_ms", "still_travel_m",
+                                      "still_rate_dps", "max_rate_dps", "evidence_gap_ms",
+                                      "attempt_s"},
                                      err) ||
          !calibration.onlyChildren({}, err))) {
         return false;
@@ -272,30 +295,51 @@ bool parseBrainProfileConfig(const ConfigNode& node, const ResourceStore& resour
     if (!calibration.getInt("bias_samples", 20, out.bias_samples, err) ||
         !calibration.getInt("window_ms", 2000, out.window_ms, err) ||
         !calibration.getInt("max_gap_ms", 250, out.max_gap_ms, err) ||
-        !calibration.getDouble("still_travel_m", 0.001, out.still_travel_m, err)) {
+        !calibration.getDouble("still_travel_m", 0.001, out.still_travel_m, err) ||
+        !calibration.getDouble("still_rate_dps", 1.0, out.still_rate_dps, err) ||
+        !calibration.getDouble("max_rate_dps", 5.0, out.max_rate_dps, err) ||
+        !calibration.getInt("evidence_gap_ms", 100, out.evidence_gap_ms, err) ||
+        !calibration.getDouble("attempt_s", 60.0, out.attempt_s, err)) {
         return false;
     }
     if (calibration.valid() &&
         (!nonNegative(calibration, "bias_samples", out.bias_samples, err) ||
          !nonNegative(calibration, "window_ms", out.window_ms, err) ||
          !positive(calibration, "max_gap_ms", out.max_gap_ms, err) ||
-         !positive(calibration, "still_travel_m", out.still_travel_m, err))) {
+         !positive(calibration, "still_travel_m", out.still_travel_m, err) ||
+         !positive(calibration, "still_rate_dps", out.still_rate_dps, err) ||
+         !positive(calibration, "max_rate_dps", out.max_rate_dps, err) ||
+         !positive(calibration, "evidence_gap_ms", out.evidence_gap_ms, err) ||
+         !positive(calibration, "attempt_s", out.attempt_s, err))) {
         return false;
     }
 
     const ConfigNode timing = node.child("Timing");
     if (timing.valid() &&
-        (!timing.onlyAttributes({"interval_tolerance_ms", "max_pending_ms"}, err) ||
+        (!timing.onlyAttributes(
+             {"interval_tolerance_ms", "max_pending_ms", "sensor_loss_ms", "on_sensor_loss"},
+             err) ||
          !timing.onlyChildren({}, err))) {
         return false;
     }
+    std::string on_loss = "unplace";
     if (!timing.getInt("interval_tolerance_ms", 20, out.interval_tolerance_ms, err) ||
-        !timing.getInt("max_pending_ms", 500, out.max_pending_ms, err)) {
+        !timing.getInt("max_pending_ms", 500, out.max_pending_ms, err) ||
+        !timing.getInt("sensor_loss_ms", 250, out.sensor_loss_ms, err)) {
         return false;
     }
+    if (timing.valid() && !timing.attr("on_sensor_loss").empty()) {
+        on_loss = timing.attr("on_sensor_loss");
+    }
+    if (on_loss != "unplace" && on_loss != "warn") {
+        err = timing.path() + ": on_sensor_loss must be unplace or warn";
+        return false;
+    }
+    out.unplace_on_sensor_loss = on_loss == "unplace";
     if (timing.valid() &&
         (!nonNegative(timing, "interval_tolerance_ms", out.interval_tolerance_ms, err) ||
-         !positive(timing, "max_pending_ms", out.max_pending_ms, err))) {
+         !positive(timing, "max_pending_ms", out.max_pending_ms, err) ||
+         !positive(timing, "sensor_loss_ms", out.sensor_loss_ms, err))) {
         return false;
     }
 
@@ -436,6 +480,16 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
         p.calibration_window_ms != 0 ? static_cast<long>(p.calibration_window_ms) : c.window_ms;
     const double still_travel_m =
         p.still_travel_um != 0 ? p.still_travel_um * 1e-6 : c.still_travel_m;
+    const double still_rate_dps =
+        p.still_rate_cdps != 0 ? p.still_rate_cdps / 100.0 : c.still_rate_dps;
+
+    // the stationary window every bias path and the stationary status share
+    const auto stillness = [&](tinyxml2::XMLElement* e) {
+        e->SetAttribute("window_ms", static_cast<int64_t>(window_ms));
+        e->SetAttribute("still_rate_dps", still_rate_dps);
+        e->SetAttribute("max_rate_dps", c.max_rate_dps);
+        e->SetAttribute("evidence_gap_ms", static_cast<int64_t>(c.evidence_gap_ms));
+    };
 
     // wheel geometry and the travel scale, once; direction is always positive
     const auto addWheels = [&](tinyxml2::XMLElement* model) {
@@ -472,6 +526,11 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
                                          : "brain_imu_planar_bench");
         addWheels(motion);
         add(doc, motion, "Imu")->SetAttribute("resource_id", c.brain_imu.value.c_str());
+        tinyxml2::XMLElement* still = add(doc, motion, "Stillness");
+        stillness(still);
+        still->SetAttribute("samples", static_cast<int64_t>(c.bias_samples > 0 ? c.bias_samples
+                                                                                : 20));
+        still->SetAttribute("still_travel_m", still_travel_m);
         output(motion, motion_id);
     } else {
         motion->SetAttribute("type", "tracking_wheel_motion");
@@ -484,6 +543,8 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
             hc->SetAttribute("window_ms", static_cast<int64_t>(window_ms));
             hc->SetAttribute("max_gap_ms", static_cast<int64_t>(c.max_gap_ms));
             hc->SetAttribute("max_calibration_travel_m", still_travel_m);
+            stillness(hc);
+            hc->SetAttribute("attempt_s", c.attempt_s);
             binding.bias_function = motion_id;
             if (p.topology == gatr2::kTopologyTwoForwardWheelImu) {
                 add(doc, motion, "LateralMotion")->SetAttribute("assume", "zero");
@@ -504,8 +565,16 @@ void writeProfileSubtrees(const BrainProfileConfig& c, const gatr2::RobotProfile
         add(doc, heading, "Input")->SetAttribute("sensor_id", binding.imu.value.c_str());
         tinyxml2::XMLElement* cal = add(doc, heading, "Calibration");
         cal->SetAttribute("bias_samples", static_cast<int64_t>(c.bias_samples));
-        cal->SetAttribute("window_ms", static_cast<int64_t>(window_ms));
         cal->SetAttribute("max_gap_ms", static_cast<int64_t>(c.max_gap_ms));
+        cal->SetAttribute("still_travel_m", still_travel_m);
+        stillness(cal);
+        cal->SetAttribute("attempt_s", c.attempt_s);
+        // the profile wheels gate the gyro's stationary window
+        for (uint8_t i = 0; i < p.wheel_count; ++i) {
+            tinyxml2::XMLElement* w = add(doc, cal, "Wheel");
+            w->SetAttribute("sensor_id", encoderSensorId(p.wheels[i].encoder_port).c_str());
+            w->SetAttribute("radius_m", p.wheels[i].radius_um * 1e-6);
+        }
         output(heading, heading_id);
         binding.bias_function = heading_id;
 

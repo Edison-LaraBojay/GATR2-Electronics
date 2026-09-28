@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Temporary slow bench test: Pico encoders + Brain VEX IMU, paired by Pi
+<!-- XML-configured: the robot is described in this file and Brain robot
+     profiles are refused ("not accepted"), so Brain programs that send
+     a profile cannot place with it. The primary configs are
+     ../brain_profile_usb.xml and ../brain_profile_rs485.xml.
+     Temporary slow bench test: Pico encoders + Brain VEX IMU, paired by Pi
      arrival time. Robot dimensions below are editable UNMEASURED defaults.
      No camera, BNO08X dependency, or sideways-motion measurement. -->
 <Configuration id="bench_vex_imu">

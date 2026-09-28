@@ -186,10 +186,36 @@ struct FakeProfileHost : BrainProfileHost {
     uint8_t control(uint8_t, uint8_t, MonotonicTime, uint8_t& d) override {
         ++controls;
         d = gatr2::kControlDetailNone;
-        return gatr2::kResultNotReady;
+        return control_result;
     }
 
-    int controls = 0;
+    uint8_t controlProgress(uint8_t, uint8_t, MonotonicTime, uint8_t& d) override {
+        ++progress_calls;
+        d = progress_detail;
+        return progress_result;
+    }
+
+    uint8_t readWheels(MonotonicTime, uint8_t& count, gatr2::WheelReading* wheels) override {
+        ++wheel_reads;
+        count = 0;
+        if (wheels_result == gatr2::kResultOk) {
+            gatr2::WheelReading r;
+            r.port      = 1;
+            r.flags     = gatr2::kWheelFresh | gatr2::kWheelValid;
+            r.counts    = 1234;
+            r.travel_um = -5678;
+            wheels[count++] = r;
+        }
+        return wheels_result;
+    }
+
+    int     controls        = 0;
+    uint8_t control_result  = gatr2::kResultNotReady;
+    int     progress_calls  = 0;
+    uint8_t progress_result = gatr2::kResultPending;
+    uint8_t progress_detail = gatr2::kControlDetailNone;
+    int     wheel_reads     = 0;
+    uint8_t wheels_result   = gatr2::kResultNotReady;
 };
 
 // ---- slot harness ----------------------------------------------------------
@@ -510,6 +536,85 @@ TEST(BrainLinkSession, HelloOpensASessionAndKeepsThePiSideState) {
     EXPECT_EQ(f.command.init_sequence, 0u);             // never touches placement
     EXPECT_EQ(f.command.profile.applied_id, 0x1234u);   // nor the profile
     EXPECT_EQ(f.command.profile.state, gatr2::kProfileApplied);
+}
+
+namespace
+{
+
+// A link a test can close, as a pulled USB cable closes the Brain device.
+struct ClosableLink : SerialLink {
+    MemoryLink inner;
+    bool       closed = false;
+
+    SerialReadResult readAvailable(MutableByteSpan destination) override {
+        return closed ? SerialReadResult{0, true} : inner.readAvailable(destination);
+    }
+    SerialWriteResult write(ByteSpan source) override { return inner.write(source); }
+    SerialWriteResult write(ByteSpan source, const TransmitWindow& window) override {
+        return inner.write(source, window);
+    }
+    bool    inputPending() override { return inner.inputPending(); }
+    int64_t nowUs() override { return inner.nowUs(); }
+};
+
+} // namespace
+
+TEST(BrainLinkSession, LinkLivenessGoesToTheCommandStateEveryCycle) {
+    FunctionRegistry functions;
+    register_commands(functions);
+    auto link = std::make_shared<ClosableLink>();
+    ASSERT_TRUE(functions.add<ResourceMakeFunction>(
+        FunctionKey{"closable_link"},
+        [link](const ConfigNode&, ResourceInitializationContext&, std::string&) {
+            return ResourceInstance::asContract<SerialLink>(link);
+        }));
+    tinyxml2::XMLDocument resources;
+    ASSERT_EQ(resources.Parse(R"(<Resource id="brain_uart" type="closable_link"/>)"),
+              tinyxml2::XML_SUCCESS);
+    std::vector<std::string> warnings;
+    ResourceStoreBuilder     builder(functions, &warnings);
+    std::string              err;
+    ASSERT_TRUE(builder.index(ConfigNode{resources.RootElement()}, err)) << err;
+    ASSERT_TRUE(builder.buildAll(err)) << err;
+    ResourceStore             store = builder.take();
+    SensorCatalog             catalog;
+    SlotInitializationContext context;
+    context.resources    = &store;
+    context.sensors      = &catalog;
+    context.functions    = &functions;
+    context.loop_rate_hz = 100.0;
+    tinyxml2::XMLDocument node;
+    ASSERT_EQ(node.Parse(kCommandsXml), tinyxml2::XML_SUCCESS);
+    const CommandsMakeFunction* make =
+        functions.find<CommandsMakeFunction>(FunctionKey{"brain_link"}, err);
+    ASSERT_NE(make, nullptr) << err;
+    std::unique_ptr<Commands> commands = (*make)(ConfigNode{node.RootElement()}, context, err);
+    ASSERT_NE(commands, nullptr) << err;
+
+    CommandState state;
+    const auto   run = [&](int64_t ms) {
+        state = commands->run({state, hostTime(ms), nullptr}).command;
+    };
+    run(1000);
+    EXPECT_NE(state.pi_instance, 0u);   // known before any request
+    EXPECT_TRUE(state.link_open);
+    EXPECT_FALSE(state.last_request.isSet());
+
+    link->inner.input().feed(requestBytes(helloRequest(1, 0xCAFE)));
+    run(1020);
+    EXPECT_EQ(state.last_request.ms, 1020);
+    run(1040);   // quiet: the newest request time stays
+    EXPECT_EQ(state.last_request.ms, 1020);
+    EXPECT_TRUE(state.link_open);
+
+    link->closed = true;
+    run(1060);
+    EXPECT_FALSE(state.link_open);
+    EXPECT_EQ(state.last_request.ms, 1020);
+    EXPECT_NE(state.session, 0u);   // a closed link keeps the session
+    link->closed = false;
+    run(1080);
+    EXPECT_TRUE(state.link_open);
 }
 
 TEST(BrainLinkSession, HelloRetryIsIdempotentUntilTheSessionIsUsed) {
@@ -915,8 +1020,11 @@ TEST(BrainLinkState, RobotUnitsAgeAnchorBitsAndHealth) {
     fresh.receivedAt                    = hostTime(f.now_ms);
     f.results[SensorId{"enc_a"}].latest = fresh;
     f.results[SensorId{"imu"}].latest   = fresh;
-    f.localization.functions = {
-        ObservationFunctionStatus{"tracking_motion", "tracking_wheel_motion", true, ""}};
+    ObservationFunctionStatus tracking;
+    tracking.id              = "tracking_motion";
+    tracking.type            = "tracking_wheel_motion";
+    tracking.ready           = true;
+    f.localization.functions = {tracking};
 
     gatr2::BrainReply s = f.one(getStateRequest(session, 2));
     EXPECT_EQ(s.state.x_mm, 1500);

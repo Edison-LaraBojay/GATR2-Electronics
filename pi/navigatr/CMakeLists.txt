@@ -98,6 +98,7 @@ set(NAVIGATR_SOURCES
     src/impl/localization/tracking_wheel_motion.cpp
     src/impl/localization/brain_imu_wheel_bench.cpp
     src/impl/localization/imu_heading_increment.cpp
+    src/impl/localization/stationary_window.cpp
     src/impl/localization/attitude_reference.cpp
     src/impl/localization/motion_step.cpp
     src/impl/localization/planar_motion_integrator.cpp
@@ -121,6 +122,7 @@ set(NAVIGATR_SOURCES
     src/runtime/resource_stage.cpp
     src/runtime/sensor_stage.cpp
     src/runtime/stationary_precheck.cpp
+    src/runtime/sensor_loss.cpp
     src/runtime/world_estimation_stage.cpp
     src/runtime/system.cpp
     src/inspection/inspection_document.cpp

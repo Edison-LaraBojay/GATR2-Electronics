@@ -1,97 +1,68 @@
-# VEX IMU bench fallback
+# VEX IMU bench source
 
-Quick push-by-hand test: the Pico supplies encoder channels 0 and 1, the Brain
-supplies continuous VEX IMU rotation, and the Pi returns the ordinary robot pose
-and serves the field viewer. The Pico BNO08X may remain unavailable. No camera
-or path planner is used.
+The Brain reads the VEX IMU and sends its continuous rotation in every state
+poll; the Pi pairs it with the Pico wheels and returns the ordinary robot pose.
+This is the current bench IMU while the external BNO08X is unavailable: a
+missing or failed Pico IMU never blocks it.
 
-This mode pairs the latest readings by their arrival on the Pi. It does not
-synchronize the Brain and Pico clocks. Use slow translation and turns; delay
-and jitter can create position error. The RS-485 profile below describes two
-parallel wheels and assumes zero sideways motion. The
-[USB bench profile](usb_localization_bench.md) describes one forward wheel on
-port 0 and one sideways wheel on port 1, and measures both translation axes.
+It pairs the latest readings by their arrival on the Pi. It does not
+synchronize the Brain and Pico clocks, so delay and jitter become position
+error during fast motion. Use slow translation and turns. It supplies heading
+only: no rate, acceleration or tilt.
 
-## Brain
+## Selecting it
 
-Use the existing `brain/localization-test` PROS project. Its
-`include/robot_config.h` selects:
+On the Brain, in [brain/robot/gatr2_robot.h](../../../brain/robot/gatr2_robot.h):
+`kSetup = Setup::kTwoWheelVexImu` and `kVexImuPort` (Smart Port 1 on the
+bench). The Brain sends a profile with IMU source Brain VEX IMU; the Pi
+selects the model from its topology:
 
-- `kUseVexImuBench = true`.
-- VEX IMU on Smart Port **1**.
-- Pi link on the Smart Port selected by `kNavigatrPort` for RS-485, or USB when
-  `kUseUsbBench = true`.
-- Initial field position and heading in `kStartX`, `kStartY`, and
-  `kStartHeadingDegrees`.
-
-From `brain/localization-test`, build and upload with PROS (not PlatformIO):
-
-```sh
-pros make
-pros upload --slot 2 --name localization-test --after screen
-```
-
-Choose a different slot if needed. For a fresh checkout, restore the PROS kernel
-as described in the [app README](../../../brain/localization-test/README.md#build-and-upload-the-brain-app).
-Keep the robot still
-while the VEX IMU calibrates. Its local rotation is displayed on the Brain even
-if the Pi link has not connected, so the two pieces can be checked separately.
-The Brain converts PROS clockwise-positive rotation to counterclockwise-positive
-rotation before sending it. The app never commands motors.
-
-USB text logging is off by default (`kUsbDebug = false`) so battery-only use
-does not depend on a terminal draining the Brain's debug output. The Brain
-screen and communiGATR link still run. Enable it only for USB terminal debugging.
-
-## Pi
-
-From `pi/navigatr` on the Pi, using the updated source:
-
-```sh
-cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DNAVIGATR_BUILD_TESTS=OFF
-cmake --build build-bench -j2
-./build-bench/navigatr --config_file=config/override/diagnostics/bench_vex_imu.xml
-```
-
-The single [bench configuration](../config/override/diagnostics/bench_vex_imu.xml)
-is runnable without completing the usual robot template. Edit its values:
-
-| Setting | Bench default |
+| Profile topology | Pi model |
 |---|---|
-| Pico UART | `/dev/ttyAMA0`, 115200 |
-| Brain UART | `/dev/ttyAMA5`, 115200, driver-enable GPIO 6 |
-| Encoder counts/revolution | 4000 for each wheel |
-| Wheel radius | `radius_m` in the XML; confirm against the actual wheel |
-| Wheel lateral offsets | +0.15 m and -0.15 m: **unmeasured defaults** |
-| Wheel direction | `positive` for both; change if forward rolling decreases counts |
+| two wheels in independent directions (the bench: forward on port 0, sideways on port 1) | `brain_imu_planar_bench`: both translation axes measured |
+| two forward wheels (0 or 180 degrees) | `brain_imu_parallel_bench`: sideways motion assumed zero |
+| three wheels | refused (IMU combination): the VEX IMU runs on the Brain clock and cannot be fused with independent wheel rotation |
 
-Actual wheel radius, direction and offsets are still needed for meaningful
-distance measurements. `calibration_status` is only a reader annotation.
-Serial device names and the GPIO number must match the Pi's configured UARTs
-and GPIO numbering; see [Pi access](../../../docs/pi_setup.md). This fallback
-still requires a working Brain–Pi physical link.
+On the Pi, the Brain-profile configs already accept it: `<BrainImu
+resource_id="brain_imu"/>` in the profile element and `<BenchImu
+resource_id="brain_imu"/>` on the brain_link CommandCollection. See
+[USB bench](usb_localization_bench.md) for the full procedure and
+[Brain robot profiles](brain_profile.md) for the rules.
 
-The Brain opens a session, supplies IMU samples, and requests the initial pose.
-If the initial connection window expires, press controller A or the screen's
-placement button after it connects. Stale/missing IMU or wheel data stops motion
-updates. A source restart or calibration change rebases measurement differences;
-it does not replay motion from the gap.
+## Calibration ownership
 
-## Start automatically at boot
+- The VEX firmware calibrates the VEX IMU (`pros::Imu::reset()`, started from
+  the Brain program). The Pi applies no bias to its rotation, so calibration
+  is never applied twice, and the state block reports calibration none.
+- While the VEX IMU calibrates its samples are invalid. The Pi counts an
+  invalid sample as missing, so a recalibration ends the placement: place the
+  robot again afterwards.
+- Stationary detection uses the wheels and the heading change only (reduced
+  evidence): the rotation must stay within 1 deg/s times the window and every
+  wheel within 1 mm.
 
-Follow [Pi setup and automatic startup](../../../docs/pi_setup.md) for the full
-internet provisioning, source transfer, UART setup, service installation, and
-direct Ethernet instructions. After building and confirming the device settings,
-run from `pi/navigatr` on the Pi:
+## Freshness and recovery
 
-```sh
-sudo bash tools/install_service.sh --user "$USER"
-```
+The samples ride on the Brain link. With a VEX profile the Pi ends pose
+continuity when no valid sample arrives for 250 ms (`sensor_loss_ms`), and when
+the mailbox restarts (a new Brain session). So a link outage over 250 ms, a
+Brain program restart or a VEX recalibration each need a new placement; the
+Brain programs place at their start pose at program start and otherwise show
+Needs placement. Stale or missing IMU or wheel data never integrates: the model
+rebaselines and replays nothing from the gap.
 
-Stop any manually running instance first. The service starts at boot without
-SSH, Ethernet, or internet, and restarts after a process exit. Both bench UART
-devices use `required="true"`: unavailable UART/GPIO access fails startup so the
-service can retry, rather than retaining an unusable connection.
+## XML-configured bench profiles
+
+[bench_vex_imu.xml](../config/override/diagnostics/bench_vex_imu.xml) (RS-485,
+two parallel wheels, `brain_imu_parallel_bench`) and
+[bench_vex_imu_usb.xml](../config/override/diagnostics/bench_vex_imu_usb.xml)
+(USB, the perpendicular bench, `brain_imu_planar_bench`) describe the same
+bench in Pi XML, with UNMEASURED wheel defaults (radius 0.024 m, 4000 counts,
+offsets 0.15 m). They still build and run, but they refuse Brain profiles, and
+the current Brain programs always send one and then refuse to place. Use them
+only with a Brain client built without a profile, or for host tests and
+replays. Their wheel `direction` attribute is geometric; with a Brain profile
+the equivalent is the wheel's encoder polarity.
 
 ## Viewer
 
@@ -102,12 +73,5 @@ ssh -N -L 8765:127.0.0.1:8765 <user>@<pi-host>
 ```
 
 Open `http://127.0.0.1:8765/`. The field and robot pose use the normal viewer.
-Landmarks remain nominal; no camera/AprilTag correction or measured live tilt is
-provided by this bench path.
-
-## Return to the BNO08X setup
-
-Set `kUseVexImuBench = false`, rebuild/upload the Brain app, and use the normal
-parallel-wheel Pi profile. The bench mode adds an optional state request carrying
-IMU data; ordinary Brain requests keep their existing format. Both Brain and Pi
-must be rebuilt to use the extension.
+Landmarks stay nominal; there is no camera correction and no measured tilt on
+this path.

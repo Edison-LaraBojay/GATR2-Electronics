@@ -265,6 +265,45 @@ input[type="number"] {
     margin-top: 6px;
 }
 
+/* Brain link panel */
+
+#link[hidden] {
+    display: none;
+}
+
+#readiness {
+    margin-bottom: 4px;
+}
+
+.kv {
+    font-size: 12px;
+    margin: 3px 0;
+}
+
+#wheel-table td, #wheel-table th {
+    padding: 1px 4px;
+}
+
+.subhead {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.event-log {
+    max-height: 140px;
+    overflow-y: auto;
+    font-size: 12px;
+}
+
+.event {
+    white-space: normal;
+    padding: 1px 0;
+    border-bottom: 1px solid var(--border);
+}
+
 /* tables */
 
 table {

@@ -13,7 +13,8 @@
 //       ...   or   <Wheels resource_id="wheel_geometry"><Use wheel_id=.../></Wheels>
 //       <HeadingConstraint sensor_id="robot_imu" bias_samples="200"
 //                          max_calibration_travel_m="0.005" max_gap_ms="250"
-//                          window_ms="0"/>
+//                          window_ms="0" still_rate_dps="1" max_rate_dps="5"
+//                          evidence_gap_ms="100" attempt_s="60"/>
 //       <LateralMotion assume="zero"/>   optional, forward-only wheels
 //       <Timing interval_tolerance_ms="20" max_pending_ms="500"/>
 //       <Output observation_id="tracking_motion"/>
@@ -24,11 +25,18 @@
 // travel_scale * sign (travel_scale is the optional empirical correction,
 // default 1, applied here only). Three suitably placed wheels solve planar
 // motion alone; two wheels need the heading constraint; degenerate
-// geometry is rejected at build. The constraint calibrates its own gyro
-// bias over its first bias_samples readings, spanning at least window_ms of
-// sample time, while the robot sits still; wheel travel during calibration
-// restarts it and wheel baselines rebase until it completes. recalibrate()
-// starts a new bias calibration; the pose holds meanwhile.
+// geometry is rejected at build.
+//
+// The constraint calibrates its own gyro bias from a stationary window
+// (stationary_window.h) over the wheels and the gyro: bias_samples samples
+// per source spanning window_ms of sample time, per-wheel travel within
+// max_calibration_travel_m, the gyro within still_rate_dps of the window
+// mean and under max_rate_dps, no gap over evidence_gap_ms. Until then wheel
+// baselines rebase and nothing is produced; no qualified window within
+// attempt_s fails calibration until recalibrate(). Later qualified windows
+// adjust the bias in bounded steps. A gyro source restart (record or source
+// epoch) invalidates the bias and calibration starts again; the pose holds.
+// bias_samples 0 turns calibration off (bias zero).
 //
 // Wheels that all measure along body x cannot see sideways motion. They
 // build only with LateralMotion assume="zero", which needs the heading
@@ -41,7 +49,7 @@
 // and those intervals describe the same span within interval_tolerance_ms;
 // intervals that stay misaligned longer than max_pending_ms are dropped
 // together with a diagnostic, never fused. A nonpositive sample interval,
-// an encoder baseline rebase, a gyro accumulator discontinuity or a gyro
+// an encoder baseline rebase, a gyro accumulator discontinuity, or a gyro
 // gap longer than max_gap_ms invalidates the whole pending window: nothing
 // bridges an invalid span.
 
@@ -51,6 +59,7 @@
 #include <vector>
 
 #include "contracts/localization.h"
+#include "impl/localization/stationary_window.h"
 #include "payloads/robot_observations.h"
 #include "payloads/sensor_samples.h"
 #include "runtime/sensor_catalog.h"
@@ -89,6 +98,7 @@ private:
         double                            k_m  = 0.0;           // x*uy - y*ux
         double                            sign = 1.0;
         double                            scale = 1.0;   // travel scale
+        size_t                            source = 0;    // stationary window source
 
         bool          have_prev      = false;
         double        prev_angle_rad = 0.0;
@@ -108,22 +118,13 @@ private:
     struct HeadingConstraint {
         bool                          configured = false;
         TypedSensorBinding<ImuSample> binding;
-        long                          bias_samples = 200;
-        long                          max_gap_ms   = 250;
-        long                          window_ms    = 0;   // minimum bias window sample time
+        long                          max_gap_ms = 250;
 
-        double max_calibration_travel_m = 0.005;
-        double cal_travel_m             = 0.0;
+        StationaryWindow    window;
+        GyroBiasCalibration bias;
+        size_t              source = 0;
 
-        bool          calibrated       = false;
-        long          cal_count        = 0;
-        double        cal_sum          = 0.0;
-        bool          cal_have_accum   = false;
-        double        cal_accum_start  = 0.0;
-        MonotonicTime cal_accum_start_stamp;
-        MonotonicTime cal_start_stamp;   // first sample of the bias window
-        double        bias_rad_s       = 0.0;
-
+        bool          seen             = false;
         bool          have_prev        = false;
         double        prev_rate        = 0.0;
         double        prev_accum       = 0.0;
@@ -132,6 +133,7 @@ private:
         MonotonicTime prev_stamp;
         uint64_t      last_sequence = 0;
         uint64_t      last_epoch    = 0;
+        uint64_t      last_upstream = 0;
 
         bool          pending        = false;
         double        pending_dtheta = 0.0;
@@ -145,7 +147,8 @@ private:
     // a fresh baseline sample afterwards nothing accumulates, so no window
     // ever spans the invalid stretch.
     void dropWindow(const char* why);
-    void restartCalibration();
+    bool calibrating() const { return heading_.configured && !heading_.bias.calibrated(); }
+    void takeWindow(MonotonicTime now);
 
     ObservationFunctionId id_;
     std::string           type_ = "tracking_wheel_motion";

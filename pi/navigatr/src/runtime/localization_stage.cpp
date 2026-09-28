@@ -19,6 +19,7 @@ std::vector<ObservationFunctionStatus> LocalizationExecutor::functionStatus() co
         const ObservationReadiness r  = f.function->readiness();
         s.ready                       = r.ready;
         s.note                        = r.note;
+        s.stillness                   = r.stillness;
         out.push_back(std::move(s));
     }
     return out;
@@ -101,12 +102,37 @@ RobotState LocalizationExecutor::operator()(const SensorMap&            sensors,
         ++updates_;
     }
     LocalizationStatus status;
-    status.functions      = functionStatus();
-    status.estimator_type = estimator_type_;
-    status.updates        = updates_;
-    status.clock_mapped   = update.clock_mapped;
+    status.functions         = functionStatus();
+    status.estimator_type    = estimator_type_;
+    status.updates           = updates_;
+    status.clock_mapped      = update.clock_mapped;
+    status.continuity_breaks = continuity_breaks_;
+    status.last_break        = last_break_;
+    if (status.stationary()) {
+        // gated stationary handling, not a zero velocity filter update: the
+        // pose is untouched, only the reported velocity is known to be zero
+        state_.vx_m_s         = 0.0;
+        state_.vy_m_s         = 0.0;
+        state_.yaw_rate_rad_s = 0.0;
+    }
     feed_->publish(state_, status, update.advanced, publication_);
     return state_;
+}
+
+void LocalizationExecutor::loseContinuity(const std::string& why) {
+    // the odometry frame may miss motion nothing measured: a new epoch,
+    // nothing placed on it; the pose shown holds where it was
+    state_.odometry_epoch += 1;
+    state_.initialized = false;
+    state_.placement_origin.clear();
+    state_.placement_session  = 0;
+    state_.placement_sequence = 0;
+    state_.vx_m_s             = 0.0;
+    state_.vy_m_s             = 0.0;
+    state_.yaw_rate_rad_s     = 0.0;
+    configured_placement_pending_ = false;
+    ++continuity_breaks_;
+    last_break_ = why;
 }
 
 void LocalizationExecutor::reset() {
@@ -123,9 +149,11 @@ void LocalizationExecutor::reset() {
     state_                    = RobotState{};
     state_.odometry_epoch     = next_epoch;
     LocalizationStatus status;
-    status.functions      = functionStatus();
-    status.estimator_type = estimator_type_;
-    status.updates        = updates_;
+    status.functions         = functionStatus();
+    status.estimator_type    = estimator_type_;
+    status.updates           = updates_;
+    status.continuity_breaks = continuity_breaks_;
+    status.last_break        = last_break_;
     feed_->publish(state_, status, false, ++publication_);
     configured_placement_pending_ = configured_placement_.requested;
 }

@@ -43,6 +43,7 @@ The program checks port conflicts: drive motors, the VEX IMU and the RS-485 port
 - **External Pico IMU:** set `kSetup = Setup::kTwoWheelPicoImu`. The Pico firmware decides which chip (BNO08X or ASM330); the profile only selects the Pico IMU port.
 - **Three tracking wheels:** set `kSetup = Setup::kThreeWheelPicoImu`, then fill in `leftWheel()` and `rightWheel()`. The Pi fuses the three wheels with the Pico IMU. A three-wheel setup with the VEX IMU is refused, because the VEX IMU runs on the Brain's clock.
 - **RS-485:** set `kUseUsb = false` and `kLinkPort`, and run the Pi's `brain_profile_rs485.xml` config. The Pi must run the matching transport config; this is the one setting that is not Brain only.
+- **An older XML-configured Pi config** (`bench_vex_imu*.xml`, `parallel_wheels*.xml`, the three-wheel templates): set `kSendProfile = false`. These configs refuse a Brain profile, and with one configured the Brain would never place the robot. Their XML then owns the geometry, and the wheel calibration apply step is not available.
 - **Mecanum:** set `kDrivetrain = Drivetrain::kMecanum` in the testing `robot_config.h`, and fill in `mecanum()`.
 
 ## 2. Build and upload
@@ -88,6 +89,8 @@ pio run -e hat2_bno08x -t upload       # flashes the Pico
 ```
 
 The Pi and the Brain work with the older Pico firmware too, but only the new firmware reports its boot identity and takes Pi commands (IMU reinitialize, acquisition restart). Without it, the Pi falls back to detecting reboots from the clock and those commands fail with "Pico link".
+
+**Update order:** the new Pico firmware sends only the new sensor frame, which older Pi software ignores (no encoder data). Build and restart the Pi service first, then flash the Pico.
 
 ## 3. Localization test program
 
@@ -170,7 +173,7 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 
 **VEX IMU (bench source)**
 - The VEX firmware owns its calibration. The Pi applies no bias of its own, so the calibration is never applied twice.
-- X on the Status page runs `pros::Imu::reset()`. Hold still for about 2 s. The Pi sees invalid samples meanwhile and holds the pose.
+- X on the Status page first asks the Pi to check that the wheels stayed still over the last 300 ms. Only then does the Brain start the VEX calibration (`pros::Imu::reset()`); "robot moving" starts nothing. Hold still for about 2 s: the check covers the start, not the calibration itself. The IMU samples are invalid meanwhile, so the pose becomes invalid (section 8): place the robot again afterwards.
 - The VEX IMU gives heading only, so stationary detection on the Pi uses the wheels and the heading change. There is no raw gyro rate or acceleration.
 
 **Pico IMU (BNO08X or ASM330)**
@@ -183,7 +186,7 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 | Field heading | Comes only from placement. |
 
 - X starts a recalibration; the Pi refuses it while the robot moves.
-- Y asks the Pico to reinitialize its IMU, then recalibrates. The pose holds.
+- Y asks the Pico to reinitialize its IMU, then recalibrates. The IMU restarts, so with a Pico IMU profile the pose becomes invalid (section 8): place again afterwards.
 
 **Stationary handling.** While a still window qualifies, the Pi reports zero velocity and the "stationary" flag. This is gated stationary handling, not a ZUPT filter:
 - none of the estimators here models velocity with uncertainty;
@@ -215,7 +218,7 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 - A runs the direct test, X the avoiding test, Y the landmark test.
 - B cancels. Moving a stick also takes over from a running test.
 - UP places at the start pose.
-- DOWN recalibrates the IMU, only while no movement runs.
+- DOWN recalibrates the IMU, only while no movement runs and after the Pi's stillness check (as X in localization-test). While it calibrates, the tests are refused and the sticks do nothing.
 - LEFT/RIGHT changes the speed scale.
 
 **Tests**
@@ -235,22 +238,36 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 **Planner limit:**
 - The planner treats the robot as a circle around its origin: the footprint's farthest corner plus the clearance.
 - On the Override field that circle cannot pass between diagonal goals for robots larger than about 0.4 m square. An 18 inch robot is refused there and must use direct moves in those areas.
+- The same closes each corner pocket between the walls and its two nearest goals, around (0.6, 0.6) and the other corners. An avoiding move from inside one fails with "no path"; drive out with a direct move first.
+- The placeholder start pose (1.2, 1.8, heading 0) and the three test destinations sit in open floor west of the center goal, so all three tests work from the start pose. The host end-to-end test runs the same three moves against the Pi runtime.
 - See [investiGATR](investigatr.md).
 
-## 8. What recovers on its own
+## 8. Sensor loss and recovery
+
+**Rule:** if a sensor the active profile uses for localization stops delivering, the pose is invalid until you place the robot again. Both programs show "POSE INVALID: put the robot at the start pose" and the readiness line says "Needs placement". Sensors the profile does not use never matter.
+
+| Used sensor | Lost when |
+|---|---|
+| Tracking wheel encoders | no Pico frames for more than 250 ms (Pico link or power), a Pico reboot or counter restart, or a used encoder channel missing from its frames |
+| Brain VEX IMU | no valid sample at the Pi for more than 250 ms. The samples ride on the Brain link, so this includes a USB drop, a Brain program restart and a VEX recalibration. |
+| Pico IMU (only when the profile uses it) | stale for more than 250 ms, failed, or reinitialized |
+
+A quadrature encoder whose cable is pulled keeps its last count, which looks the same as standing still; that case cannot be detected. A dead Pico IMU with a VEX IMU profile changes nothing: the Pico keeps retrying it (5 quick attempts, then every 30 s) while the encoders keep flowing.
+
+**Recovery by event**
 
 | Event | What happens |
 |---|---|
-| USB cable out and back in | The Brain keeps its session and resumes when replies return. The Pi reopens the USB device. The pose continues if the Pi kept running. A movement that was running when the link dropped has failed and does not resume. |
-| Brain program restart | The Brain opens a new session and resends the same profile. The Pi recognizes it and keeps localization and the placement. Startup placement follows `kStartupPolicy`. Old movements are gone. |
-| Pi restart | The Brain sees a new Pi instance, uploads the profile again, and reads the field map again. The Pi starts unplaced: "Needs placement". |
-| Pico restart (new firmware) | The Pi sees the new boot identity, rebases the encoders (counts back at zero never look like movement) and recalibrates the IMU bias. The pose holds, although motion during the outage is lost. |
-| Pico IMU failure | The Pico retries it (5 quick attempts, then every 30 s) while the encoders keep flowing. The Pi marks the IMU initializing or failed. A VEX profile is not affected. |
+| USB cable out and back in | The Brain keeps its session and resumes when replies return. Over 250 ms with a VEX IMU profile: pose invalid. A movement that was running has failed and does not resume. |
+| Brain program restart | The Brain opens a new session; the Pi still runs the same profile, so nothing is uploaded. With a VEX IMU profile the pose is invalid (IMU samples stopped); startup placement (`kAlways`) places at the start pose again. Old movements are gone. |
+| Pi restart | The Brain sees a new Pi instance, uploads the profile again, and reads the field map again. The Pi starts unplaced. |
+| Pico restart | The Pi sees the new boot identity: pose invalid. |
+| IMU recalibration (X, DOWN) or Pico IMU reinit (Y) | Pose invalid afterwards: place again. |
 | Interrupted profile or map transfer | Resumed or restarted. Partial documents are never used. |
 | Serial device missing at Pi start | Retried once a second. |
 
 **What needs you:**
-- a placement after a Pi restart, a profile change or a reinitialization;
+- a placement after any sensor loss, a Pi restart, a profile change, a recalibration or a reinitialization: put the robot at the start pose and press A (localization-test) or UP (testing);
 - IMU recalibration after moving the robot during calibration;
 - wheel calibration values made permanent in `gatr2_robot.h`;
 - fixing a rejected profile;

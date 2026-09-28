@@ -310,21 +310,35 @@ ControlStatus ProsLink::control(ControlTicket ticket) const {
     return client_.controlStatus(ticket);
 }
 
-bool ProsLink::requestWheels() {
+WheelTicket ProsLink::requestWheels() {
     Lock lock(mutex_, config_.call_timeout_ms);
     if (!lock) {
         callMissed();
-        return false;
+        return 0;
     }
     return client_.requestWheels();
 }
 
-// Busy: no readings (sequence 0, result NotReady).
+// Busy: an unsettled answer for a nonzero ticket, asked again next time.
+WheelStatus ProsLink::wheels(WheelTicket ticket) const {
+    Lock lock(mutex_, config_.call_timeout_ms);
+    if (!lock) {
+        callMissed();
+        WheelStatus s;
+        s.ticket = ticket;
+        s.state  = ticket != 0 ? WheelResult::kPending : WheelResult::kNone;
+        return s;
+    }
+    return client_.wheelStatus(ticket);
+}
+
+// Busy: busy set, no readings (sequence 0, result NotReady).
 WheelReadings ProsLink::wheelReadings() const {
     Lock lock(mutex_, config_.call_timeout_ms);
     if (!lock) {
         callMissed();
         WheelReadings none;
+        none.busy   = true;
         none.result = gatr2::kResultNotReady;
         return none;
     }

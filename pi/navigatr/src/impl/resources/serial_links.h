@@ -3,6 +3,7 @@
 //
 //   linux_serial_link   live serial device
 //       <Device path="/dev/ttyAMA5"/>
+//           required="false"            optional, true: first open must succeed
 //       <Baud value="115200"/>
 //       <DriverEnable gpio="6"/>        optional, RS-485 DE and /RE
 //           post_guard_us="174"         optional, default 2 characters
@@ -18,11 +19,15 @@
 // and low again once the transmitter is empty and on destruction. If the GPIO
 // cannot be reached that is a build warning and every write fails.
 //
-// A live device that fails to open is a build warning and a dead link at
-// runtime (an unplugged cable must not stop the robot); a named capture file
-// that fails to open is a build error, because a capture is not
-// hot-pluggable. The memory link keeps its input and output streams
-// separate, so a bidirectional link never loops back on itself in a test.
+// A live device that fails to open is a build warning and a closed link at
+// runtime (an unplugged cable must not stop the robot). The link reopens a
+// device that failed to open or reported closed (read error or hangup) at
+// most once a second, from a read, without waiting; meanwhile reads report
+// closed and writes fail. <Device required="true"/> makes only the first
+// open, at build, a hard error. A named capture file that fails to open is a
+// build error, because a capture is not hot-pluggable. The memory link keeps
+// its input and output streams separate, so a bidirectional link never
+// loops back on itself in a test.
 
 #pragma once
 #include <functional>
@@ -42,6 +47,7 @@ namespace navigatr
 class LinuxSerialLink : public SerialLink
 {
 public:
+    // Closed on a read error, or when an idle read finds the tty hung up.
     SerialReadResult  readAvailable(MutableByteSpan destination) override;
     SerialWriteResult write(ByteSpan source) override;
     SerialWriteResult write(ByteSpan source, const TransmitWindow& window) override;
@@ -59,6 +65,54 @@ private:
     SerialPort       port_;
     bool             half_duplex_ = false;
     HalfDuplexTiming timing_;
+};
+
+// Keeps a device link usable across closes. A closed or never opened device
+// is reopened by the opener at most once per retry interval, from
+// readAvailable(), never waiting. While closed, reads report closed and
+// writes fail with nothing sent. Single-threaded like any SerialLink.
+class ReopeningLink : public SerialLink
+{
+public:
+    // Null plus a reason when the device cannot be opened now.
+    using Opener = std::function<std::shared_ptr<SerialLink>(std::string& err)>;
+
+    static constexpr int64_t kRetryUs = 1'000'000;
+
+    // device: the result of the first open, null when it failed. That first
+    // attempt counts as made now.
+    ReopeningLink(Opener open, std::shared_ptr<SerialLink> device, int64_t retry_us = kRetryUs);
+
+    SerialReadResult  readAvailable(MutableByteSpan destination) override;
+    SerialWriteResult write(ByteSpan source) override;
+    SerialWriteResult write(ByteSpan source, const TransmitWindow& window) override;
+    bool              inputPending() override;
+    // The open device's clock, else the retry clock.
+    int64_t           nowUs() override;
+
+    // Test clock in microseconds for the retry schedule; the previous
+    // attempt counts as made at its current time. Empty restores steady.
+    void setClock(std::function<int64_t()> now_us);
+
+    bool               isOpen() const { return device_ != nullptr; }
+    uint64_t           attempts() const { return attempts_; }   // retries, not the first open
+    uint64_t           reopens() const { return reopens_; }     // retries that opened
+    uint64_t           closes() const { return closes_; }
+    const std::string& lastError() const { return last_error_; }
+
+private:
+    int64_t retryNowUs() const;
+    bool    retry();
+
+    Opener                      open_;
+    std::shared_ptr<SerialLink> device_;
+    int64_t                     retry_us_;
+    int64_t                     last_attempt_us_ = 0;
+    std::function<int64_t()>    clock_;
+    uint64_t                    attempts_ = 0;
+    uint64_t                    reopens_  = 0;
+    uint64_t                    closes_   = 0;
+    std::string                 last_error_;
 };
 
 class MemoryLink : public SerialLink

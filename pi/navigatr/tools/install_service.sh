@@ -7,11 +7,12 @@ usage() {
 Usage: sudo bash tools/install_service.sh --user YOUR_PI_USER [options]
 
 Start naviGATR at every boot, independently of login or network access.
-Defaults to build-bench/navigatr and the VEX IMU bench configuration.
+Defaults to build-bench/navigatr and the Brain-profiled USB configuration.
 
   --user USER     Account that runs naviGATR (default: sudo's invoking user)
   --binary PATH   Built Linux executable (default: PROJECT/build-bench/navigatr)
-  --config PATH   Main XML (default: PROJECT/config/override/diagnostics/bench_vex_imu.xml)
+  --config PATH   Main XML (default: PROJECT/config/override/brain_profile_usb.xml;
+                  RS-485: config/override/brain_profile_rs485.xml)
   --dry-run       Print the proposed unit without installing or starting anything
   --help          Show this message
 
@@ -28,7 +29,7 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 project_dir=$(cd -- "$script_dir/.." && pwd)
 service_user=${SUDO_USER:-${USER:-}}
 binary="$project_dir/build-bench/navigatr"
-config="$project_dir/config/override/diagnostics/bench_vex_imu.xml"
+config="$project_dir/config/override/brain_profile_usb.xml"
 dry_run=false
 
 while (($#)); do

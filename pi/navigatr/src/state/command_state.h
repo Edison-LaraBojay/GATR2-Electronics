@@ -51,6 +51,9 @@ struct BrainReplyContext {
     uint8_t action         = 0;   // CONTROL echo
     uint8_t control_detail = 0;   // CONTROL: gatr2::ControlDetail
 
+    uint8_t wheel_count = 0;   // READ_WHEELS Ok
+    std::array<gatr2::WheelReading, gatr2::kWheelReadingsMax> wheels{};
+
     TransmitWindow window;
 };
 
@@ -82,6 +85,11 @@ struct PathReport {
 
 struct CommandState {
     uint32_t session = 0;   // current brain session, 0 = none
+
+    // Brain link liveness, set by the brain_link commands slot every cycle.
+    uint32_t      pi_instance = 0;       // this Pi on the link, 0 = no brain link
+    bool          link_open   = false;   // the transport read without closing
+    MonotonicTime last_request;          // host time of the newest decoded request
 
     uint64_t init_sequence = 0;   // 0 = never commanded
     uint32_t init_session  = 0;   // session that sent init_pose

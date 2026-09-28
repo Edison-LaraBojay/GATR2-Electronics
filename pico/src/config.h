@@ -24,6 +24,17 @@ constexpr uint32_t kPiBaud = 115200;
 constexpr uint32_t kSampleHz = 50;
 constexpr uint32_t kTickUs   = 1000000u / kSampleHz;
 
+// Status frames to the Pi: periodic, and after a command or an IMU state
+// change at most once per tick, never closer than the guard margin (beyond
+// the frame's own airtime) to the next sensor tick.
+constexpr uint32_t kStatusPeriodUs = 200000;
+constexpr uint32_t kStatusMinGapUs = kTickUs;
+constexpr uint32_t kStatusMarginUs = 1000;
+
+// Pi command input: software RX FIFO bytes, and bytes parsed per loop pass.
+constexpr size_t kRxFifoLen      = 128;
+constexpr int    kRxBytesPerPass = 64;
+
 // Human-readable USB serial diagnostics, independent of the Pi UART.
 // No host connection is required; full USB buffers drop log lines.
 constexpr bool     kUsbDebug         = true;

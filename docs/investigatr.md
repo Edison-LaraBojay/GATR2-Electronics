@@ -272,29 +272,38 @@ no exit exists:
    wall is accepted.
 2. Straight exact move: when either end fails the circle test, and the move
    needs no turn (headings within `min_turn`; for a non-holonomic model the
-   goal lies on the start heading line), one translation whose swept
-   footprint is clear is the whole path. Start and goal at the same pose give
-   an empty path.
-3. Start escape: straight moves at the start heading, forward, backward (when
+   goal lies on the start heading line), one translation at the start heading
+   whose swept footprint passes the exact rule below is the whole path. Start
+   and goal at the same pose give an empty path.
+3. Start escapes: straight moves at the start heading, forward, backward (when
    reverse is allowed; always for holonomic models), and for holonomic models
-   left and right. The shortest one, at most 2R long, that ends
-   `vertex_margin` past the last grown boundary, at a point passing the circle
-   test, with its swept footprint clear. It becomes the first segment, with no
-   turn before it.
-4. Goal approach: the same, mirrored: a point behind, in front of (reverse)
-   or beside (holonomic) the goal along the goal heading, and the straight
-   move into the goal from there. A non-holonomic approach runs along the goal
-   heading, so there is no turn at the goal.
-5. The route between the escape end (or start) and the approach start (or
-   goal) is planned as above. An exit collinear with the next leg at the same
-   heading is joined with it into one exact segment.
+   left and right, at most 2R long, with their swept footprint clear. Along
+   each move every stretch of points passing the circle test counts, and the
+   escape ends `vertex_margin` past the grown boundary where the stretch
+   begins. Every escape is kept, not only the shortest: a short one may lead
+   into a closed pocket. An escape is the first segment, with no turn before
+   it.
+4. Goal approaches: the same, mirrored: points behind, in front of (reverse)
+   or beside (holonomic) the goal along the goal heading, each with the
+   straight move into the goal. The approach was swept at the goal heading
+   only, so the robot turns to it before the approach however small the turn.
+   A non-holonomic approach then runs along the goal heading, with no turn at
+   the goal.
+5. The route search starts from every escape end (or the start) and ends at
+   any approach start (or the goal), counting the exit lengths, so it returns
+   the shortest whole path. An exit collinear with the next leg at the same
+   heading is joined with it into one exact segment, when the robot enters
+   that leg at its heading.
 
 Exit segments carry `exact`. Their swept footprint (the hull of the footprint
-at both ends, at a fixed heading) keeps `clearance` from every box and bound,
-except that the path's first segment may start, and its last segment end,
-nearer than that: there the sweep may come no nearer to anything than the
-start or goal pose already is. The end of every exact segment must not
-overlap anything.
+at both ends, at a fixed heading) keeps `clearance` from every box and bound
+side, with one allowance: within 2R of the path's start pose (on its first
+segment) and of its goal pose (on its last), it may come as near to each box
+and bound side as that pose already is, when that is nearer than `clearance`.
+Farther than 2R from both it keeps the full `clearance`. A long straight move
+along a wall or box the robot starts against is therefore refused, and the
+planner escapes, routes around with the clearance and approaches instead. The
+end of every exact segment must not overlap anything.
 
 **Shaping.** Per leg, as in direct mode:
 - Non-holonomic: turn, translate, turn, ..., final turn. Reverse is chosen
@@ -304,6 +313,9 @@ overlap anything.
 - A route of one leg shorter than `min_segment` is dropped (not before an
   approach). In a route of several legs every leg is kept, because each is
   needed to stay clear.
+- An exact segment is always entered at its own heading: the turn onto an
+  approach is never dropped, and a leg entered after a dropped turn is never
+  joined into an exact segment.
 
 **Self-check.** Every segment of the shaped path goes through the same test
 as `clear()` before the plan is returned.
@@ -312,8 +324,10 @@ as `clear()` before the plan is returned.
 elements, and the robot follows turn-drive-turn legs.
 - Exact for its model: shortest routes among convex polygons bend only at
   their vertices, so the visibility graph finds a route whenever the grown
-  configuration space has one (to within `vertex_margin`), and `kNoPath`
-  means there is none.
+  configuration space connects the route ends (to within `vertex_margin`).
+  With exits, it searches from every escape to every approach. `kNoPath`
+  means there is no such route; a way out that is not one straight move at
+  the end heading is not searched (see Limits).
 - Bounded: see Cost. No grid resolution and no sampling.
 - Deterministic: the same request gives the same path.
 - Few waypoints: straight legs between corners suit both turn-drive-turn and
@@ -325,18 +339,19 @@ elements, and the robot follows turn-drive-turn legs.
 - ordinary segments: start and end inside the free region, no octagon
   interior crossed; turns are point checks;
 - `exact` translations: the swept footprint as above, with the same allowance
-  for the first segment's start and the last segment's end.
+  within 2R of the path's start pose (first segment) and goal pose (last
+  segment).
 
 It is false for an invalid model or an unusable field, and true for an empty
 path. A new field generation that moves an obstacle onto the route makes it
 false, and the follower replans.
 
-The allowance at the first segment's start is what lets a follower revalidate
-from the measured pose: next to a wall, a measured pose a millimeter into it
-is still clear as long as the rest of the move does not go deeper. Ordinary
-segments get no such allowance: checked from a measured pose that drifted
-toward an obstacle, they can fail on tracking error alone (a replan from
-there starts with an exit).
+actuGATR passes the remaining planned segments unmodified, not rebased on the
+measured pose: routes run just outside the grown boxes, so small drift would
+read as blocked. Tracking error is what `model.clearance` covers; keep the
+follower's tolerances below it (see [actugatr.md](actugatr.md)). A measured
+start a millimeter into a wall is still accepted as long as the move does not
+go deeper, so a replan from there starts with an escape.
 
 ### footprintClearance
 
@@ -364,25 +379,29 @@ up to rounding; exact segments follow the rule above.
 | `vertex_margin` | 0.005 m | vertices and exit ends pushed out beyond the grown boxes |
 | `max_vertices` | 512 | graph bound, `kNoPath` beyond it |
 | `min_segment` | 0.005 m | shorter single translations are dropped |
-| `min_turn` | 0.01 rad | smaller turns are dropped |
+| `min_turn` | 0.01 rad | smaller turns are dropped, never the turn onto an exact approach; at most 0.1 rad, else `kInvalidRequest` |
 
 ### Cost
 
-- Vertices: V <= min(`max_vertices`, 2 + 8 x boxes). The vertex list stops
-  growing at `max_vertices`, so memory is O(V + boxes).
+- Vertices: V <= min(`max_vertices`, exit ends + 8 x boxes). The route ends
+  are the start or every escape end, and the goal or every approach start.
+  The vertex list stops growing at `max_vertices`, so memory is O(V + boxes).
 - Search: each vertex is expanded once and each pair is tested at most once,
   so at most V(V-1)/2 segment tests, each against every box (a bounding box
   check first): O(V^2 x boxes). The minimum search adds O(V^2).
-- Exits: 4 rays and 4 sweeps per end, each O(boxes).
+- Exits: up to 4 moves per end; along each, one candidate per grown box it
+  leaves, each with an O(boxes) sweep.
 
-Measured on the host (g++ 15.2 -O2, one core), not on the V5:
+Measured on the host (g++ 15.2 -O2, one core, other builds running), not on
+the V5:
 
 | Case | Time per plan |
 |---|---|
-| Override field (17 elements): wall starts, goal sides, corner to corner, refusals | 0.06 to 0.55 ms |
-| 63 boxes, every vertex kept (V = 506), no route: the worst case at the default bound | 18 ms |
-| 128 boxes, every vertex kept (V = 1026, bound raised), routed / no route | 22 ms / 97 ms |
-| 128 boxes over the default bound | refused in about 0.5 ms |
+| Override field (17 elements), 0.30 and 0.381 m robots, tank and holonomic: wall starts, goal sides, corner to corner, refusals | 0.003 to 0.3 ms |
+| Closed pocket: escape or approach through a channel, the shorter exit leading nowhere | 0.03 ms |
+| 63 boxes, every vertex kept (V = 506), no route: the worst case at the default bound | 10 to 12 ms |
+| 128 boxes, every vertex kept (V = 1026, bound raised), routed / no route | 18 to 22 ms / 54 to 74 ms |
+| 128 boxes over the default bound | refused in 0.4 to 0.9 ms |
 
 The V5 CPU is much slower than the host; plan outside a tight control loop
 or keep `max_vertices` small enough that the worst case fits the budget.
@@ -400,11 +419,14 @@ or keep `max_vertices` small enough that the worst case fits the budget.
   moves there, or a smaller clearance.
 - **Octagons** overstate the rounded obstacle by up to 8.3 percent of R at
   their vertices.
-- **Exits** are single straight moves at most 2R long, one at each end.
-  Turning in place within R of a wall or box needs an exit first, so a pure
-  turn there drives out and back in (or is refused for a tank that can only
-  drive along the wall). A tank parallel to a wall within R cannot leave it,
-  except by one straight move along it to a goal on that line.
+- **Exits** are straight moves at the end heading, at most 2R long, one at
+  each end of a path. Every direction the model allows and every clear
+  stretch along it is tried. Turning in place within R of a wall or box needs
+  an exit first, so a pure turn there drives out and back in (or is refused
+  for a tank that can only drive along the wall). A tank parallel to a wall
+  within R cannot leave it; one straight move along it reaches a goal on that
+  line only where the move is within 2R of the start or goal, or keeps the
+  full clearance.
 - **Planar only.** A box is an element's largest horizontal extent at any
   height; the toggles on the walls are full-height obstacles even though a low
   robot might pass under them. No CAD-mesh collision.
@@ -441,6 +463,6 @@ sources plus `src/collision.cpp` and `src/planner.cpp`.
 | `reference_gtest.cpp` | origin, robot at start, object composed once, map identity, estimate policy, age, frame |
 | `clearance_gtest.cpp` | exact distances (axis, corner, rotated), penetration, containment, bounds, offset origin, nearest id, estimate vs nominal, box offset |
 | `planner_gtest.cpp` | direct and avoiding for tank and holonomic models, reverse choice, unsupported and invalid requests, rotated and offset boxes, bounds, blocked start and goal, no route, narrow gap, `max_vertices`, field correction and replan, `clear()` |
-| `planner_exit_gtest.cpp` | starts against each wall facing away, along and toward it; a corner; goals beside a landmark facing it and backed onto it; escapes blocked by a second box or a post; the 2R exit limit; exact footprint refusals; straight exact moves; joined exits; `clear()` of exact segments from a measured pose and after corrections |
+| `planner_exit_gtest.cpp` | starts against each wall facing away, along and toward it; a corner; goals beside a landmark facing it and backed onto it; escapes blocked by a second box or a post; the 2R exit limit; exact footprint refusals; straight exact moves; joined exits; `clear()` of exact segments from a measured pose and after corrections, and with the clearance away from the ends; every exit tried (a channel into a closed pocket, escape and approach); later stretches along one move; the shortest whole path counting exit lengths; the allowance only within 2R of the ends (along a wall, beside a barrier); the turn onto an approach kept, and a leg after a dropped turn not joined |
 | `planner_edge_gtest.cpp` | boxes touching at a corner, collinear edges and vertices, a long row as one leg, repeated points, goal equal to start, heading wrap at +-pi, boxes across the boundary, merged boxes and a closed ring, zero-size boxes, fields the robot barely fits or does not fit, determinism, a 128-box map against the vertex bound |
-| `planner_random_gtest.cpp` | 300 random fields x 8 plans (fixed seeds), with ends by walls and boxes: every path passes `clear()`, is executable, keeps R on ordinary segments and the exact rule on exits, and every sampled pose passes `footprintClearance`; refusals checked against their reason, `kNoPath` against a grid search; moving a box onto a path fails `clear()`; random direct paths; clearance against brute force |
+| `planner_random_gtest.cpp` | 300 random fields x 8 plans (fixed seeds), with ends by walls and boxes and some starts within `min_turn` of the line to the goal: every path passes `clear()`, is executable with every exact segment entered at its own heading, keeps R on ordinary segments and the exact rule (per box and bound side, allowance only within 2R of the ends) on exits, and every sampled pose passes `footprintClearance`; refusals checked against their reason and an independent exit search, `kNoPath` against a grid search from the exit points; moving a box onto a path fails `clear()`; random direct paths; clearance against brute force |

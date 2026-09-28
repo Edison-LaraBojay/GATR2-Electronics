@@ -141,12 +141,25 @@ ControlTicket Client::control(uint8_t action) {
     return last_control_;
 }
 
-bool Client::requestWheels() {
-    if (session_ == 0) {
-        return false;
+WheelTicket Client::requestWheels() {
+    if (session_ == 0 || wheelsPending()) {
+        return 0;
     }
+    last_wheel_    = last_wheel_ == UINT32_MAX ? 1 : last_wheel_ + 1;
+    wheel_         = WheelStatus{};
+    wheel_.ticket  = last_wheel_;
+    wheel_.state   = WheelResult::kPending;
     wheels_wanted_ = true;
-    return true;
+    return last_wheel_;
+}
+
+WheelStatus Client::wheelStatus(WheelTicket ticket) const {
+    if (ticket == 0 || ticket != wheel_.ticket) {
+        WheelStatus none;
+        none.ticket = ticket;
+        return none;
+    }
+    return wheel_;
 }
 
 ControlStatus Client::controlStatus(ControlTicket ticket) const {
@@ -164,13 +177,14 @@ void Client::resubmitProfile() {
     if (profile_.state == ProfileSync::kNone || profile_.state == ProfileSync::kInvalid) {
         return;
     }
-    profile_.state    = ready_ ? ProfileSync::kWriting : ProfileSync::kWaiting;
-    profile_.reason   = gatr2::kProfileReasonNone;
-    profile_.detail   = 0;
-    profile_.result   = gatr2::kResultOk;
-    profile_.received = 0;
-    profile_failures_ = 0;
-    next_profile_     = kLongAgo;
+    profile_.state      = ready_ ? ProfileSync::kWriting : ProfileSync::kWaiting;
+    profile_.reason     = gatr2::kProfileReasonNone;
+    profile_.detail     = 0;
+    profile_.result     = gatr2::kResultOk;
+    profile_.received   = 0;
+    profile_failures_   = 0;
+    profile_confirming_ = false;
+    next_profile_       = kLongAgo;
 }
 
 bool Client::setProfile(const ProfileDocument& doc) {
@@ -464,17 +478,25 @@ void Client::handleControl(const gatr2::BrainReply& reply, Seconds now) {
     }
 }
 
+// The only read in flight is the latest ticket's: a new ticket waits for it.
 void Client::handleWheels(const gatr2::BrainReply& reply, Seconds now, Seconds round_trip) {
     wheels_.result = reply.result;
     if (reply.result != gatr2::kResultOk) {
+        if (wheelsPending()) {
+            settleWheels(WheelResult::kRejected, reply.result);
+        }
         return;
     }
     ++wheels_.sequence;
     wheels_.received_at = now;
     wheels_.round_trip  = round_trip;
-    wheels_.count       = reply.wheel_count;
-    for (uint8_t i = 0; i < reply.wheel_count && i < gatr2::kWheelReadingsMax; ++i) {
+    wheels_.count       = std::min<uint8_t>(reply.wheel_count, gatr2::kWheelReadingsMax);
+    for (uint8_t i = 0; i < wheels_.count; ++i) {
         wheels_.wheels[i] = reply.wheels[i];
+    }
+    if (wheelsPending()) {
+        wheel_.readings = wheels_;
+        settleWheels(WheelResult::kOk, reply.result);
     }
 }
 
@@ -505,8 +527,9 @@ void Client::handleProfileWrite(const gatr2::BrainReply& reply) {
     }
     profile_failures_ = 0;
     if (held >= profile_len_) {
-        profile_.state = ProfileSync::kApplying;
-        next_profile_  = kLongAgo;
+        profile_.state      = ProfileSync::kApplying;
+        profile_confirming_ = false;
+        next_profile_       = kLongAgo;
     }
 }
 
@@ -522,10 +545,12 @@ void Client::handleProfileApply(const gatr2::BrainReply& reply, Seconds now) {
             profileFailure(reply.result);
             return;
         }
-        profile_.state    = ProfileSync::kApplied;
-        profile_.reason   = gatr2::kProfileReasonNone;
-        profile_.detail   = 0;
-        profile_failures_ = 0;
+        // The latest state may predate the Pi's swap and describe the old
+        // profile's frame and placement: applied only once a state shows it.
+        profile_confirming_ = true;
+        profile_.reason     = gatr2::kProfileReasonNone;
+        profile_.detail     = 0;
+        profile_failures_   = 0;
         return;
     case gatr2::kResultPending:
         next_profile_ = now + config_.pending_retry;
@@ -674,6 +699,9 @@ void Client::incompatible(Kind kind, const gatr2::BrainReply& reply, Seconds now
     if (kind == Kind::kControl && controlPending()) {
         settleControl(ControlResult::kRejected, result);
     }
+    if (kind == Kind::kWheels && wheelsPending()) {
+        settleWheels(WheelResult::kRejected, result);
+    }
     if (session_ != 0) {
         loseSession();
     }
@@ -712,8 +740,18 @@ void Client::attemptFailed(Seconds now) {
         ++control_misses_;
         if (controlExhausted(now)) {
             settleControl(ControlResult::kTimedOut, control_.result);
+        } else if (control_answered_) {
+            // The Pi holds the record and answers this id after newer ones:
+            // asked again after control_retry, state polls in between.
+            next_control_ = now + config_.control_retry;
         } else {
+            // The Pi may not have it: resend before a newer id makes it stale.
             retry_first_ = Kind::kControl;
+        }
+        break;
+    case Kind::kWheels:
+        if (wheelsPending() && !wheels_wanted_) {
+            settleWheels(WheelResult::kTimedOut, wheel_.result);
         }
         break;
     case Kind::kProfileWrite:
@@ -829,11 +867,13 @@ Client::Kind Client::choose(Seconds now) {
         }
     }
 
-    // 4. Profile sync.
+    // 4. Profile sync. After an APPLY Ok only a state poll can confirm it.
     if (ready_ && now >= next_profile_ &&
-        (profile_.state == ProfileSync::kWriting || profile_.state == ProfileSync::kApplying)) {
+        (profile_.state == ProfileSync::kWriting ||
+         (profile_.state == ProfileSync::kApplying && !profile_confirming_))) {
         if (profile_.state == ProfileSync::kWriting && profile_.received >= profile_len_) {
-            profile_.state = ProfileSync::kApplying;
+            profile_.state      = ProfileSync::kApplying;
+            profile_confirming_ = false;
         }
         gatr2::BrainRequest request;
         request.session    = session_;
@@ -971,6 +1011,9 @@ void Client::loseSession() {
     if (controlPending()) {
         settleControl(ControlResult::kSessionLost, control_.result);
     }
+    if (wheelsPending()) {
+        settleWheels(WheelResult::kSessionLost, wheel_.result);
+    }
     if (profile_.state != ProfileSync::kNone && profile_.state != ProfileSync::kInvalid) {
         profile_.state    = ProfileSync::kWaiting;
         profile_.reason   = gatr2::kProfileReasonNone;
@@ -979,6 +1022,7 @@ void Client::loseSession() {
         profile_failures_ = 0;
         next_profile_     = kLongAgo;
     }
+    profile_confirming_ = false;
     map_asm_.clear();
     estimate_asm_.clear();
     map_failures_      = 0;
@@ -992,7 +1036,6 @@ void Client::loseSession() {
         ++stats_.paths_dropped;
         path_pending_ = false;
     }
-    wheels_wanted_      = false;
     hello_.len          = 0;
     retry_first_        = Kind::kNone;
     state_before_retry_ = false;
@@ -1018,30 +1061,42 @@ void Client::settleControl(ControlResult state, uint8_t result) {
     control_tx_.len = 0;
 }
 
+// Before the first reply the Pi may not have the request: a few sends within
+// control_deadline. Once answered it holds the record: control_wait only.
 bool Client::controlExhausted(Seconds now) const {
+    if (control_answered_) {
+        return now - control_tx_.first_sent >= config_.control_wait;
+    }
     return control_misses_ >= config_.control_attempts ||
-           now - control_tx_.first_sent >=
-               (control_answered_ ? config_.control_wait : config_.control_deadline);
+           now - control_tx_.first_sent >= config_.control_deadline;
+}
+
+void Client::settleWheels(WheelResult state, uint8_t result) {
+    wheel_.state   = state;
+    wheel_.result  = result;
+    wheels_wanted_ = false;
 }
 
 // A new document: nothing of an earlier upload counts for it.
 void Client::configureProfile(const ProfileDocument& doc) {
-    config_.profile   = doc;
-    profile_          = ProfileStatus{};
-    profile_.id       = profileId(doc);
-    profile_len_      = doc.len;
-    uint8_t reason    = 0;
-    uint8_t detail    = 0;
-    profile_.state    = profileValid(doc, reason, detail) ? ProfileSync::kWaiting
-                                                          : ProfileSync::kInvalid;
-    profile_.reason   = reason;
-    profile_.detail   = detail;
-    profile_failures_ = 0;
-    next_profile_     = kLongAgo;
+    config_.profile     = doc;
+    profile_            = ProfileStatus{};
+    profile_.id         = profileId(doc);
+    profile_len_        = doc.len;
+    uint8_t reason      = 0;
+    uint8_t detail      = 0;
+    profile_.state      = profileValid(doc, reason, detail) ? ProfileSync::kWaiting
+                                                            : ProfileSync::kInvalid;
+    profile_.reason     = reason;
+    profile_.detail     = detail;
+    profile_failures_   = 0;
+    profile_confirming_ = false;
+    next_profile_       = kLongAgo;
 }
 
 // The Pi is authoritative for what it runs. A mismatch restarts the upload
-// unless a rejection is settled.
+// unless a rejection is settled. Only here does a profile become kApplied, so
+// the state that robot() and readiness read always describes it.
 void Client::profileFromState(const gatr2::BrainState& state) {
     switch (profile_.state) {
     case ProfileSync::kNone:
@@ -1053,10 +1108,18 @@ void Client::profileFromState(const gatr2::BrainState& state) {
     }
     const bool mine = state.profile_state == gatr2::kProfileApplied && state.profile_id == profile_.id;
     if (mine) {
-        profile_.state    = ProfileSync::kApplied;
-        profile_.reason   = gatr2::kProfileReasonNone;
-        profile_.detail   = 0;
-        profile_failures_ = 0;
+        profile_.state      = ProfileSync::kApplied;
+        profile_.reason     = gatr2::kProfileReasonNone;
+        profile_.detail     = 0;
+        profile_failures_   = 0;
+        profile_confirming_ = false;
+        return;
+    }
+    if (profile_confirming_) {
+        // Ok for this id, yet this later state shows another: upload again.
+        ++stats_.unexpected;
+        profileFailure(gatr2::kResultOk);
+        next_profile_ = kLongAgo;
         return;
     }
     if (profile_.state == ProfileSync::kWaiting || profile_.state == ProfileSync::kApplied) {
@@ -1067,19 +1130,21 @@ void Client::profileFromState(const gatr2::BrainState& state) {
 }
 
 void Client::profileFailure(uint8_t result) {
-    profile_.state    = ProfileSync::kWriting;
-    profile_.received = 0;
+    profile_.state      = ProfileSync::kWriting;
+    profile_.received   = 0;
+    profile_confirming_ = false;
     if (++profile_failures_ >= kFailuresBeforeBackoff) {
         settleProfileRejected(result, gatr2::kProfileReasonNone, 0);
     }
 }
 
 void Client::settleProfileRejected(uint8_t result, uint8_t reason, uint8_t detail) {
-    profile_.state    = ProfileSync::kRejected;
-    profile_.result   = result;
-    profile_.reason   = reason;
-    profile_.detail   = detail;
-    profile_failures_ = 0;
+    profile_.state      = ProfileSync::kRejected;
+    profile_.result     = result;
+    profile_.reason     = reason;
+    profile_.detail     = detail;
+    profile_failures_   = 0;
+    profile_confirming_ = false;
 }
 
 bool Client::mapWanted(Seconds now) const {

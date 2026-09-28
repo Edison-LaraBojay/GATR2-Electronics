@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- USB-A (Pi) to micro-USB (V5 Brain), using the localization-test USB adapter.
+<!-- USB-A (Pi) to micro-USB (V5 Brain), the Brain USB user port.
+     XML-configured: the robot is described in this file and Brain robot
+     profiles are refused ("not accepted"), so Brain programs that send
+     a profile cannot place with it. The primary configs are
+     ../brain_profile_usb.xml and ../brain_profile_rs485.xml.
      Temporary slow bench test: Pico encoders + Brain VEX IMU, paired by Pi
      arrival time. Robot dimensions below are editable UNMEASURED defaults.
      Port 0 rolls forward/backward; port 1 rolls sideways.

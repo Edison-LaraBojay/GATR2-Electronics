@@ -16,17 +16,21 @@ The registry and code are the source of truth; this file catalogs them.
 
 - Factory: `make_pico_encoder_channel`.
 - Output payload: `sensor.encoder_sample` (`EncoderSample`), an accumulated
-  unwrapped shaft angle in radians with counts-per-revolution and electrical
-  sign already applied.
+  unwrapped wheel angle in radians with counts per revolution, gearing and
+  polarity already applied: counts * 2 pi / (counts_per_revolution * gear),
+  negated by `invert`.
 - Schema:
 
 ```xml
 <Sensor id="tracking_encoder_a" type="pico_encoder_channel">
     <Source resource_id="pico_telemetry" output_id="encoder_a"/>
-    <Calibration counts_per_revolution="4000" invert="false"/>
+    <Calibration counts_per_revolution="4000" gear="1" invert="false"/>
     <Freshness stale_after_ms="250"/>   <!-- optional; 0 disables -->
 </Sensor>
 ```
+
+- `gear` (optional, default 1, positive) is encoder revolutions per wheel
+  revolution.
 
 - Input: a `pico_telemetry` output publishing `pico.encoder_counts`.
 - Timestamp source: the Pico clock stamp of the decoded packet (device
@@ -37,10 +41,18 @@ The registry and code are the source of truth; this file catalogs them.
 - Failure behavior: a faulted output (link death) is Fault after any
   already-decoded data has been published; an output that stays healthy but
   silent turns the sensor Unavailable after `stale_after_ms` (default 250)
-  instead of staying Valid forever. History is retained in both cases.
-- Calibration ownership: counts per revolution and electrical inversion live
-  here. Wheel radius, mounting position, and measurement direction are
-  robot-observation configuration, never channel-sensor configuration.
+  instead of staying Valid forever. History is retained in both cases. A
+  source restart (a new record epoch, or a Pico boot or acquisition restart
+  in its upstream epoch) advances `discontinuity_epoch` and rebases the counts
+  so the angle stays continuous; motion over the restart is not invented.
+- Calibration ownership: counts per revolution, gearing and polarity live
+  here, applied once. Wheel radius, mounting position, measuring direction
+  and the travel scale are robot-observation configuration, never
+  channel-sensor configuration.
+- Brain-profiled configs generate one per profile wheel (`profile_encoder_<port>`),
+  with the profile's counts per revolution, gearing and polarity (`invert`
+  is the profile wheel's reversed flag); see
+  [Brain robot profiles](../pi/navigatr/docs/brain_profile.md#corrections-each-applied-once).
 
 ## pico_imu_channel
 
@@ -63,8 +75,12 @@ The registry and code are the source of truth; this file catalogs them.
   as `accumulated_angle_rad` with its epoch, so batching loses no rotation.
 - Calibration ownership: electrical sign and wire-unit conversion here;
   bias estimation belongs to `imu_heading_increment` or the
-  `tracking_wheel_motion` HeadingConstraint, which own their `bias_samples`
-  windows. Nothing is integrated twice.
+  `tracking_wheel_motion` HeadingConstraint, which own their stationary
+  windows. Nothing is integrated twice. A restart (record epoch, Pico boot,
+  or an IMU epoch from firmware that reports one) shifts the accumulator
+  epoch, which invalidates the downstream bias.
+- Brain-profiled configs generate `profile_imu_<port>` for a Pico IMU profile,
+  with `invert` from the profile's IMU invert flag.
 
 ## camera_frame
 

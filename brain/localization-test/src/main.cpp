@@ -26,6 +26,7 @@
 #include "communigatr/pros_link.h"
 #include "communigatr/pros_vex_imu.h"
 #include "communigatr/startup_placement.h"
+#include "communigatr/vex_imu_recalibration.h"
 #include "communigatr/wheel_calibration.h"
 
 namespace
@@ -56,7 +57,9 @@ void createLink() {
         config.smart_port = gatr2_robot::kLinkPort;
         config.baud       = gatr2_robot::kLinkBaud;
     }
-    config.profile = gatr2_robot::profile();
+    if (gatr2_robot::kSendProfile) {
+        config.profile = gatr2_robot::profile();
+    }
     if (gatr2_robot::usesVexImu()) {
         g_vex.reset(new communigatr::ProsVexImu(gatr2_robot::kVexImuPort));
         communigatr::ProsVexImu* vex = g_vex.get();
@@ -150,7 +153,7 @@ std::vector<WheelTool>                    g_wheels;
 std::size_t                               g_wheel      = 0;
 double                                    g_reference  = robot_config::kCalibrationDistance;
 Capture                                   g_capture    = Capture::kIdle;
-uint32_t                                  g_capture_after = 0; // wheel reading sequence
+communigatr::WheelTicket                  g_capture_ticket = 0;
 const char*                               g_message    = "Hold still while sensors start";
 char                                      g_note[64]   = {};
 communigatr::PlacementTicket              g_placement  = 0;
@@ -158,6 +161,20 @@ communigatr::ControlTicket                g_control    = 0;
 bool                                      g_have_last_pose = false;
 Pose                                      g_last_pose;
 bool                                      g_offer_place = false; // after applying a calibration
+communigatr::VexImuRecalibration          g_recal; // VEX IMU, after the Pi's stillness check
+uint32_t                                  g_events_seen = 0;
+
+// True when a placement loss is among the events since the last call.
+bool placementLostSinceLastCheck() {
+    bool lost = false;
+    for (uint32_t i = g_events_seen; i < g_events.total(); ++i) {
+        const std::size_t newest = g_events.total() - 1 - i;
+        lost = lost || (newest < g_events.size() &&
+                        g_events.at(newest).event == communigatr::LinkEvent::kPlacementLost);
+    }
+    g_events_seen = g_events.total();
+    return lost;
+}
 
 void buildWheelTools() {
     const communigatr::RobotProfile p      = gatr2_robot::profile();
@@ -239,10 +256,11 @@ void statusInput(pros::Controller& c, const View& v) {
     }
     if (pressed(c, pros::E_CONTROLLER_DIGITAL_X)) {
         if (g_vex) {
-            // The VEX IMU calibrates in its own firmware; the Pi sees invalid
-            // samples meanwhile and holds the pose.
-            g_vex->recalibrate();
-            g_message = "VEX IMU calibrating: hold still";
+            // The Pi checks the robot is still, then the VEX firmware
+            // calibrates; the Pi holds the pose meanwhile.
+            g_message = g_recal.begin(g_link->recalibrate())
+                            ? "Checking the robot is still..."
+                            : "Refused: no link, or another request pending";
         } else {
             startControl(g_link->recalibrate(), "IMU recalibration requested: hold still");
         }
@@ -278,13 +296,14 @@ void wheelsInput(pros::Controller& c, const View& v) {
         }
     }
     if (pressed(c, pros::E_CONTROLLER_DIGITAL_UP) || pressed(c, pros::E_CONTROLLER_DIGITAL_DOWN)) {
-        const bool start = c.get_digital(pros::E_CONTROLLER_DIGITAL_UP) == 1;
-        if (!g_link->requestWheels()) {
-            g_message = "No link: cannot read the wheels";
+        const bool                     start  = c.get_digital(pros::E_CONTROLLER_DIGITAL_UP) == 1;
+        const communigatr::WheelTicket ticket = g_link->requestWheels();
+        if (ticket == 0) {
+            g_message = "Cannot read the wheels: no link, or a read pending";
         } else {
-            g_capture       = start ? Capture::kStart : Capture::kEnd;
-            g_capture_after = g_link->wheelReadings().sequence;
-            g_message       = start ? "Reading start..." : "Reading end...";
+            g_capture        = start ? Capture::kStart : Capture::kEnd;
+            g_capture_ticket = ticket;
+            g_message        = start ? "Reading start..." : "Reading end...";
         }
     }
     if (pressed(c, pros::E_CONTROLLER_DIGITAL_X)) {
@@ -295,6 +314,10 @@ void wheelsInput(pros::Controller& c, const View& v) {
         if (g_offer_place) {
             g_offer_place = false;
             placeAt(g_last_pose, "Placing at the pose before the change");
+            return;
+        }
+        if (!gatr2_robot::kSendProfile) {
+            g_message = "Apply needs a Brain profile config (kSendProfile); copy the scale by hand";
             return;
         }
         const communigatr::CalibrationProposal p = g_wheels[g_wheel].calibration.proposal();
@@ -323,22 +346,28 @@ void wheelsInput(pros::Controller& c, const View& v) {
     }
 }
 
-// Finishes a wheel capture once a newer reading arrives.
+// Finishes a wheel capture once its read settles.
 void serviceCapture(const View& v) {
     if (g_capture == Capture::kIdle) {
         return;
     }
-    const communigatr::WheelReadings& r = g_link->wheelReadings();
-    if (r.sequence == g_capture_after) {
+    const communigatr::WheelStatus w = g_link->wheels(g_capture_ticket);
+    if (w.state == communigatr::WheelResult::kPending) {
         return;
     }
     const Capture step = g_capture;
     g_capture          = Capture::kIdle;
-    if (r.result != gatr2::kResultOk) {
-        g_message = "Wheel read refused (profile not applied?)";
+    if (w.state == communigatr::WheelResult::kRejected) {
+        std::snprintf(g_note, sizeof(g_note), "Wheel read refused (result %u): profile applied?",
+                      unsigned(w.result));
+        g_message = g_note;
         return;
     }
-    const communigatr::CalibrationSnapshot s = snapshotFrom(r, v);
+    if (w.state != communigatr::WheelResult::kOk) {
+        g_message = "No answer to the wheel read: press again";
+        return;
+    }
+    const communigatr::CalibrationSnapshot s = snapshotFrom(w.readings, v);
     communigatr::WheelCalibration&         cal = g_wheels[g_wheel].calibration;
     const communigatr::TrialStatus status =
         step == Capture::kStart ? cal.start(s) : cal.finish(s, g_reference);
@@ -381,9 +410,9 @@ void showStatus(const View& v) {
         v.health.stationary ? "yes" : "no");
     if (g_vex) {
         const communigatr::BenchImuSample imu = g_vex->sample();
-        row(6, "VEX IMU P%u: %s %+.2f deg", unsigned(gatr2_robot::kVexImuPort),
+        row(6, "VEX IMU P%u: %s %+.2f deg  recal %s", unsigned(gatr2_robot::kVexImuPort),
             g_vex->calibrating() ? "calibrating" : imu.valid ? "ok" : "unavailable",
-            imu.rotation_mdeg / 1000.0);
+            imu.rotation_mdeg / 1000.0, communigatr::toString(g_recal.state()));
     } else {
         row(6, "Pi IMU calibration: %s%s", communigatr::calibrationName(v.calibration),
             v.calibration == gatr2::kCalibrationFailed ? " (X retries)" : "");
@@ -488,6 +517,11 @@ void run() {
         const bool fresh = readView(t, v);
         if (fresh) {
             g_events.update(v.snapshot, t);
+            // Pi restart, reinitialize, or travel lost in a sensor gap: the
+            // pose is invalid until the robot is placed again.
+            if (placementLostSinceLastCheck() && !g_offer_place) {
+                g_message = "POSE INVALID: put the robot at the start pose, press A";
+            }
         }
 
         // Program start placement: once, when everything is ready.
@@ -536,6 +570,25 @@ void run() {
         case Page::kRecovery: break;
         }
         serviceCapture(v);
+
+        // VEX IMU recalibration: starts only after the Pi's stillness check.
+        if (g_vex && g_recal.active()) {
+            using communigatr::VexRecalibrationState;
+            const VexRecalibrationState r =
+                g_recal.update(g_link->control(g_recal.ticket()), g_vex->sample(), now());
+            if (r == VexRecalibrationState::kStart) {
+                g_recal.started(g_vex->recalibrate(), now()); // blocks about 1 s at most
+                g_message = "VEX IMU calibrating: hold still";
+            } else if (r == VexRecalibrationState::kDone) {
+                g_message = "VEX IMU calibrated: put the robot at the start pose, press A";
+            } else if (r == VexRecalibrationState::kMoving) {
+                g_message = "Refused: robot moving; hold still and press X";
+            } else if (r == VexRecalibrationState::kRefused) {
+                g_message = "Recalibration refused: check the link";
+            } else if (r == VexRecalibrationState::kImuFailed) {
+                g_message = "VEX IMU did not calibrate: check the IMU";
+            }
+        }
 
         // Outcomes of the last placement and control.
         const communigatr::PlacementStatus placement = g_link->placement(g_placement);

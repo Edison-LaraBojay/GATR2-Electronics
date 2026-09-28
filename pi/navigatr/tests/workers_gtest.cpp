@@ -726,7 +726,10 @@ TEST(Workers, SlowFieldWorkNeverStallsEstimation) {
     // full rate window and 150 estimation cycles
     const auto            t0 = Clock::now();
     std::vector<uint64_t> publications;
-    while (msSince(t0) < 2000.0 || (s.cycle() < 150 && msSince(t0) < 3500.0)) {
+    // the finished-cycle count the assertions read, not cycle(), which
+    // counts a cycle when it starts
+    while (msSince(t0) < 2000.0 ||
+           (s.estimationStats().cycles < 150 && msSince(t0) < 3500.0)) {
         publications.push_back(s.robotFeed()->publication());
         std::this_thread::sleep_for(Ms(50));
     }

@@ -155,7 +155,11 @@ public:
             ObservationId{"scripted"},
             PayloadDescriptor::of<BodyMotionIncrement>(payload_names::kBodyMotionIncrement)}};
     }
-    ObservationReadiness readiness() const override { return ObservationReadiness{true, ""}; }
+    ObservationReadiness readiness() const override {
+        ObservationReadiness r;
+        r.ready = true;
+        return r;
+    }
 
 private:
     std::shared_ptr<MotionScript> script_;
@@ -615,7 +619,11 @@ TEST(LocalizationExecutor, UndeclaredObservationOutputsNeverReachTheEstimator) {
                 ObservationId{"lie"},
                 PayloadDescriptor::of<BodyMotionIncrement>(payload_names::kBodyMotionIncrement)}};
         }
-        ObservationReadiness readiness() const override { return ObservationReadiness{true, ""}; }
+        ObservationReadiness readiness() const override {
+            ObservationReadiness r;
+            r.ready = true;
+            return r;
+        }
         ObservationFunctionId id_{"liar"};
         std::string           type_ = "liar";
     };

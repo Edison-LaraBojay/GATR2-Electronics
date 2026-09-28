@@ -14,8 +14,12 @@ directly by their consumers. A shared_ptr does not make hardware thread
 safe; each contract states its own guarantee. The registry and code are the
 source of truth; this file catalogs them.
 
-Stable PCB wiring is documented in `hardware.md`; the XML remains the
-executable configuration and there is no monolithic robot config header.
+Stable PCB wiring is documented in `hardware.md`. In the Brain-profiled
+configs (`brain_profile_usb.xml`, `brain_profile_rs485.xml`) the resources are
+the Pi's devices only: the robot's geometry lives in
+`brain/robot/gatr2_robot.h` and reaches the Pi as a robot profile (see
+[Brain profile consumers](#brain-profile-consumers)). XML-configured profiles
+still describe the robot in resources such as `wheel_geometry`.
 
 ## linux_serial_link
 
@@ -41,9 +45,11 @@ executable configuration and there is no monolithic robot config header.
   a build error. The bench startup service uses this to retry until its UARTs
   and GPIO are accessible. This checks local hardware access, not whether the
   Brain or Pico is connected or responding.
-- Ownership: opens the device at initialization, with no automatic reopen.
-  With `required="false"`, open failure is a build warning and a dead link at
-  runtime. Closed on destruction; a half-duplex link drives DE low first.
+- Ownership: opens the device at initialization. A device that failed to open
+  or reported closed (read error or hangup) is reopened at most once a
+  second, from a read, without waiting; meanwhile reads report closed and
+  writes fail. With `required="false"`, a failed first open is a build warning.
+  Closed on destruction; a half-duplex link drives DE low first.
 - Clock: `nowUs()` is the steady clock in microseconds. Transmit windows and
   read timestamps use it, never the pipeline cycle time.
 - Windowed write: `write(bytes, TransmitWindow{not_before_us, deadline_us})`
@@ -58,15 +64,16 @@ executable configuration and there is no monolithic robot config header.
   3. drives DE high and writes every byte across partial writes, waiting for
      output space with poll();
   4. waits for the transmitter to be empty (`TIOCSERGETLSR`/`TEMT` polled
-     once per character time; `tcdrain` if the driver lacks that ioctl);
+     once per character time; without that ioctl, the kernel output queue
+     (`TIOCOUTQ`) polled to the same deadline);
   5. holds DE for the post guard, then drives it low.
 
   Steps 3 and 4 share one deadline: bytes * 10 / baud + `tx_margin_us` from
   DE high. Every error or timeout discards unsent output (`tcflush`
   `TCOFLUSH`) and drives DE low. `late_release` marks a release later than
   deadline + post guard (for example the thread was preempted). The write
-  blocks its caller for about the frame airtime: 5.1 ms for 59 bytes at
-  115200.
+  blocks its caller for about the frame airtime: 5.1 ms for 59 bytes, 11.1 ms
+  for a 128-byte frame at 115200.
 - Without `DriverEnable` the link is full duplex: windows apply, input
   pending does not.
 - Thread safety: single threaded.
@@ -114,9 +121,58 @@ executable configuration and there is no monolithic robot config header.
   `--replay <resource_id>=<capture.bin>` swaps any declared resource for this
   implementation; naming an undeclared id is a build error.
 
+## pros_usb_link
+
+- Contract: `SerialLink`.
+- Schema:
+
+```xml
+<Resource id="brain_usb" type="pros_usb_link">
+    <Device path="auto"/>   <!-- or an explicit /dev/serial/by-id/... path -->
+</Resource>
+```
+
+- The Brain link over the V5 Brain's USB user interface. `auto` selects the
+  sole VEX V5 Brain (USB `2888:0501`, interface 02); it never guesses `ttyACM`
+  numbering or opens the upload interface, and two Brains need an explicit
+  path. `DriverEnable` is refused.
+- Framing: each unchanged link frame travels as one line, `NG1:` plus uppercase
+  hexadecimal plus `\n`. The parser takes the last marker in a line (a console
+  prefix is tolerated) and drops a whole line with an odd, oversized or
+  lowercase payload; lines without the marker are ignored. Hex keeps PROS
+  stdin control sequences out of the stream. The Brain side is communiGATR's
+  `ProsUsbPort`, which disables PROS output COBS.
+- A read drains at most 1024 raw bytes while nothing decoded, so console noise
+  never stalls a cycle.
+- Reconnect: absence never prevents startup. The device is opened, and after a
+  hangup or error reopened, at most once per second, rediscovering it each
+  time; bytes waiting from before a connect are dropped.
+- Windowed writes wait for `not_before_us` and wait at most 5 ms of output
+  backpressure; past that the link disconnects. There is no input-pending
+  refusal: USB is full duplex.
+- Thread safety: single threaded. Used by `brain_profile_usb.xml` and
+  `bench_vex_imu_usb.xml`.
+
+## brain_imu_bench
+
+- Contract: `BrainImuBench`, a mailbox.
+- Schema: `<Resource id="brain_imu" type="brain_imu_bench"/>`.
+- Holds the newest Brain VEX IMU sample (continuous rotation, CCW millidegrees,
+  Brain stamp) from GET_STATE. The brain_link CommandCollection's
+  `<BenchImu resource_id>` writes it; the bench observation models and a
+  Brain-profiled `<BrainImu>` read it. A new session, an invalid sample or a
+  Brain stamp going backwards advances its epoch; a repeated stamp is not a
+  new sample.
+- Thread safety: written and read on the estimation worker only.
+
 ## pico_telemetry
 
-- Contract: `PicoTelemetry`.
+- Contract: `PicoTelemetry`, which also implements `PicoControl`
+  (`src/resources/pico_control.h`): the link state (identity, epochs, IMU
+  status) and the Pi to Pico command channel. Consumers other than the
+  channel sensors use only `PicoControl`: the brain_link CommandCollection and
+  Publishing through `<Pico resource_id="pico_telemetry"/>`. Details in
+  [Pico link](../pi/navigatr/docs/pico_link.md).
 - Schema:
 
 ```xml
@@ -292,7 +348,9 @@ executable configuration and there is no monolithic robot config header.
 
 - Measured tracking-wheel geometry owned by the robot description. Every
   numeric geometry attribute is required and validated; radius is the loaded
-  effective rolling radius. `calibration_status` is an optional reader note.
+  effective rolling radius. Optional `travel_scale` (default 1, positive) is a
+  measured per-wheel distance correction, applied once in the observation
+  model. `calibration_status` is an optional reader note.
   `tracking_wheel_motion` consumes it through
   `<Wheels resource_id=...><Use wheel_id=.../></Wheels>`, so wheel pipelines
   differ in wheel references plus, for forward-only parallel wheels, the
@@ -300,6 +358,24 @@ executable configuration and there is no monolithic robot config header.
   `<TrackingWheel>` form supports self-contained configurations;
   the two forms are mutually exclusive within one observation function.
 - Thread safety: immutable after construction.
+- Brain-profiled configs do not use it: the profile's wheels become inline
+  `TrackingWheel`s built on the Pi.
+
+## Brain profile consumers
+
+A Brain-profiled `<Localization><BrainProfile>` references resources, never
+robot geometry:
+
+| Element | Resource | Use |
+|---|---|---|
+| `<Encoders resource_id>` with `<Port index output_id>` | `pico_telemetry` | the wired encoder ports; each profile wheel gets an encoder sensor on its port's output |
+| `<Imu port resource_id output_id>` | `pico_telemetry` | Pico IMU port 0; a profile with the Pico IMU gets an IMU sensor on it |
+| `<BrainImu resource_id>` | `brain_imu_bench` | the Brain VEX IMU mailbox, also named by the CommandCollection's `<BenchImu>` |
+
+The same configs name the Brain link (`pros_usb_link` or `linux_serial_link`)
+on the CommandCollection and Publishing, `pico_telemetry` again in their
+`<Pico>`, and a `field_map` in the Publishing `<Field>`. See
+[Brain robot profiles](../pi/navigatr/docs/brain_profile.md).
 
 ## synthetic_rig
 

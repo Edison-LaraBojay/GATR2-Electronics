@@ -25,7 +25,11 @@ constexpr double kDeg = investigatr::kPi / 180.0;
 // ---------------------------------------------------------------------------
 // Pi link. The Pi must run the matching config: brain_profile_usb.xml for
 // USB, brain_profile_rs485.xml for the Smart Port RS-485 link.
+// kSendProfile false: the programs send no robot profile, for an older
+// XML-configured Pi config (bench_vex_imu*.xml, parallel_wheels*.xml), whose
+// XML then owns the geometry; wheel calibration apply is not available.
 // ---------------------------------------------------------------------------
+constexpr bool    kSendProfile  = true;
 constexpr bool    kUseUsb       = true;
 constexpr uint8_t kLinkPort     = 10;     // Smart Port, RS-485 only. PLACEHOLDER
 constexpr int32_t kLinkBaud     = 115200; // RS-485 only, must match the Pi
@@ -142,9 +146,13 @@ constexpr bool usesVexImu() {
 
 // ---------------------------------------------------------------------------
 // Starting field pose, applied once when a program starts. Meters, degrees.
+// PLACEHOLDER: open floor west of the center goal. With this footprint and
+// the testing clearance, the corner pockets between the wall and the two
+// nearest goals (around (0.6, 0.6) and the other corners) are closed to
+// avoiding moves: a robot started there only gets direct moves out.
 // ---------------------------------------------------------------------------
-constexpr double kStartX              = 0.6; // PLACEHOLDER, inside the field for planning tests
-constexpr double kStartY              = 0.6; // PLACEHOLDER
+constexpr double kStartX              = 1.2; // PLACEHOLDER
+constexpr double kStartY              = 1.8; // PLACEHOLDER
 constexpr double kStartHeadingDegrees = 0.0;
 constexpr investigatr::Pose kStartPose{kStartX, kStartY, kStartHeadingDegrees * kDeg};
 

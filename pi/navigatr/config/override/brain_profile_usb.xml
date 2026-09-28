@@ -44,6 +44,8 @@
         <CommandCollection type="brain_link">
             <Serial resource_id="brain_usb"/>
             <BenchImu resource_id="brain_imu"/>
+            <!-- CONTROL 3 (Pico IMU reinit) and 4 (acquisition restart) go over the Pico link -->
+            <Pico resource_id="pico_telemetry"/>
         </CommandCollection>
         <Localization>
             <BrainProfile>
@@ -57,11 +59,16 @@
                      Pico firmware build, never by the profile -->
                 <Imu port="0" resource_id="pico_telemetry" output_id="imu_0" stale_after_ms="250"/>
                 <BrainImu resource_id="brain_imu"/>
-                <!-- Pi defaults for gyro bias calibration; the profile's
-                     calibration window and still travel replace them when set -->
+                <!-- Pi defaults for the stationary window every IMU bias path
+                     uses; the profile's calibration window, still rate and
+                     still travel replace them when set -->
                 <Calibration bias_samples="20" window_ms="2000" max_gap_ms="250"
-                             still_travel_m="0.001"/>
-                <Timing interval_tolerance_ms="20" max_pending_ms="500"/>
+                             still_travel_m="0.001" still_rate_dps="1" max_rate_dps="5"
+                             evidence_gap_ms="100" attempt_s="60"/>
+                <!-- sensor_loss_ms: a used encoder or IMU silent this long, or restarted,
+                     ends pose continuity: the robot must be placed again (warn: log only) -->
+                <Timing interval_tolerance_ms="20" max_pending_ms="500" sensor_loss_ms="250"
+                        on_sensor_loss="unplace"/>
                 <!-- three wheels with the Pico IMU. PLACEHOLDER noise, one sigma,
                      assumptions rather than measurements; replace them from
                      stationary and known-path recordings -->
@@ -82,6 +89,8 @@
             <Health fresh_ms="150"/>
             <!-- field map and estimate documents for Brain planning -->
             <Field resource_id="override_field" estimate_period_ms="200"/>
+            <!-- health bits for the Pico link and its IMU state -->
+            <Pico resource_id="pico_telemetry"/>
         </Publishing>
     </Pipeline>
 </Configuration>

@@ -193,8 +193,8 @@ enum CalibrationState : uint8_t {
 enum ControlAction : uint8_t {
     kControlRecalibrate        = 1, // restart Pi IMU bias calibration; pose holds
     kControlReinitialize       = 2, // new odometry epoch, placement required again
-    kControlReinitImu          = 3, // reinitialize the Pico IMU, then recalibrate; pose holds
-    kControlRestartAcquisition = 4, // Pico zeroes its counters under a new acq_epoch; pose holds
+    kControlReinitImu          = 3, // reinit the Pico IMU, recalibrate; pose invalid if used
+    kControlRestartAcquisition = 4, // Pico zeroes its counters, new acq_epoch; pose invalid
 };
 
 // CONTROL reply detail, with Failed, and with Pending while waiting on the Pico.

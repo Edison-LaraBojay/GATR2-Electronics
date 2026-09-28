@@ -1,6 +1,7 @@
 // byte_port.h
-// Nonblocking byte stream under the Navigatr client. The PROS build wraps a
-// V5 smart port; host tests use a fake half-duplex bus.
+// Nonblocking byte stream under the brain link client. The PROS build wraps
+// the V5 USB console or a smart port; host tests use a fake RS-485 bus or a
+// fake USB console.
 
 #pragma once
 #include <cstdint>

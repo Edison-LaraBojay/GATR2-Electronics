@@ -11,7 +11,7 @@
 </head>
 <body>
 
-<div id="status" data-state="connecting" data-snapshots="0" data-frames="0" data-session="" data-cycle="" data-errors="" data-attitude="" data-webgl="" data-live-seen="0">
+<div id="status" data-state="connecting" data-snapshots="0" data-frames="0" data-session="" data-cycle="" data-errors="" data-attitude="" data-webgl="" data-live-seen="0" data-readiness="">
   <span id="conn" class="badge info">connecting</span>
   <span id="badges" class="badges"></span>
   <span id="readout" class="readout"></span>
@@ -23,13 +23,26 @@
       <button id="btn-reset" type="button">reset view</button>
       <button id="btn-top" type="button">top-down</button>
       <button id="btn-follow" type="button">follow robot</button>
+      <button id="btn-planning" type="button" class="active">planning</button>
     </div>
-    <div id="view-legend">ghost = nominal placement, solid = estimated (observed), line = nominal to estimate</div>
+    <div id="view-legend">ghost = nominal placement, solid = estimated (observed), line = nominal to estimate;
+      planning: green boundary, red fixed obstacles, orange landmark boxes, cyan direct / magenta avoiding Brain path</div>
     <div id="view-note" hidden></div>
     <div id="tooltip"></div>
   </div>
 
   <aside id="side">
+    <section id="link" class="panel">
+      <div class="panel-head"><span class="panel-title">Brain link</span><span id="link-summary" class="muted"></span></div>
+      <div id="readiness" class="badges"></div>
+      <div id="link-profile" class="kv"></div>
+      <div id="link-calibration" class="kv"></div>
+      <table id="wheel-table"></table>
+      <div id="link-pico" class="kv"></div>
+      <div class="subhead">Recovery events, newest first</div>
+      <div id="event-log" class="event-log"></div>
+    </section>
+
     <section id="camera" class="panel">
       <div class="panel-head">
         <span class="panel-title">Camera</span>

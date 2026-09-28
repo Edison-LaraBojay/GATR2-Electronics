@@ -53,6 +53,25 @@ are placeholders. Nothing on the robot has been measured; the numbers are
 assumptions in the stated units. Replace them from stationary and known-path
 recordings before trusting the covariance.
 
+A Brain profile with three wheels and the Pico IMU selects this estimator: the
+Pi builds `tracking_wheel_motion` without a heading constraint,
+`imu_heading_increment` and `weighted_planar_fusion`, with the noise from
+`<BrainProfile><Fusion>` in the Pi config (also placeholders). See
+[Brain robot profiles](brain_profile.md#supported-setups).
+
+## Gyro bias
+
+`imu_heading_increment` publishes nothing until its bias is calibrated from a
+qualified stationary window, the same `StationaryWindow` every IMU bias path
+uses: `bias_samples` gyro samples spanning `window_ms` of sample time, the rate
+steady and small, no gap over `evidence_gap_ms`, and every listed
+`<Calibration><Wheel sensor_id radius_m/>` still within `still_travel_m`. The
+wheels only gate the window; they are no part of the heading's lineage, so
+the gyro is still one independent contributor. No qualified window within
+`attempt_s` fails the calibration until a recalibrate; later windows adjust
+the bias in bounded steps; a gyro restart invalidates it. `bias_rad_per_s`
+above is the residual after that calibration.
+
 ## Algorithm
 
 Per accepted step over an interval `dt` with body-frame wheel translation

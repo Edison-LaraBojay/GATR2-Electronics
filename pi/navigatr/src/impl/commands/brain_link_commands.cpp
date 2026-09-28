@@ -202,8 +202,10 @@ void BrainLinkCommands::reset() {
 
 CommandsOutput BrainLinkCommands::run(const CommandsInput& in) {
     CommandsOutput out;
-    out.command       = in.previous;
-    out.command.reply = BrainReplyContext{};
+    out.command             = in.previous;
+    out.command.reply       = BrainReplyContext{};
+    out.command.pi_instance = pi_instance_;
+    out.command.link_open   = true;
 
     LinkStats* stats =
         in.diagnostics != nullptr ? &in.diagnostics->links[diagnostics_id_] : nullptr;
@@ -220,8 +222,9 @@ CommandsOutput BrainLinkCommands::run(const CommandsInput& in) {
         read_us = link_->nowUs();   // before the read: the request was incomplete then
         const SerialReadResult read = link_->readAvailable(MutableByteSpan{buf, sizeof(buf)});
         if (read.closed) {
-            have_last_read_ = false;
-            out.status      = FunctionStatus::kNoData;   // dead link; state persists
+            have_last_read_       = false;
+            out.command.link_open = false;
+            out.status            = FunctionStatus::kNoData;   // dead link; state persists
             return out;
         }
         if (read.bytes == 0) {
@@ -274,6 +277,7 @@ CommandsOutput BrainLinkCommands::run(const CommandsInput& in) {
         return out;
     }
 
+    out.command.last_request = in.now;
     process(request, out.command, stats, in.now);
     BrainReplyContext& reply = out.command.reply;
     if (!had_previous || completed_at < drained) {
@@ -359,7 +363,8 @@ void BrainLinkCommands::execute(const gatr2::BrainRequest& req, CommandState& c,
                              : profile_host_->control(req.action, req.action_arg, now, detail);
         r.action         = req.action;
         r.control_detail = detail;
-        control_ = ControlRecord{true, req.request_id, req.action, req.action_arg, r.result, detail};
+        control_ =
+            ControlRecord{true, req.request_id, req.action, req.action_arg, r.result, detail};
         break;
     }
     case gatr2::kOpPathReport: {
@@ -379,7 +384,9 @@ void BrainLinkCommands::execute(const gatr2::BrainRequest& req, CommandState& c,
     }
     case gatr2::kOpReadWheels:
         // wheel readings come with the applied profile
-        r.result = profile_host_ == nullptr ? gatr2::kResultUnavailable : gatr2::kResultNotReady;
+        r.result = profile_host_ == nullptr
+                       ? static_cast<uint8_t>(gatr2::kResultUnavailable)
+                       : profile_host_->readWheels(now, r.wheel_count, r.wheels.data());
         break;
     default: break;
     }
@@ -574,6 +581,12 @@ void BrainLinkCommands::repeat(const gatr2::BrainRequest& req, CommandState& c,
     if (control_.valid && req.request_id == control_.rid) {
         if (req.op == gatr2::kOpControl && req.action == control_.action &&
             req.action_arg == control_.arg) {
+            if (control_.result == gatr2::kResultPending && profile_host_ != nullptr) {
+                // a Pico operation still running: report how far it got, the
+                // Pico is never asked again
+                control_.result = profile_host_->controlProgress(control_.action, control_.arg,
+                                                                 now, control_.detail);
+            }
             r.result         = control_.result;
             r.action         = control_.action;
             r.control_detail = control_.detail;

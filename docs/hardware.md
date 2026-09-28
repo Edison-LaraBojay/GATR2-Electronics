@@ -41,11 +41,15 @@ selectable with the `hat2_asm330` build ([driver](../pico/src/imu_asm330.cpp)):
 208 Hz, 2000 degrees/second full scale, 70 millidegrees/second per LSB, newest
 sample per frame, accelerometer disabled.
 
-Keep the robot level and still for about six seconds at a full startup: about
-two for BNO08X alignment, then four for the Pi's 200-sample gyro bias collection.
-The [bring-up guide](../pi/navigatr/docs/parallel_wheel_bringup.md) lists the
-stationarity checks. The fixed axis does not compensate later rocking, and the
-Brain's placement still supplies field heading.
+Keep the robot level and still at a full startup: about two seconds for BNO08X
+alignment, then the Pi's gyro bias window (2 s by default with a Brain profile,
+200 samples, about 4 s, in the XML parallel-wheel profiles). The
+[bring-up guide](../pi/navigatr/docs/parallel_wheel_bringup.md) and
+[Brain robot profiles](../pi/navigatr/docs/brain_profile.md#calibration-and-stationary-handling)
+describe the stationarity checks. The fixed axis does not compensate later
+rocking, and the Brain's placement still supplies field heading. The IMU chip
+(BNO08X or ASM330) is chosen by the Pico firmware build; a Brain profile only
+selects Pico IMU port 0.
 
 The Pi's `pico_imu_channel` converts yaw rate and accumulated rotation into radians,
 then localization observation models estimate bias and use heading increments.
@@ -57,8 +61,8 @@ additional acquisition and protocol work needed for measured tilt.
 
 The present estimator does not periodically correct robot heading from field
 landmarks: landmark position estimation uses robot localization as an input.
-`kStatusGyroHealthy` reports configured sensor freshness, not an implemented
-comparison between gyro and wheel-derived heading. Sensor specifications alone
+The Brain link's gyro-fresh health bit reports sensor freshness, not an
+implemented comparison between gyro and wheel-derived heading. Sensor specifications alone
 do not establish assembled-robot drift or alignment accuracy.
 
 ## Tracking wheels
@@ -67,14 +71,17 @@ The [magnetic encoder board](../pcb/MagneticEncoder/README.md) supports compact
 custom tracking-wheel assemblies using contactless magnetic rotation sensing.
 The Pico counts A/B quadrature for three channels. Its
 [pin map](../pico/src/board.h) assigns channels to GP0/1, GP2/3, and GP4/5,
-which are J2, J3 and J4 on the v2 HAT; pin and connector wiring must match the
-chosen HAT revision. The current robot has two parallel tracking wheels, both
-measuring forward travel, on channels 0 (J2) and 1 (J3); see the
-[parallel-wheel bring-up](../pi/navigatr/docs/parallel_wheel_bringup.md).
+which are J2, J3 and J4 on the v2 HAT (logical encoder ports 0, 1 and 2); pin
+and connector wiring must match the chosen HAT revision. The current bench has
+a forward-measuring wheel on port 0 (J2) and a sideways wheel on port 1 (J3),
+described on the Brain ([gatr2_robot.h](../brain/robot/gatr2_robot.h)); the
+earlier two parallel wheels have their own
+[XML bring-up](../pi/navigatr/docs/parallel_wheel_bringup.md).
 
-Counts per revolution and electrical sign are sensor calibration. Effective
-wheel radius, position, and rolling direction belong to `wheel_geometry`, used
-by `tracking_wheel_motion` to calculate body movement. Verify the actual encoder
+Counts per revolution, gearing and encoder polarity are sensor calibration.
+Effective wheel radius, position, rolling direction and the measured travel
+scale belong to the wheel model that turns wheel travel into body movement:
+the Brain profile, or `wheel_geometry` in an XML profile. Verify the actual encoder
 configuration and counted edges rather than assuming every assembly has the same
 counts per revolution. The parallel-wheel AS5047P template uses its default
 4000 counts/revolution with x4 decoding and direct 1:1 wheel coupling; see the
@@ -97,10 +104,25 @@ boards share a BOM.
 ## Pico-to-Pi telemetry
 
 The Pico sends sensor frames at 50 Hz on UART0 (Serial1), GP16 TX / GP17 RX,
-115200 baud. The Pi profile selects the Linux device path. The current template
-uses `/dev/ttyAMA0`; confirm the enabled UART and device mapping on the deployed
+115200 baud. The Pi profile selects the Linux device path. The current configs
+use `/dev/ttyAMA0`; confirm the enabled UART and device mapping on the deployed
 Pi. The [wire specification](interfaces.md) defines masks, integer units,
 timestamps, and packet layouts.
+
+The link is two way: the Pico also sends status frames (boot identity, epochs,
+IMU state) and reads Pi commands (reinitialize the IMU, restart acquisition) on
+GP17. See [Pico link](../pi/navigatr/docs/pico_link.md). The Pi to Pico
+direction on the HAT wiring has not been checked on hardware.
+
+## USB to the V5 Brain
+
+The current bench bypasses the HAT's RS-485 circuit: a data cable from a Pi
+USB-A port to the Brain's micro-USB port, with the Brain on its V5 battery. The
+Pi's `pros_usb_link` finds the Brain's USB user interface and wraps each frame
+in an `NG1:` hexadecimal line; see
+[USB bench](../pi/navigatr/docs/usb_localization_bench.md). Choosing USB or
+RS-485 needs the matching Pi config (`brain_profile_usb.xml` or
+`brain_profile_rs485.xml`) and never changes localization geometry.
 
 ## RS-485 to the V5 Brain
 

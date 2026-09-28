@@ -6,8 +6,9 @@
 // the truth: it drives the Pico encoder counts of the two perpendicular
 // tracking wheels and the Brain VEX IMU heading. Covers profile upload and
 // application, placement, direct and avoiding moves on the transferred field
-// map, wheel readings, a travel scale change, Brain restart, Pi restart and
-// a pulled cable. Every geometry value is a test value.
+// map, wheel readings, a travel scale change, Brain restart, Pi restart, and
+// used sensors dropping out (a pulled cable, a Pico outage), which invalidate
+// the pose. Every geometry value is a test value.
 
 #include <gtest/gtest.h>
 
@@ -63,7 +64,17 @@ constexpr double kPi     = ig::kPi;
 constexpr uint32_t kNonceA = 0xA11CE001;
 constexpr uint32_t kNonceB = 0xB0B0B002;
 
-const ig::Pose      kStart{0.6, 0.6, 0.0};
+// The testing program's placeholder start pose and tests
+// (brain/robot/gatr2_robot.h, brain/testing/include/robot_config.h): open
+// floor west of the center goal, clear of the corner pockets the nearest
+// goals close for this footprint.
+const ig::Pose      kStart{1.2, 1.8, 0.0};
+const ig::Pose      kDirectGoal{1.2, 2.3, ig::kPi / 2};
+const ig::Pose      kAvoidGoal{2.4, 1.8, 0.0};
+const ig::Pose      kLandmarkOffset{0.45, 0.0, ig::kPi};
+constexpr uint16_t  kLandmark = 6; // RedGoal2West, nominal (0.587, 1.185)
+// A lane clear of goals for straight moves east.
+const ig::Pose      kWestLane{0.6, 1.8, 0.0};
 const ig::Footprint kFootprint{0.23, 0.23, 0.23, 0.23};
 
 // Forward wheel on port 0, 0.15 m left of the origin; sideways wheel on
@@ -147,7 +158,7 @@ public:
     }
 
     bool write(const uint8_t* data, int len) override {
-        requests.emplace_back(data, data + len);
+        ops.push_back(requestOf(std::vector<uint8_t>(data, data + len)).op);
         if (!plugged_) {
             return true;
         }
@@ -196,13 +207,13 @@ public:
     // Requests with op from index `from` on.
     int count(uint8_t op, std::size_t from = 0) const {
         int n = 0;
-        for (std::size_t i = from; i < requests.size(); ++i) {
-            n += requestOf(requests[i]).op == op ? 1 : 0;
+        for (std::size_t i = from; i < ops.size(); ++i) {
+            n += ops[i] == op ? 1 : 0;
         }
         return n;
     }
 
-    std::vector<std::vector<uint8_t>> requests; // every Brain write, in order
+    std::vector<uint8_t> ops; // op of every Brain write, in order
 
 private:
     using Timed = std::deque<std::pair<int64_t, uint8_t>>;
@@ -264,11 +275,12 @@ struct Rig {
     double             travel[2] = {0, 0}; // true wheel travel per port
     double             rotation  = 0;      // true heading, unwrapped
     uint8_t            pico_seq  = 0;
+    bool               pico_up   = true; // false: no Pico frames reach the Pi
 
     std::unique_ptr<Brain> brain; // null while powered off
     cg::RobotProfile       profile = benchProfile();
 
-    Rig() {
+    explicit Rig(const ig::Pose& start = kStart) {
         nv::registerAll(functions);
         EXPECT_TRUE(functions.add<nv::ResourceMakeFunction>(
             nv::FunctionKey{"test_usb"},
@@ -298,7 +310,7 @@ struct Rig {
         tinyxml2::XMLPrinter printer;
         doc.Print(&printer);
         xml = printer.CStr();
-        body.setPose(kStart);
+        body.setPose(start);
         startPi();
     }
 
@@ -364,7 +376,9 @@ struct Rig {
         }
         wire.deliver(system != nullptr ? pi_raw.get() : nullptr);
         if (system != nullptr && now_us % kPiPeriodUs == 0) {
-            pico->input().feed(sensorFrame());
+            if (pico_up) {
+                pico->input().feed(sensorFrame());
+            }
             system->step(nv::hostTime(now_us / 1000));
             wire.collect(*pi_raw);
         }
@@ -447,7 +461,42 @@ struct Rig {
         runUntil([&] { return ag::isTerminal(b.motion.status().state); }, limit_s);
         return b.motion.status().state;
     }
+
+    // Runs to the end of the command, checking the true footprint against
+    // the field at every step.
+    struct Track {
+        int    collisions = 0;
+        double worst      = 1e9;
+    };
+    Track track(Brain& b, const ig::Field& field, double limit_s) {
+        Track t;
+        runUntil(
+            [&] {
+                const ig::Clearance c = ig::footprintClearance(body.pose(), kFootprint, 0.0, field);
+                t.worst               = std::min(t.worst, c.distance);
+                t.collisions += c.clear ? 0 : 1;
+                return ag::isTerminal(b.motion.status().state);
+            },
+            limit_s);
+        return t;
+    }
 };
+
+using Track = Rig::Track;
+
+// The footprint clear of every obstacle along the straight line from a to b,
+// facing along it, sampled every centimeter.
+bool lineClear(const ig::Pose& a, const ig::Pose& b, const ig::Field& field) {
+    const double length  = std::hypot(b.x - a.x, b.y - a.y);
+    const double heading = std::atan2(b.y - a.y, b.x - a.x);
+    for (double d = 0; d <= length; d += 0.01) {
+        const ig::Pose p{a.x + (b.x - a.x) * d / length, a.y + (b.y - a.y) * d / length, heading};
+        if (!ig::footprintClearance(p, kFootprint, 0.0, field).clear) {
+            return false;
+        }
+    }
+    return true;
+}
 
 void expectPiNearTruth(const Rig& rig, double tolerance_m, double tolerance_rad) {
     const nv::Pose2D pi = rig.piPose();
@@ -465,18 +514,23 @@ TEST(BrainLinkEndToEnd, ProfilePlacementAndDirectMovesOverUsb) {
     EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose), 1);
     expectPiNearTruth(rig, 1e-3, 1e-3);
 
-    b.motion.goToDirect({1.3, 0.6, 0.0});
+    b.motion.goToDirect(kDirectGoal);
     ASSERT_EQ(rig.finish(b, 15.0), ag::MotionState::kCompleted)
         << ag::toString(b.motion.status().reason);
-    b.motion.goToDirect({1.3, 1.1, kPi / 2});
-    ASSERT_EQ(rig.finish(b, 15.0), ag::MotionState::kCompleted)
-        << ag::toString(b.motion.status().reason);
-
-    EXPECT_NEAR(rig.body.pose().x, 1.3, 0.04);
-    EXPECT_NEAR(rig.body.pose().y, 1.1, 0.04);
-    EXPECT_NEAR(ig::wrapAngle(rig.body.pose().heading - kPi / 2), 0.0, 0.06);
+    EXPECT_NEAR(rig.body.pose().x, kDirectGoal.x, 0.04);
+    EXPECT_NEAR(rig.body.pose().y, kDirectGoal.y, 0.04);
+    EXPECT_NEAR(ig::wrapAngle(rig.body.pose().heading - kDirectGoal.heading), 0.0, 0.06);
     expectPiNearTruth(rig, 0.01, 0.01);
-    EXPECT_EQ(b.client.stats().timeouts, 0u);
+
+    b.motion.goToDirect(kStart);
+    ASSERT_EQ(rig.finish(b, 15.0), ag::MotionState::kCompleted)
+        << ag::toString(b.motion.status().reason);
+    EXPECT_NEAR(rig.body.pose().x, kStart.x, 0.04);
+    EXPECT_NEAR(rig.body.pose().y, kStart.y, 0.04);
+    expectPiNearTruth(rig, 0.01, 0.01);
+
+    // The Pi discards what arrives before its first cycle: the first HELLO.
+    EXPECT_LE(b.client.stats().timeouts, 1u);
     EXPECT_EQ(b.client.stats().session_losses, 0u);
 }
 
@@ -489,28 +543,44 @@ TEST(BrainLinkEndToEnd, AvoidingMovePlansOnTheTransferredFieldMap) {
     EXPECT_EQ(field.map.id, b.client.field().map_id);
     EXPECT_EQ(field.map.id, b.client.state().state.map_id);
 
-    b.motion.goToAvoiding({1.4, 1.2, kPi / 2});
-    double worst      = 1e9;
-    int    collisions = 0;
-    rig.runUntil(
-        [&] {
-            const ig::Clearance c = ig::footprintClearance(rig.body.pose(), kFootprint, 0.0, field);
-            worst                 = std::min(worst, c.distance);
-            collisions += c.clear ? 0 : 1;
-            return ag::isTerminal(b.motion.status().state);
-        },
-        25.0);
+    // Straight east runs through the center goal.
+    ASSERT_FALSE(lineClear(kStart, kAvoidGoal, field));
+    b.motion.goToAvoiding(kAvoidGoal);
+    const Track track = rig.track(b, field, 25.0);
     ASSERT_EQ(b.motion.status().state, ag::MotionState::kCompleted)
         << ag::toString(b.motion.status().reason);
     EXPECT_EQ(b.motion.status().mode, ig::PlanMode::kAvoiding);
-    EXPECT_EQ(collisions, 0) << "closest " << worst;
-    EXPECT_NEAR(rig.body.pose().x, 1.4, 0.04);
-    EXPECT_NEAR(rig.body.pose().y, 1.2, 0.04);
+    EXPECT_GT(b.motion.status().segment_count, 1u);
+    EXPECT_EQ(track.collisions, 0) << "closest " << track.worst;
+    EXPECT_NEAR(rig.body.pose().x, kAvoidGoal.x, 0.04);
+    EXPECT_NEAR(rig.body.pose().y, kAvoidGoal.y, 0.04);
+    expectPiNearTruth(rig, 0.01, 0.01);
+}
+
+TEST(BrainLinkEndToEnd, LandmarkRelativeMoveUsesTheNominalMapPose) {
+    Rig rig;
+    ASSERT_TRUE(rig.ok()) << rig.error;
+    Brain&    b = rig.ready();
+    ig::Field field;
+    ASSERT_TRUE(rig.runUntil([&] { return b.driver.field(field) && !field.objects.empty(); }, 5.0));
+    const ig::FieldObject* goal = field.find(kLandmark);
+    ASSERT_NE(goal, nullptr);
+
+    ag::MoveOptions nominal;
+    nominal.require_observed_reference = false; // no camera: the map pose
+    b.motion.goToAvoiding(kLandmarkOffset, ig::Reference::object(kLandmark, field.map.id), nominal);
+    const Track track = rig.track(b, field, 25.0);
+    ASSERT_EQ(b.motion.status().state, ag::MotionState::kCompleted)
+        << ag::toString(b.motion.status().reason);
+    EXPECT_EQ(track.collisions, 0) << "closest " << track.worst;
+    EXPECT_NEAR(rig.body.pose().x, goal->pose.x + kLandmarkOffset.x, 0.04);
+    EXPECT_NEAR(rig.body.pose().y, goal->pose.y, 0.04);
+    EXPECT_NEAR(ig::wrapAngle(rig.body.pose().heading - kPi), 0.0, 0.06);
     expectPiNearTruth(rig, 0.01, 0.01);
 }
 
 TEST(BrainLinkEndToEnd, WheelReadingsReportRawTravel) {
-    Rig rig;
+    Rig rig(kWestLane);
     ASSERT_TRUE(rig.ok()) << rig.error;
     rig.profile.wheels[0].travel_scale = 1.02; // readings never include it
     Brain& b = rig.ready();
@@ -518,23 +588,24 @@ TEST(BrainLinkEndToEnd, WheelReadingsReportRawTravel) {
     auto read = [&](double out[2]) {
         const uint32_t before = b.client.wheelReadings().sequence;
         ASSERT_TRUE(b.client.requestWheels());
-        ASSERT_TRUE(rig.runUntil([&] { return b.client.wheelReadings().sequence != before; }, 1.0));
+        rig.runUntil([&] { return b.client.wheelReadings().sequence != before; }, 1.0);
         const cg::WheelReadings& r = b.client.wheelReadings();
         ASSERT_EQ(r.result, gatr2::kResultOk);
+        ASSERT_NE(r.sequence, before);
         ASSERT_EQ(r.count, 2);
         for (int i = 0; i < 2; ++i) {
             EXPECT_EQ(r.wheels[i].port, kWheels[i].port);
             out[i] = r.wheels[i].travel_um * 1e-6;
         }
     };
-    double start[2];
+    double start[2] = {0, 0};
     read(start);
     const double truth0[2] = {rig.travel[0], rig.travel[1]};
 
-    b.motion.goToDirect({1.2, 0.6, 0.0});
+    b.motion.goToDirect({1.2, kWestLane.y, 0.0});
     ASSERT_EQ(rig.finish(b, 15.0), ag::MotionState::kCompleted);
     rig.run(0.3);
-    double end[2];
+    double end[2] = {0, 0};
     read(end);
     for (int i = 0; i < 2; ++i) {
         EXPECT_NEAR(end[i] - start[i], rig.travel[i] - truth0[i], 1e-4) << "port " << i;
@@ -543,12 +614,12 @@ TEST(BrainLinkEndToEnd, WheelReadingsReportRawTravel) {
 }
 
 TEST(BrainLinkEndToEnd, TravelScaleChangeIsANewProfileAndNeedsPlacement) {
-    Rig rig;
+    Rig rig(kWestLane);
     ASSERT_TRUE(rig.ok()) << rig.error;
-    Brain&         b          = rig.ready();
-    const uint32_t old_id     = b.client.profile().id;
-    const uint32_t old_epoch  = b.client.state().state.odometry_epoch;
-    const size_t   mark       = rig.wire.requests.size();
+    Brain&         b         = rig.ready();
+    const uint32_t old_id    = b.client.profile().id;
+    const uint32_t old_epoch = b.client.state().state.odometry_epoch;
+    const size_t   mark      = rig.wire.ops.size();
 
     ASSERT_TRUE(b.driver.setProfile(benchProfile(1.02)));
     ASSERT_TRUE(rig.runUntil(
@@ -572,33 +643,40 @@ TEST(BrainLinkEndToEnd, TravelScaleChangeIsANewProfileAndNeedsPlacement) {
     EXPECT_NEAR((rig.piPose().x_m - pi_x) / (rig.body.pose().x - truth_x), 1.02, 0.002);
 }
 
-TEST(BrainLinkEndToEnd, BrainRestartKeepsProfilePlacementAndPose) {
-    Rig rig;
+TEST(BrainLinkEndToEnd, BrainRestartKeepsTheProfileButNeedsAPlacement) {
+    Rig rig(kWestLane);
     ASSERT_TRUE(rig.ok()) << rig.error;
     Brain& a = rig.ready(kNonceA);
-    a.motion.goToDirect({1.1, 0.6, 0.0});
+    a.motion.goToDirect({1.1, kWestLane.y, 0.0});
     ASSERT_EQ(rig.finish(a, 15.0), ag::MotionState::kCompleted);
     const uint32_t pi_instance = a.client.piInstance();
     const uint32_t session     = a.client.session();
     const auto     state       = a.client.state().state;
 
+    // The VEX IMU samples ride on the Brain's state polls: while the Brain
+    // reboots the used IMU is stale, so the pose is invalid (spec 8.10).
     rig.powerOff();
     rig.run(0.5);
-    const size_t mark = rig.wire.requests.size();
+    const size_t mark = rig.wire.ops.size();
     Brain&       b    = rig.boot(kNonceB);
     ASSERT_TRUE(rig.runUntil([&] { return b.client.profileApplied(); }, 2.0));
-    ASSERT_TRUE(
-        rig.runUntil([&] { return b.readiness(rig.now()) == cg::Readiness::kReady; }, 1.0))
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return b.readiness(rig.now()) == cg::Readiness::kNeedsPlacement; }, 1.0))
         << cg::toString(b.readiness(rig.now()));
 
     EXPECT_EQ(b.client.piInstance(), pi_instance);
     EXPECT_NE(b.client.session(), session);
     EXPECT_EQ(rig.wire.count(gatr2::kOpProfileWrite, mark), 0); // the Pi already runs it
-    EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose, mark), 0);
-    EXPECT_EQ(b.client.state().state.odometry_epoch, state.odometry_epoch);
-    EXPECT_EQ(b.client.state().state.anchor_revision, state.anchor_revision);
+    EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose, mark), 0);      // never placed by itself
     EXPECT_EQ(b.client.state().state.profile_id, state.profile_id);
-    expectPiNearTruth(rig, 0.01, 0.01);
+    EXPECT_NE(b.client.state().state.odometry_epoch, state.odometry_epoch);
+
+    const cg::PlacementTicket ticket = b.driver.place(rig.body.pose());
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return b.client.placementResult(ticket) == cg::PlacementResult::kApplied; }, 2.0));
+    ASSERT_TRUE(
+        rig.runUntil([&] { return b.readiness(rig.now()) == cg::Readiness::kReady; }, 1.0));
+    expectPiNearTruth(rig, 1e-3, 1e-3);
 }
 
 TEST(BrainLinkEndToEnd, PiRestartNeedsTheProfileAndAPlacementAgain) {
@@ -608,32 +686,38 @@ TEST(BrainLinkEndToEnd, PiRestartNeedsTheProfileAndAPlacementAgain) {
         ASSERT_TRUE(rig.ok()) << rig.error;
         Brain&         b           = rig.ready();
         const uint32_t pi_instance = b.client.piInstance();
-        const size_t   mark        = rig.wire.requests.size();
+        const size_t   mark        = rig.wire.ops.size();
 
         rig.restartPi(kind);
         if (kind == Restart::kProcess) {
             ASSERT_TRUE(rig.runUntil([&] { return b.client.piInstance() != pi_instance; }, 3.0));
-            EXPECT_GT(rig.wire.count(gatr2::kOpProfileWrite, mark), 0);
         }
-        ASSERT_TRUE(rig.runUntil([&] { return b.client.profileApplied(); }, 3.0));
+        // Uploaded again: the restarted Pi runs no profile.
+        ASSERT_TRUE(rig.runUntil(
+            [&] {
+                return rig.wire.count(gatr2::kOpProfileWrite, mark) > 0 &&
+                       b.client.profileApplied();
+            },
+            3.0));
         ASSERT_TRUE(rig.runUntil(
             [&] { return b.readiness(rig.now()) == cg::Readiness::kNeedsPlacement; }, 3.0))
             << cg::toString(b.readiness(rig.now()));
 
         // Nothing places by itself, and a move waits for a placement.
-        b.motion.goToDirect({1.0, 0.6, 0.0});
+        b.motion.goToDirect(kDirectGoal);
         EXPECT_EQ(rig.finish(b, 5.0), ag::MotionState::kFailed);
         EXPECT_EQ(b.motion.status().reason, ag::MotionReason::kPlacementRequired);
         EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose, mark), 0);
         EXPECT_NEAR(rig.body.pose().x, kStart.x, 1e-6);
+        EXPECT_NEAR(rig.body.pose().y, kStart.y, 1e-6);
     }
 }
 
 TEST(BrainLinkEndToEnd, PulledCableStopsTheMoveAndTheLinkResumes) {
-    Rig rig;
+    Rig rig(kWestLane);
     ASSERT_TRUE(rig.ok()) << rig.error;
     Brain& b = rig.ready();
-    b.motion.goToDirect({2.0, 0.6, 0.0});
+    b.motion.goToDirect({1.45, kWestLane.y, 0.0});
     rig.run(0.8);
     ASSERT_EQ(b.motion.status().state, ag::MotionState::kRunning);
 
@@ -645,11 +729,61 @@ TEST(BrainLinkEndToEnd, PulledCableStopsTheMoveAndTheLinkResumes) {
     rig.run(0.5);
     EXPECT_NEAR(rig.body.pose().x, stopped.x, 1e-3); // the drive stays stopped
 
+    // No VEX IMU sample reaches the Pi while the cable is out, so the pose is
+    // invalid; the robot also kept rolling (spec 8.10).
+    const uint32_t epoch = b.client.state().state.odometry_epoch;
     rig.wire.setPlugged(true);
-    ASSERT_TRUE(
-        rig.runUntil([&] { return b.readiness(rig.now()) == cg::Readiness::kReady; }, 3.0))
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return b.readiness(rig.now()) == cg::Readiness::kNeedsPlacement; }, 3.0))
         << cg::toString(b.readiness(rig.now()));
-    EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose), 1); // the placement held
-    expectPiNearTruth(rig, 0.01, 0.01);
+    EXPECT_NE(b.client.state().state.odometry_epoch, epoch);
+    rig.run(1.0);
+    EXPECT_EQ(b.readiness(rig.now()), cg::Readiness::kNeedsPlacement);
+    EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose), 1); // never placed by itself
     EXPECT_EQ(b.motion.status().state, ag::MotionState::kFailed); // never resumes
+
+    // Placed again, the pose follows the truth.
+    const cg::PlacementTicket ticket = b.driver.place(rig.body.pose());
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return b.client.placementResult(ticket) == cg::PlacementResult::kApplied; }, 2.0));
+    b.motion.goToDirect({1.45, kWestLane.y, 0.0});
+    ASSERT_EQ(rig.finish(b, 15.0), ag::MotionState::kCompleted);
+    expectPiNearTruth(rig, 0.01, 0.01);
+}
+
+TEST(BrainLinkEndToEnd, UsedSensorDropInvalidatesThePoseEvenWhenStill) {
+    // A cable pull stops the VEX IMU samples; a Pico outage stops the wheels.
+    for (int source = 0; source < 2; ++source) {
+        SCOPED_TRACE(source == 0 ? "usb cable (VEX IMU)" : "Pico link (wheels)");
+        Rig rig(kWestLane);
+        ASSERT_TRUE(rig.ok()) << rig.error;
+        Brain&         b     = rig.ready();
+        const uint32_t epoch = b.client.state().state.odometry_epoch;
+
+        // Shorter than the loss limit: nothing happens.
+        (source == 0 ? rig.wire.setPlugged(false) : void(rig.pico_up = false));
+        rig.run(0.1);
+        (source == 0 ? rig.wire.setPlugged(true) : void(rig.pico_up = true));
+        rig.run(1.0);
+        EXPECT_EQ(b.readiness(rig.now()), cg::Readiness::kReady);
+        EXPECT_EQ(b.client.state().state.odometry_epoch, epoch);
+
+        // Longer: the pose is invalid until placed again, robot still or not.
+        (source == 0 ? rig.wire.setPlugged(false) : void(rig.pico_up = false));
+        rig.run(1.0);
+        (source == 0 ? rig.wire.setPlugged(true) : void(rig.pico_up = true));
+        ASSERT_TRUE(rig.runUntil(
+            [&] { return b.readiness(rig.now()) == cg::Readiness::kNeedsPlacement; }, 3.0))
+            << cg::toString(b.readiness(rig.now()));
+        EXPECT_NE(b.client.state().state.odometry_epoch, epoch);
+        EXPECT_EQ(rig.wire.count(gatr2::kOpSetPose), 1); // never placed by itself
+
+        const cg::PlacementTicket ticket = b.driver.place(rig.body.pose());
+        ASSERT_TRUE(rig.runUntil(
+            [&] { return b.client.placementResult(ticket) == cg::PlacementResult::kApplied; },
+            2.0));
+        EXPECT_TRUE(
+            rig.runUntil([&] { return b.readiness(rig.now()) == cg::Readiness::kReady; }, 1.0));
+        expectPiNearTruth(rig, 1e-3, 1e-3);
+    }
 }

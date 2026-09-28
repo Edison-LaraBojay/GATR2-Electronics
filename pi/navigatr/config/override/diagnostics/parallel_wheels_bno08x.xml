@@ -2,6 +2,11 @@
 <!--
 Profile A: two parallel tracking wheels + BNO08X localization only.
 
+XML-configured: the robot is described in this file and Brain robot
+profiles are refused ("not accepted"), so Brain programs that send
+a profile cannot place with it. The primary configs are
+../brain_profile_usb.xml and ../brain_profile_rs485.xml.
+
     ./build/navigatr --config_file=config/override/diagnostics/parallel_wheels_bno08x.xml
 
 Needs shared/robots/gatr2_parallel_wheels_bno08x.xml, made from the .xml.in

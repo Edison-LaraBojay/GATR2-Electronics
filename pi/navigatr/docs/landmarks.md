@@ -130,13 +130,20 @@ GET_STATE robot fields:
   the pose onto the host clock.
 - `odometry_epoch` and `anchor_revision` are the low 32 bits of the robot
   state's counters.
-- Health bits come only from configured `Health` references: encoders fresh
-  when every listed `Encoder` sensor is valid and was received within
-  `fresh_ms`; gyro fresh the same for `Gyro`; vision alive when the newest
-  field snapshot published observations, which only a field cycle that
-  processed a new camera frame does, so the bit can clear between frames;
-  bias calibrated once the `BiasCal` observation function has reported ready
-  (latched until reset). They are information only, never acknowledgements.
+- Health bits are information only, never acknowledgements. With a Brain
+  profile they follow the running profile (its encoders, its IMU source, the
+  model that owns the bias; see
+  [Brain robot profiles](brain_profile.md#state-block-health)). In an
+  XML-configured profile they come only from configured `Health` references:
+  encoders fresh when every listed `Encoder` sensor is valid and was received
+  within `fresh_ms`; gyro fresh the same for `Gyro`; bias calibrated once the
+  `BiasCal` observation function has reported ready (latched until reset).
+  Vision alive is set when the newest field snapshot published observations,
+  which only a field cycle that processed a new camera frame does, so the bit
+  can clear between frames. The Pico link bits (4 to 6) need `<Pico>` on the
+  Publishing; the stationary bit (7) needs a model with a stationary window.
+- `calibration` is the bias calibration state; `profile_state`,
+  `profile_reason`, `profile_detail` and `profile_id` the robot profile status.
 - `map_id` and `estimate_id` name the current field documents, 0 when the
   publisher has no `Field`.
 
@@ -169,7 +176,9 @@ built, from the planning data (see
 
 `map_id` is its CRC-32. The build fails with a clear error when the field has
 no `revision`, no `Boundary`, a landmark without `wire_id`, more than 128
-objects, or a value outside its wire range.
+objects, or a value outside its wire range. Inspection's `hello` shows the same
+planning data per field (boundary, boxes, wire ids, revision and `map_id`), and
+the viewer draws it; see [inspection](inspection.md).
 
 **Estimate document** (READ_DOC kind 2). The reporting cycle builds it from the
 newest field snapshot and the robot state. It holds one record per map object,

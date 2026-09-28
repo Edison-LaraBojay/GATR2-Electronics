@@ -13,21 +13,33 @@ documents carry every configured object: the map with collision boxes, and the
 estimates as physical poses with full field heading, labeled nominal or
 observed. Configured targets stay on the Pi.
 
+**Robot configuration comes from the Brain.** The primary configs,
+[`config/override/brain_profile_usb.xml`](config/override/brain_profile_usb.xml)
+and [`brain_profile_rs485.xml`](config/override/brain_profile_rs485.xml), hold
+only the Pi's devices, wired ports and tuning; the Brain sends the tracking
+wheels, encoders, IMU source and footprint as a typed robot profile, and the
+Pi builds its localization from it. See [Brain robot profiles](docs/brain_profile.md).
+
 ## Runtime design
 
-**First setup:** [Set up and run Navigatr](docs/setup.md) covers Pi/Pico provisioning,
-build commands, camera calibration software, robot and camera geometry, complete
+**First setup:** [Set up and run Navigatr](docs/setup.md) starts with the
+Brain-profiled robot, then covers Pi/Pico provisioning, build commands, camera
+calibration software, robot and camera geometry, the XML-configured
 three-wheel IMU + camera templates, launch commands, and output locations. The
-current robot's two parallel wheels + BNO08X profiles have their own
-[bring-up guide](docs/parallel_wheel_bringup.md).
-For the current VEX IMU bench test, [Pi setup and automatic startup](../../docs/pi_setup.md)
-covers Ethernet access, building, and starting naviGATR on every boot.
+two parallel wheels + BNO08X XML profiles have their own
+[bring-up guide](docs/parallel_wheel_bringup.md). The current bench (USB, VEX
+IMU, forward and sideways wheels) is in [USB bench](docs/usb_localization_bench.md);
+[Pi setup and automatic startup](../../docs/pi_setup.md) covers Ethernet
+access, building, and starting naviGATR on every boot.
 
 These documents describe the implemented runtime and data contracts. Hardware
 integration still needs the checks recorded in the deployment documents.
 
 | Document | Responsibility |
 |---|---|
+| [Brain robot profiles](docs/brain_profile.md) | The Brain-profiled configs: who owns what, apply and continuity, supported setups and refusals, corrections applied once, calibration and stationary handling, CONTROL, sensor loss and recovery. |
+| [USB bench](docs/usb_localization_bench.md), [VEX IMU bench](docs/vex_imu_bench.md) | The current bench: USB link, forward and sideways wheels, the Brain VEX IMU. |
+| [Pico link](docs/pico_link.md) | Pico identity, status, commands and the serial reopen. |
 | [Configuration](docs/configuration.md) | Run commands, the compiled default file, inline XML, and nested file references. |
 | [Architecture](docs/architecture.md) | Captured resource/sensor functions, ResourceMap and SensorMap result contracts, all runtime paths, nested stage I/O, workers, and pose history. |
 | [Coordinates](docs/coordinates.md) | Field and robot axes, heading, camera mounting, attitude, and measurement-time transforms. |
@@ -63,7 +75,8 @@ service        at its own rate; a slow browser is skipped, never waited for
 
 Localization is a self-contained component: configured robot-observation
 functions grouped by measurement model (`tracking_wheel_motion`,
-`imu_heading_increment`, `attitude_reference`), one state estimator
+`imu_heading_increment`, `attitude_reference`, and the Brain VEX IMU bench
+models `brain_imu_planar_bench` and `brain_imu_parallel_bench`), one state estimator
 (`planar_motion_integrator`, or `weighted_planar_fusion` with an explicit
 uncertainty model and a pose covariance), and a history ring of recent poses that only
 localization writes. Readers get copied snapshots or synchronized timestamped
@@ -107,11 +120,25 @@ exact checks): the libcamera capture backend (`libcamera_camera`, built only
 with `-DNAVIGATR_WITH_LIBCAMERA=ON` on the Pi) including exposure timestamp
 mapping and buffer ownership.
 
-Implemented and host tested, not run on hardware: the brain link
-(`brain_link` command collection and publishing, Brain link v3 sessions,
-per-session dedupe, placement acknowledged only once applied) over the
-half-duplex `linux_serial_link` (`DriverEnable`). The hardware checks are in
-[Connect the Brain](docs/setup.md#hardware-checks-still-to-do).
+Implemented and host tested, not run on hardware:
+
+- The brain link (`brain_link` command collection and publishing, Brain link
+  v4 sessions, per-session dedupe, placement acknowledged only once applied)
+  over the half-duplex `linux_serial_link` (`DriverEnable`) or the Brain USB
+  port (`pros_usb_link`). The hardware checks are in
+  [Connect the Brain](docs/setup.md#hardware-checks-still-to-do).
+- Brain robot profiles: staging, validation, capability checks, the candidate
+  built from Pi templates, the controlled boundary and its continuity rules,
+  every supported topology and IMU source, each correction applied once.
+- Field documents for Brain planning (map with collision boxes, estimates of
+  every object), chunked and retained.
+- One stationary window for every IMU bias path, bounded calibration with
+  gated bias upkeep, zero velocity while stationary; CONTROL recalibrate,
+  reinitialize, Pico IMU reinit and acquisition restart; READ_WHEELS.
+- Recovery: a used source that drops ends pose continuity (the Brain places
+  again); Pico identity and restarts; serial reopen; a bounded event log.
+- Inspection of all of it: the Brain link state, profile, wheels, calibration,
+  Pico link, events and path, and the field's planning data in the viewer.
 
 Deferred, deliberately:
 
@@ -139,13 +166,16 @@ duplicate outputs, and invalid calibration.
 - [`config/shared/pipelines/`](config/shared/pipelines/): the parallel-wheel
   pipelines and their shared localization, three-wheel diagnostic pipelines, the
   synthetic demo pipeline, and the camera-only inspection pipeline.
+- [`config/override/brain_profile_usb.xml`](config/override/brain_profile_usb.xml),
+  [`brain_profile_rs485.xml`](config/override/brain_profile_rs485.xml): the
+  primary robot configs; the Brain supplies the robot profile.
 - [`config/override/field.xml`](config/override/field.xml): nominal Override
-  geometry for nine goals and their tag mounts, plus display dimensions and
-  static features.
+  geometry for nine goals and their tag mounts, the planning data (boundary,
+  wire ids, collision boxes), plus display dimensions and static features.
 - [`config/override/diagnostics/`](config/override/diagnostics/): the
-  parallel-wheel profiles (runnable once their robot file is measured),
-  composed three-wheel profile templates, and the runnable live camera
-  inspection profile.
+  XML-configured profiles: the VEX IMU bench profiles, the parallel-wheel
+  profiles (runnable once their robot file is measured), composed three-wheel
+  profile templates, and the runnable live camera inspection profile.
 - [`config/demo/`](config/demo/): hardware-free demo profiles.
 - [`config/examples/modular/main.xml`](config/examples/modular/main.xml): a minimal
   runnable scaffold with separate Resources, Sensors, Pipeline, and Localization files.
@@ -206,6 +236,15 @@ Hardware-free demo with the viewer:
 ./build/navigatr --config_file="config/demo/synthetic_field_demo_no_attitude.xml"
 ./build/navigatr --config_file="config/demo/synthetic_fusion_demo.xml"
 ```
+
+The robot, configured from the Brain (Pi; RS-485: `brain_profile_rs485.xml`):
+
+```text
+./build/navigatr --config_file="config/override/brain_profile_usb.xml"
+```
+
+It waits for the Brain's profile; `event: ...` lines log applies, refusals,
+sensor loss and recovery.
 
 Live camera inspection before metric calibration (Pi, libcamera build):
 

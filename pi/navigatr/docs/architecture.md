@@ -6,6 +6,12 @@ localization models, and the field/command/reporting implementations. The
 composition; [resources](../../../docs/navigatr_resources.md) and
 [sensors](../../../docs/navigatr_sensors.md) list registered implementations.
 
+With a Brain-profiled configuration (`<BrainProfile>` under `Localization`,
+the primary path) the XML names only the Pi's devices, wired ports and model
+tuning. The localization models come from the robot profile the Brain sends,
+built at runtime from typed data; see [Brain robot profiles](brain_profile.md)
+and the section below.
+
 ## Construction
 
 ```text
@@ -95,6 +101,7 @@ Current observation implementations are:
 | `tracking_wheel_motion` | Configured wheel geometry and encoder sensors, optionally a gyro heading constraint and an explicit zero-lateral-motion assumption for forward-only wheels; produces a body-motion increment over an interval. |
 | `imu_heading_increment` | One IMU sensor and bias settings; produces a heading increment over an interval. |
 | `attitude_reference` | One attitude sensor; produces a timestamped quaternion observation. |
+| `brain_imu_planar_bench`, `brain_imu_parallel_bench` | Two wheels and the Brain VEX IMU mailbox (bench, arrival-time pairing); produces a body-motion increment whose rotation is the VEX IMU's. |
 
 Three suitably placed tracking wheels can solve planar motion. Two wheels need
 a heading constraint. Wheels that all measure forward, such as two parallel
@@ -106,6 +113,16 @@ to these observation models. Configuring the same gyro independently twice does
 not create independent information: every sample carries the acquisition output
 it came from (`Provenance.measurement`), and the estimators use that lineage,
 not the configured sensor id, to detect overlapping contributors.
+
+Every IMU bias path and the stationary status share one `StationaryWindow`
+(`impl/localization/stationary_window.h`): new samples only, restarted by a
+gap, a source restart or movement, qualified by elapsed sample time. The
+first qualified window gives the gyro bias; later ones maintain it in
+bounded steps; a gyro restart invalidates it. While a window stays
+qualified the executor reports zero velocity and the stationary health bit;
+the pose is left alone. This is gated stationary handling, not a zero
+velocity filter update: no estimator here models velocity with uncertainty.
+See [Brain robot profiles](brain_profile.md#calibration-and-stationary-handling).
 
 Observations remain pending until the estimator explicitly accepts or rejects
 them. Functions receive the disposition through `settle`; this prevents a quiet
@@ -195,7 +212,7 @@ runs independently of whether a navigation target is requested.
 and status. It is an immutable published snapshot. See
 [landmarks](landmarks.md) for association, retention, and target/report semantics.
 
-## Commands, target resolution, and publishing
+## Commands and publishing
 
 Command collection produces `CommandState`: the current Brain session, the
 newest placement (`init_pose`, `init_session`, `init_sequence`), the robot
@@ -231,6 +248,11 @@ the Pi answers each request at most once, and nothing is sent unasked. The
   (`placement_origin` `command` or `configuration`, `placement_session`,
   `placement_sequence`). A configured `InitialPlacement` is
   (`configuration`, 0, 1).
+- With a Brain profile host, PROFILE_WRITE stages the profile, PROFILE_APPLY
+  hands it to the System, CONTROL (recalibrate, reinitialize, Pico IMU
+  reinit, acquisition restart) and READ_WHEELS go to the running profile,
+  and SET_POSE is NotReady until a profile runs. PATH_REPORT is stored for
+  inspection only.
 - `brain_link` publishing writes only when the command slot left a reply
   pending, once, through the link's windowed write. SET_POSE is `Ok` only
   when `RobotState` reports that exact placement applied, otherwise
@@ -249,6 +271,40 @@ and the Brain profile host from `SlotInitializationContext`.
 Publishing receives the diagnostics through `PublishingInput` and counts its
 writes in the link's `LinkStats`.
 
+A `linux_serial_link` with `DriverEnable` runs RS-485 half duplex: it listens
+while idle and drives the transceiver only while sending a reply, releasing it
+once the transmitter is empty. The sequence is in `transport/half_duplex` over
+a small port interface; see [linux_serial_link](../../../docs/navigatr_resources.md#linux_serial_link).
+
+## Brain robot profiles
+
+A Brain-profiled System starts waiting: noop localization, while resources,
+the Brain link, world estimation, publishing and inspection run. On
+PROFILE_APPLY the System checks this Pi's capabilities, writes Sensors and
+Localization subtrees from fixed Pi templates (ids generated on the Pi; the
+Brain never sends XML) and builds the candidate at once through the ordinary
+factories, touching nothing that runs. The swap happens at a controlled
+boundary in the `reset()` pattern: the main thread calls
+`applyPendingProfile()` every 20 ms in worker mode (workers stop, the
+candidate moves in, workers restart), and `step()` does it first inline. The
+resources, the commands slot with its session and `pi_instance`, world
+estimation, publishing, the feed and inspection survive. A new profile
+advances the odometry epoch, clears history, leaves the robot unplaced and
+withdraws every earlier placement request; re-applying the running profile
+changes nothing. Inspection reads the running binding through one immutable
+`BindingView`.
+
+Every cycle the sources the running profile uses are watched
+(`runtime/sensor_loss.h`): its encoders, and the Pico IMU or the Brain VEX
+IMU mailbox when the profile uses one. A used source that is stale longer
+than `sensor_loss_ms`, restarts, or (Pico IMU) reports itself not ready ends
+pose continuity like a new profile does, and the Brain must place again.
+With `<Pico resource_id>` on the CommandCollection, CONTROL 3 and 4 run on the
+Pico through the `PicoControl` contract. Lifecycle events go to a bounded log
+that inspection shows. Details: [Brain robot profiles](brain_profile.md).
+
+## Targets
+
 `configured_targets` resolves targets from `target_set`. It can latch a desired
 robot pose from a relative movement, a landmark estimate, or an `acquire_once`
 visual acquisition. A selection activates the target with that target
@@ -257,11 +313,6 @@ select today. Targets are Pi internal: inspection shows
 them, the brain link never sends them. This stage owns target lifecycle; it
 does not alter the field estimate. The Brain remains responsible for motor
 control.
-
-A `linux_serial_link` with `DriverEnable` runs RS-485 half duplex: it listens
-while idle and drives the transceiver only while sending a reply, releasing it
-once the transmitter is empty. The sequence is in `transport/half_duplex` over
-a small port interface; see [linux_serial_link](../../../docs/navigatr_resources.md#linux_serial_link).
 
 ## Scheduling and lifecycle
 
@@ -283,8 +334,9 @@ can therefore slow localization.
 A Brain request is read by command collection and answered by publishing in
 the same estimation cycle, from that cycle's robot state and the newest
 completed field snapshot, so a reply never waits for camera processing. The
-reply write blocks the estimation worker for about the frame airtime (5.1 ms
-for the largest reply at 115200 baud).
+reply write blocks the estimation worker for about the frame airtime: up to
+11.1 ms for a 128-byte reply at 115200 baud, about 13 ms with the transmit
+margin. Over USB the write waits at most 5 ms of backpressure.
 
 `--inline` runs estimation, field estimation, and reporting serially for replay
 and tests. Field estimation then runs between the Brain request and its reply,
@@ -298,8 +350,9 @@ workers, resets stages and shared resources, changes history/source epochs, clea
 published state, and resumes workers when appropriate. For the brain link it
 draws a new `pi_instance`, forgets the Brain session, and clears `CommandState`
 (`init_sequence` restarts at 0); the Brain sees the new `pi_instance` and opens
-a new session. Snapshot readers use synchronized copies; inspection never calls
-mutable estimator implementations.
+a new session. A Brain-profiled System returns to waiting for a profile.
+Snapshot readers use synchronized copies; inspection never calls mutable
+estimator implementations.
 
 ## Source map
 
@@ -315,4 +368,9 @@ mutable estimator implementations.
 | Target lifecycle | [configured_targets.cpp](../src/impl/target_resolution/configured_targets.cpp) |
 | Brain requests and sessions | [brain_link_commands.cpp](../src/impl/commands/brain_link_commands.cpp), [command_state.h](../src/state/command_state.h) |
 | Brain replies | [brain_link_publisher.cpp](../src/impl/publishing/brain_link_publisher.cpp) |
+| Field documents | [field_documents.cpp](../src/impl/publishing/field_documents.cpp) |
+| Brain profile templates and checks | [brain_profile_builder.cpp](../src/runtime/brain_profile_builder.cpp) |
+| Stationary window and gyro bias | [stationary_window.cpp](../src/impl/localization/stationary_window.cpp) |
+| Sensor loss and stationary precheck | [sensor_loss.cpp](../src/runtime/sensor_loss.cpp), [stationary_precheck.cpp](../src/runtime/stationary_precheck.cpp) |
+| Inspection documents | [inspection_document.cpp](../src/inspection/inspection_document.cpp) |
 | Half-duplex transmit | [half_duplex.cpp](../src/transport/half_duplex.cpp), [serial_port.cpp](../src/transport/serial_port.cpp) |

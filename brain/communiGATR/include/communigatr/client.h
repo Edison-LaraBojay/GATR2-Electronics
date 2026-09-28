@@ -48,10 +48,10 @@ struct ClientConfig {
     Seconds pending_retry      = 0.020; // SET_POSE and PROFILE_APPLY resend after Pending
     int     placement_attempts = 10;    // sends per placement
     Seconds placement_deadline = 1.0;   // first send through confirming GET_STATE
-    int     control_attempts   = 5;     // sends per control without a reply
+    int     control_attempts   = 5;     // sends per control before its first reply
     Seconds control_deadline   = 1.0;   // first send through its first reply
-    Seconds control_retry      = 0.1;   // CONTROL resend after Pending
-    Seconds control_wait       = 20.0;  // first send through the end of a Pending control
+    Seconds control_retry      = 0.1;   // CONTROL resend after Pending or a lost reply
+    Seconds control_wait       = 20.0;  // first send through the final result, once answered
     Seconds hello_backoff      = 1.0;   // HELLO period after an unsupported version or op
     Seconds field_period       = 0.5;   // between field estimate reads
     Seconds transfer_backoff   = 1.0;   // after 3 failed transfers of one kind in a row
@@ -93,7 +93,8 @@ enum class ControlResult : uint8_t {
     kNotStationary, // the robot moved in the Pi's stationary window; nothing started
     kNotReady,      // the Pi has no applied robot profile
     kRejected,      // other error result, see ControlStatus::result
-    kTimedOut,      // attempts or deadline used up; outcome unknown
+    kTimedOut,      // no reply to control_attempts sends or within control_deadline, or
+                    // answered but not final within control_wait; outcome unknown
     kSessionLost,   // session ended while pending; never resent
 };
 
@@ -106,7 +107,7 @@ struct ControlStatus {
     uint8_t       detail      = gatr2::kControlDetailNone; // Failed and Pending
 };
 
-// Latest READ_WHEELS reply: the profile wheels as the Pi last received them.
+// READ_WHEELS readings: the profile wheels as the Pi last received them.
 struct WheelReadings {
     uint32_t            sequence    = 0; // Ok replies so far, 0 = none
     Seconds             received_at = 0;
@@ -114,6 +115,25 @@ struct WheelReadings {
     uint8_t             result      = gatr2::kResultOk; // last reply result
     uint8_t             count       = 0;
     gatr2::WheelReading wheels[gatr2::kWheelReadingsMax];
+    bool                busy = false; // ProsLink only: link busy, nothing above is current
+};
+
+using WheelTicket = uint32_t; // 0 = none or refused
+
+enum class WheelResult : uint8_t {
+    kNone,        // not the latest ticket, or 0
+    kPending,     // queued or in flight
+    kOk,          // answered; WheelStatus::readings holds it
+    kRejected,    // error result, see WheelStatus::result (NotReady, Unavailable)
+    kTimedOut,    // no reply to the one send; ask again
+    kSessionLost, // session ended first
+};
+
+struct WheelStatus {
+    WheelTicket   ticket = 0;
+    WheelResult   state  = WheelResult::kNone;
+    uint8_t       result = gatr2::kResultOk; // this read's reply result
+    WheelReadings readings;                  // kOk: this read's readings
 };
 
 enum class ProfileSync : uint8_t {
@@ -121,8 +141,8 @@ enum class ProfileSync : uint8_t {
     kInvalid,  // failed the Brain side check; never sent
     kWaiting,  // no state in this session yet
     kWriting,  // sending the document
-    kApplying, // PROFILE_APPLY sent, or the Pi answered Pending
-    kApplied,  // the Pi runs this profile
+    kApplying, // PROFILE_APPLY sent, the Pi answered Pending, or Ok and no state shows it yet
+    kApplied,  // a state reply shows the Pi running this profile
     kRejected, // refused; settled until the session changes or resubmitProfile()
 };
 
@@ -218,7 +238,10 @@ public:
     // Pi control, a gatr2::ControlAction. 0 (refused) unless ready and no
     // other control is pending. The Pi checks the stationary condition. A
     // Pending answer is asked again with the same request id every
-    // control_retry until it settles; a duplicate never runs twice.
+    // control_retry until it settles; a duplicate never runs twice. Before
+    // the first reply control_attempts and control_deadline bound it; once
+    // answered, the Pi holds its record and only control_wait does, so
+    // lost replies (a pulled cable) do not end it.
     ControlTicket control(uint8_t action);
     ControlTicket recalibrate() { return control(gatr2::kControlRecalibrate); }
     ControlTicket reinitialize() { return control(gatr2::kControlReinitialize); }
@@ -227,9 +250,14 @@ public:
     ControlStatus controlStatus(ControlTicket ticket) const;
     bool          controlPending() const;
 
-    // Asks once for the raw profile wheel readings; the answer lands in
-    // wheelReadings(). False without a session.
-    bool                 requestWheels();
+    // One READ_WHEELS read of the raw profile wheels. 0 (refused) without a
+    // session or while another read is pending. One send: a lost reply
+    // settles kTimedOut. Only the latest ticket is tracked.
+    WheelTicket requestWheels();
+    WheelStatus wheelStatus(WheelTicket ticket) const;
+    bool        wheelsPending() const { return wheel_.state == WheelResult::kPending; }
+
+    // Readings of the latest Ok reply of any read; result is the last reply's.
     const WheelReadings& wheelReadings() const { return wheels_; }
 
     // Uploads and applies the configured profile again, clearing a
@@ -342,6 +370,7 @@ private:
     bool placementExhausted(Seconds now) const;
     void settleControl(ControlResult state, uint8_t result);
     bool controlExhausted(Seconds now) const;
+    void settleWheels(WheelResult state, uint8_t result);
 
     void configureProfile(const ProfileDocument& doc);
     void profileFromState(const gatr2::BrainState& state);
@@ -410,13 +439,16 @@ private:
     Seconds       next_control_     = 0;
 
     // Wheel readings.
-    bool          wheels_wanted_ = false;
+    WheelStatus   wheel_;
+    WheelTicket   last_wheel_    = 0;
+    bool          wheels_wanted_ = false; // the pending read is not sent yet
     WheelReadings wheels_;
 
     // Profile.
-    uint16_t profile_len_      = 0;
-    int      profile_failures_ = 0; // InvalidArgument or no progress, in a row
-    Seconds  next_profile_     = 0;
+    uint16_t profile_len_        = 0;
+    int      profile_failures_   = 0;     // InvalidArgument or no progress, in a row
+    bool     profile_confirming_ = false; // APPLY Ok; waiting for a state that shows it
+    Seconds  next_profile_       = 0;
     ProfileStatus profile_;
 
     // Field documents.

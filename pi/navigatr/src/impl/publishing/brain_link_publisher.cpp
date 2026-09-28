@@ -8,6 +8,7 @@
 
 #include "math/angles.h"
 #include "resources/resource_store.h"
+#include "runtime/pico_control_ref.h"
 #include "runtime/sensor_catalog.h"
 
 namespace navigatr
@@ -15,6 +16,16 @@ namespace navigatr
 
 namespace
 {
+
+static_assert(static_cast<uint8_t>(BiasCalibration::kNone) == gatr2::kCalibrationNone &&
+                  static_cast<uint8_t>(BiasCalibration::kRunning) == gatr2::kCalibrationRunning &&
+                  static_cast<uint8_t>(BiasCalibration::kDone) == gatr2::kCalibrationDone &&
+                  static_cast<uint8_t>(BiasCalibration::kWaitingStill) ==
+                      gatr2::kCalibrationWaitingStill &&
+                  static_cast<uint8_t>(BiasCalibration::kWaitingData) ==
+                      gatr2::kCalibrationWaitingData &&
+                  static_cast<uint8_t>(BiasCalibration::kFailed) == gatr2::kCalibrationFailed,
+              "BiasCalibration values are the wire CalibrationState values");
 
 int32_t toWireMm(double meters) {
     const double mm = std::round(meters * 1000.0);
@@ -33,7 +44,7 @@ bool hostSet(MonotonicTime t) { return t.domain == ClockDomain::kHost; }
 bool knownChildren(const ConfigNode& node, std::string& err) {
     for (ConfigNode c = node.child(); c.valid(); c = c.next()) {
         const std::string name = c.name();
-        if (name == "Serial" || name == "Health" || name == "Field") {
+        if (name == "Serial" || name == "Health" || name == "Field" || name == "Pico") {
             continue;
         }
         if (name == "FieldObject") {
@@ -171,6 +182,9 @@ std::unique_ptr<Publishing> BrainLinkPublisher::create(const ConfigNode& node,
     if (!makeFieldDocuments(node, *context.resources, publisher->documents_, err)) {
         return nullptr;
     }
+    if (!parsePicoReference(node, *context.resources, publisher->pico_, err)) {
+        return nullptr;
+    }
     return publisher;
 }
 
@@ -203,6 +217,10 @@ uint8_t BrainLinkPublisher::calibration(const PublishingInput& in,
     const ObservationFunctionStatus* f = in.localization.find(function);
     if (f == nullptr) {
         return gatr2::kCalibrationNone;
+    }
+    if (f->stillness.monitored) {
+        // BiasCalibration values are the wire CalibrationState values
+        return static_cast<uint8_t>(f->stillness.calibration);
     }
     return f->ready ? gatr2::kCalibrationDone : gatr2::kCalibrationRunning;
 }
@@ -263,6 +281,24 @@ gatr2::BrainState BrainLinkPublisher::state(const PublishingInput& in) const {
     if (!in.observations.empty()) {
         s.health |= gatr2::kHealthVisionAlive;
     }
+    if (pico_ != nullptr) {
+        const PicoLinkState link = pico_->link();
+        if (link.frames_fresh) {
+            s.health |= gatr2::kHealthPicoLink;
+        }
+        if (link.status_known) {
+            switch (link.status.imu_state) {
+            case gatr2::kPicoImuInitializing:
+            case gatr2::kPicoImuAligning:
+            case gatr2::kPicoImuRetrying: s.health |= gatr2::kHealthImuInitializing; break;
+            case gatr2::kPicoImuFailed: s.health |= gatr2::kHealthImuFailed; break;
+            default: break;
+            }
+        }
+    }
+    if (in.localization.stationary()) {
+        s.health |= gatr2::kHealthStationary;
+    }
     s.calibration = calibration(in, profile.get());
     const bool bias_calibrated = profile_host_ != nullptr
                                      ? s.calibration == gatr2::kCalibrationDone
@@ -295,6 +331,7 @@ PublishingOutput BrainLinkPublisher::run(const PublishingInput& in) {
     if (documents_ != nullptr) {
         documents_->update(in.field, in.robot, in.now);
     }
+    out.brain_state = state(in);
 
     const BrainReplyContext& ctx = in.command.reply;
     if (!ctx.pending) {
@@ -328,7 +365,7 @@ PublishingOutput BrainLinkPublisher::run(const PublishingInput& in) {
         break;
     case gatr2::kOpGetState:
         if (ctx.result == gatr2::kResultOk) {
-            reply.state = state(in);
+            reply.state = *out.brain_state;
         }
         break;
     case gatr2::kOpReadDoc:
@@ -346,6 +383,14 @@ PublishingOutput BrainLinkPublisher::run(const PublishingInput& in) {
         reply.control_detail = ctx.control_detail;
         break;
     }
+    case gatr2::kOpReadWheels:
+        if (ctx.result == gatr2::kResultOk) {
+            reply.wheel_count = ctx.wheel_count;
+            for (uint8_t i = 0; i < ctx.wheel_count && i < gatr2::kWheelReadingsMax; ++i) {
+                reply.wheels[i] = ctx.wheels[i];
+            }
+        }
+        break;
     default: break;
     }
 

@@ -35,6 +35,7 @@
 #include "core/records.h"
 #include "math/transforms.h"
 #include "state/robot_state.h"
+#include "state/stillness.h"
 
 namespace navigatr
 {
@@ -62,10 +63,12 @@ struct RobotObservationInput {
 };
 
 // Readiness for publishers and inspection: a model that is still
-// calibrating produces nothing yet and says why.
+// calibrating produces nothing yet and says why. stillness is set by models
+// that run a stationary window.
 struct ObservationReadiness {
-    bool        ready = false;
-    std::string note;
+    bool            ready = false;
+    std::string     note;
+    StillnessStatus stillness;
 };
 
 class RobotObservationFunction

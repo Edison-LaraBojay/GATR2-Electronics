@@ -25,6 +25,7 @@ set(TEST_SOURCES
     resources_gtest.cpp
     pros_usb_link_gtest.cpp
     half_duplex_gtest.cpp
+    pico_link_gtest.cpp
     geometry_resources_gtest.cpp
     sensors_gtest.cpp
     stages_gtest.cpp
@@ -39,6 +40,7 @@ set(TEST_SOURCES
     brain_io_gtest.cpp
     brain_imu_bench_gtest.cpp
     brain_profile_gtest.cpp
+    stationary_window_gtest.cpp
     world_estimation_gtest.cpp
     vision_targets_gtest.cpp
     system_build_gtest.cpp

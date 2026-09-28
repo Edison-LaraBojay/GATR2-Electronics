@@ -2,6 +2,10 @@
 
 #include "impl/resources/pico_telemetry.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <random>
 #include <vector>
 
 #include "core/diagnostics.h"
@@ -10,14 +14,50 @@
 namespace navigatr
 {
 
-PicoTelemetry::PicoTelemetry(std::shared_ptr<SerialLink> link, std::string diagnostics_id)
-    : link_(std::move(link)), diagnostics_id_(std::move(diagnostics_id)) {}
+namespace
+{
+
+bool settled(const PicoRequestStatus& s) {
+    return s.state == PicoRequestState::kCompleted || s.state == PicoRequestState::kFailed;
+}
+
+// Pico failure detail as a Brain link CONTROL detail.
+uint8_t controlDetail(uint8_t pico_detail) {
+    switch (pico_detail) {
+    case gatr2::kPicoDetailWrongTarget: return gatr2::kControlDetailPicoLink;
+    case gatr2::kPicoDetailImuAbsent: return gatr2::kControlDetailImuAbsent;
+    default: return gatr2::kControlDetailPicoRefused;
+    }
+}
+
+uint16_t randomRequestId() {
+    std::random_device device;
+    const uint64_t     now = static_cast<uint64_t>(steadyNowUs());
+    std::seed_seq      seed{device(), device(), static_cast<unsigned>(now),
+                       static_cast<unsigned>(now >> 32)};
+    std::mt19937       random(seed);
+    return static_cast<uint16_t>(random());
+}
+
+MonotonicTime later(MonotonicTime t, int64_t ms) { return MonotonicTime{t.ms + ms, t.domain}; }
+
+constexpr double kMaxTimeoutS = 3600.0; // longer bounds are clamped
+
+} // namespace
+
+PicoTelemetry::PicoTelemetry(std::shared_ptr<SerialLink> link, std::string diagnostics_id,
+                             uint16_t first_request_id)
+    : link_(std::move(link)), diagnostics_id_(std::move(diagnostics_id)) {
+    next_request_id_ = first_request_id != 0 ? first_request_id : randomRequestId();
+    if (next_request_id_ == 0) {
+        next_request_id_ = 1;
+    }
+}
 
 void PicoTelemetry::reset() {
     reader_.reset();
-    have_seq_    = false;
-    have_stamp_  = false;
-    polled_once_ = false;
+    have_seq_        = false;
+    polled_once_     = false;
     packets_decoded_ = 0;
     for (Channel& c : encoders_) {
         c = Channel{};
@@ -30,28 +70,74 @@ void PicoTelemetry::reset() {
 }
 
 PicoLinkState PicoTelemetry::link() const {
-    std::lock_guard<std::mutex> lock(link_mutex_);
+    std::lock_guard<std::mutex> lock(state_mutex_);
     return link_state_;
 }
 
-uint32_t PicoTelemetry::submit(uint8_t, uint8_t, MonotonicTime, double) {
-    return 0;
+uint32_t PicoTelemetry::submit(uint8_t op, uint8_t arg, MonotonicTime now, double timeout_s) {
+    if (gatr2::picoCommandLen(op) == 0 || !(timeout_s > 0.0) || !now.isSet()) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!link_state_.identity || !link_state_.frames_fresh) {
+        return 0;
+    }
+    Request r;
+    r.handle = next_handle_++;
+    if (next_handle_ == 0) {
+        next_handle_ = 1;
+    }
+    r.request_id   = nextRequestId();
+    r.op           = op;
+    r.arg          = arg;
+    r.target       = link_state_.boot_id;
+    r.deadline     = later(now, std::llround(std::min(timeout_s, kMaxTimeoutS) * 1000.0));
+    r.status.state = PicoRequestState::kSending;
+    requests_.push_back(r);
+
+    // oldest settled record first; an unsettled one only when all are
+    while (requests_.size() > kRequestsKept) {
+        auto victim = requests_.begin();
+        for (auto it = requests_.begin(); it != requests_.end(); ++it) {
+            if (settled(it->status)) {
+                victim = it;
+                break;
+            }
+        }
+        requests_.erase(victim);
+    }
+    return r.handle;
 }
 
-PicoRequestStatus PicoTelemetry::request(uint32_t) const {
+PicoRequestStatus PicoTelemetry::request(uint32_t handle) const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    for (const Request& r : requests_) {
+        if (r.handle == handle) {
+            return r.status;
+        }
+    }
     return PicoRequestStatus{};
 }
 
-void PicoTelemetry::refresh(uint64_t cycle, Diagnostics* diagnostics) {
-    if (polled_once_ && cycle == last_poll_cycle_) {
+uint16_t PicoTelemetry::nextRequestId() {
+    const uint16_t id = next_request_id_;
+    next_request_id_  = static_cast<uint16_t>(next_request_id_ + 1);
+    if (next_request_id_ == 0) {
+        next_request_id_ = 1;
+    }
+    return id;
+}
+
+void PicoTelemetry::refresh(const ExecutionContext& context) {
+    if (polled_once_ && context.cycle == last_poll_cycle_) {
         return;   // already drained this cycle
     }
     polled_once_     = true;
-    last_poll_cycle_ = cycle;
+    last_poll_cycle_ = context.cycle;
     link_dead_       = false;
 
     LinkStats* stats =
-        diagnostics != nullptr ? &diagnostics->links[diagnostics_id_] : nullptr;
+        context.diagnostics != nullptr ? &context.diagnostics->links[diagnostics_id_] : nullptr;
 
     uint8_t buf[256];
     for (;;) {
@@ -59,6 +145,7 @@ void PicoTelemetry::refresh(uint64_t cycle, Diagnostics* diagnostics) {
             link_->readAvailable(MutableByteSpan{buf, sizeof(buf)});
         if (read.closed) {
             link_dead_ = true;
+            reader_.reset();   // a partial frame never joins bytes from a reopened device
             break;
         }
         if (read.bytes == 0) {
@@ -73,47 +160,90 @@ void PicoTelemetry::refresh(uint64_t cycle, Diagnostics* diagnostics) {
             }
             // one rescan can buffer several whole frames
             do {
-                if (reader_.frameType() != gatr2::kFrameSensor) {
-                    continue;
-                }
-                gatr2::SensorSample s{};
-                if (!gatr2::decodeSensorFrame(reader_.frame(), reader_.frameLen(), s)) {
-                    if (stats != nullptr) {
-                        ++stats->decode_errors;
+                const uint8_t type = reader_.frameType();
+                bool          bad  = false;
+                if (type == gatr2::kFrameSensor || type == gatr2::kFrameSensorV2) {
+                    gatr2::SensorSample s{};
+                    bad = !gatr2::decodeSensorFrame(reader_.frame(), reader_.frameLen(), s);
+                    if (!bad) {
+                        applyPacket(s, context.now, stats);
                     }
-                    continue;
+                } else if (type == gatr2::kFramePicoStatus) {
+                    gatr2::PicoStatus s;
+                    bad = !gatr2::decodePicoStatus(reader_.frame(), reader_.frameLen(), s);
+                    if (!bad) {
+                        applyStatus(s, context.now);
+                    }
                 }
-                applyPacket(s, diagnostics);
+                if (bad && stats != nullptr) {
+                    ++stats->decode_errors;
+                }
             } while (reader_.next());
         }
     }
 
-    std::lock_guard<std::mutex> lock(link_mutex_);
-    link_state_.frames_fresh = have_seq_ && !link_dead_;
+    sendDue(context.now, stats);
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    publishLinkState(context.now);
 }
 
-void PicoTelemetry::applyPacket(const gatr2::SensorSample& s, Diagnostics* diagnostics) {
-    if (diagnostics != nullptr) {
-        LinkStats& stats = diagnostics->links[diagnostics_id_];
-        ++stats.packets;
-        if (have_seq_) {
-            stats.seq_gaps += static_cast<uint8_t>(s.seq - last_seq_ - 1);
+void PicoTelemetry::applyPacket(const gatr2::SensorSample& s, MonotonicTime now,
+                                LinkStats* stats) {
+    const MonotonicTime stamp = deviceTime(static_cast<int64_t>(s.stamp_ms));
+
+    // A reboot is a new boot_id, a changed frame version (new firmware), or
+    // the device clock running backwards (v1, or a repeated 16-bit boot_id).
+    bool reboot = false, acquisition = false, imu = false;
+    if (have_frame_) {
+        if (s.identity != last_identity_ || (s.identity && s.boot_id != last_boot_) ||
+            stamp < last_stamp_) {
+            reboot = true;
+        } else if (s.identity) {
+            acquisition = s.acq_epoch != last_acq_;
+            imu         = s.imu_epoch != last_imu_;
+        }
+    }
+
+    if (stats != nullptr) {
+        ++stats->packets;
+        if (have_seq_ && !reboot) {
+            stats->seq_gaps += static_cast<uint8_t>(s.seq - last_seq_ - 1);
         }
     }
     have_seq_ = true;
     last_seq_ = s.seq;
     ++packets_decoded_;
 
-    const MonotonicTime stamp = deviceTime(static_cast<int64_t>(s.stamp_ms));
-    if (have_stamp_ && stamp < last_stamp_) {
-        // the device clock restarted: nothing before this packet shares a
-        // baseline with anything after it
-        ++device_epoch_;
+    if (reboot) {
+        ++reboots_;
+        ++encoder_epoch_;
+        ++imu_epoch_;
+    }
+    if (acquisition) {
+        ++restarts_;
+        ++encoder_epoch_;   // counters zeroed: rebase, never a displacement
+    }
+    if (imu) {
+        ++imu_restarts_;
+        ++imu_epoch_;       // encoders stay continuous
+    }
+    if (reboot || imu) {
+        // nothing before this packet shares a gyro baseline with it
         gyro_have_prev_ = false;
         ++gyro_accum_epoch_;
     }
-    have_stamp_ = true;
-    last_stamp_ = stamp;
+    have_frame_    = true;
+    last_identity_ = s.identity;
+    last_boot_     = s.boot_id;
+    last_acq_      = s.acq_epoch;
+    last_imu_      = s.imu_epoch;
+    last_stamp_    = stamp;
+    last_frame_at_ = now;
+    if (reboot) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        failStale(s.identity, s.boot_id);
+    }
 
     const auto update = [&](Channel& c, int32_t v0, int32_t v1) {
         c.present    = true;
@@ -130,8 +260,7 @@ void PicoTelemetry::applyPacket(const gatr2::SensorSample& s, Diagnostics* diagn
     }
     if (s.mask & gatr2::kSensorGyroZ) {
         // Integrate every decoded packet so batching drops no rotation.
-        // Device reboots (stamp regression) and long gaps reseed instead of
-        // integrating garbage.
+        // Restarts and long gaps reseed instead of integrating garbage.
         if (gyro_have_prev_) {
             const int64_t gap_ms = stamp.ms - gyro_prev_stamp_.ms;
             if (gap_ms > 0 && gap_ms <= kGyroGapMs) {
@@ -151,6 +280,122 @@ void PicoTelemetry::applyPacket(const gatr2::SensorSample& s, Diagnostics* diagn
     if (s.mask & gatr2::kSensorAccelXY) {
         update(accel_, s.accel[0], s.accel[1]);
     }
+}
+
+void PicoTelemetry::applyStatus(const gatr2::PicoStatus& s, MonotonicTime now) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    have_status_ = true;
+    status_      = s;
+    status_at_   = now;
+    for (Request& r : requests_) {
+        if (settled(r.status) || r.target != s.boot_id || r.request_id != s.last_request_id ||
+            r.op != s.last_op) {
+            continue;
+        }
+        switch (s.last_status) {
+        case gatr2::kPicoCommandRunning:
+            r.reported     = true;
+            r.status.state = PicoRequestState::kRunning;
+            break;
+        case gatr2::kPicoCommandCompleted:
+            r.reported = true;
+            r.status   = PicoRequestStatus{PicoRequestState::kCompleted, gatr2::kControlDetailNone};
+            break;
+        case gatr2::kPicoCommandFailed:
+            r.reported = true;
+            r.status =
+                PicoRequestStatus{PicoRequestState::kFailed, controlDetail(s.last_detail)};
+            break;
+        default: break;
+        }
+    }
+}
+
+void PicoTelemetry::failStale(bool identity, uint16_t boot_id) {
+    for (Request& r : requests_) {
+        if (!settled(r.status) && (!identity || r.target != boot_id)) {
+            // the Pico it was meant for is gone; never resent to a new boot
+            r.status = PicoRequestStatus{PicoRequestState::kFailed, gatr2::kControlDetailPicoLink};
+        }
+    }
+}
+
+bool PicoTelemetry::namedByStatus(const Request& r) const {
+    return have_status_ && status_.boot_id == r.target &&
+           status_.last_request_id == r.request_id && status_.last_op == r.op;
+}
+
+void PicoTelemetry::sendDue(MonotonicTime now, LinkStats* stats) {
+    uint8_t  frame[gatr2::kMaxFrameLen];
+    uint16_t len = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        for (Request& r : requests_) {
+            if (!settled(r.status) && now >= r.deadline) {
+                r.status = PicoRequestStatus{PicoRequestState::kFailed,
+                                             r.reported ? gatr2::kControlDetailTimedOut
+                                                        : gatr2::kControlDetailPicoLink};
+            }
+        }
+        if (last_command_at_.isSet() && now - last_command_at_ < kCommandGapMs) {
+            return;
+        }
+        // Unsent first, then the longest unsent. A running command the newest
+        // status already names is left alone: the Pico reports it unasked.
+        Request* due      = nullptr;
+        int64_t  due_sent = 0;
+        for (Request& r : requests_) {
+            if (settled(r.status) ||
+                (r.status.state == PicoRequestState::kRunning && namedByStatus(r))) {
+                continue;
+            }
+            if (r.last_sent.isSet() && now - r.last_sent < kResendMs) {
+                continue;
+            }
+            const int64_t sent =
+                r.last_sent.isSet() ? r.last_sent.ms : std::numeric_limits<int64_t>::min();
+            if (due == nullptr || sent < due_sent) {
+                due      = &r;
+                due_sent = sent;
+            }
+        }
+        if (due == nullptr) {
+            return;
+        }
+        gatr2::PicoCommand command;
+        command.op             = due->op;
+        command.request_id     = due->request_id;
+        command.target_boot_id = due->target;
+        command.imu_enabled    = due->arg;
+        command.imu_port       = due->arg;
+        len                    = gatr2::encodePicoCommand(command, frame, sizeof(frame));
+        due->last_sent         = now;
+        last_command_at_       = now;
+    }
+    if (len == 0) {
+        return;
+    }
+    const SerialWriteResult written = link_->write(ByteSpan{frame, len});
+    if (!written.ok && stats != nullptr) {
+        ++stats->tx_errors;
+    }
+}
+
+void PicoTelemetry::publishLinkState(MonotonicTime now) {
+    PicoLinkState& l = link_state_;
+    l.frames_fresh   = have_frame_ && !link_dead_ && now.isSet() &&
+                     now - last_frame_at_ <= kFrameFreshMs;
+    l.identity     = have_frame_ && last_identity_;
+    l.boot_id      = l.identity ? last_boot_ : 0;
+    l.acq_epoch    = l.identity ? last_acq_ : 0;
+    l.imu_epoch    = l.identity ? last_imu_ : 0;
+    l.reboots      = reboots_;
+    l.restarts     = restarts_;
+    l.imu_restarts = imu_restarts_;
+    l.status_known = have_status_ && l.identity && status_.boot_id == last_boot_;
+    l.status       = l.status_known ? status_ : gatr2::PicoStatus{};
+    l.last_frame   = last_frame_at_;
+    l.last_status  = status_at_;
 }
 
 namespace
@@ -233,7 +478,7 @@ ResourceInstance make_pico_telemetry(const ConfigNode& node,
     auto telemetry = std::make_shared<PicoTelemetry>(std::move(link), link_id.value);
 
     executable.execute = [telemetry, outputs](const ExecutionContext& context) {
-        telemetry->refresh(context.cycle, context.diagnostics);
+        telemetry->refresh(context);
 
         ResourcePollResult result;
         if (telemetry->linkDead()) {
@@ -242,6 +487,10 @@ ResourceInstance make_pico_telemetry(const ConfigNode& node,
         } else {
             result.state = telemetry->anyPacket() ? SourceState::kValid
                                                   : SourceState::kNoDataYet;
+            if (telemetry->anyPacket() && !telemetry->identity()) {
+                result.diagnostic = "v1 sensor frames: no Pico identity, reboots found by clock "
+                                    "regression, commands unavailable";
+            }
         }
 
         for (ConfiguredOutput& out : *outputs) {
@@ -257,7 +506,8 @@ ResourceInstance make_pico_telemetry(const ConfigNode& node,
                 publication.upstream.source   = "pico:" + telemetry->clockId();
                 publication.upstream.clock    = telemetry->clockId();
                 publication.upstream.sequence = telemetry->packetsDecoded();
-                publication.upstream.epoch    = telemetry->deviceEpoch();
+                publication.upstream.epoch    = out.encoder >= 0 ? telemetry->encoderEpoch()
+                                                                 : telemetry->imuEpoch();
                 if (out.encoder >= 0) {
                     publication.payload = TypedPayload::store(
                         PicoEncoderCounts{channel.value[0]},

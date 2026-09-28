@@ -52,14 +52,28 @@ startup log show which file is selected.
 
 ## Runnable starter files
 
+- **The robot configs (primary):**
+  [`config/override/brain_profile_usb.xml`](../config/override/brain_profile_usb.xml)
+  (Brain link over the V5 Brain USB port) and
+  [`config/override/brain_profile_rs485.xml`](../config/override/brain_profile_rs485.xml)
+  (Brain link over RS-485 on a Smart Port). The Brain sends the robot
+  description as a typed robot profile; these files hold only the Pi's
+  devices, wired ports, model tuning, the field and inspection. Pick the one
+  that matches the Brain's link setting; they differ in nothing else. See
+  [Brain robot profiles](brain_profile.md).
 - The default synthetic demo provides moving localization, rendered tag images,
   landmark estimates, and the browser viewer without hardware.
 - [`config/examples/modular/main.xml`](../config/examples/modular/main.xml) is a
   minimal editable scaffold with separate resource, sensor, pipeline, and
   localization XML files. Its no-op stages produce no robot estimate or reports.
-- The `.xml.in` profiles under `config/override/diagnostics/` and descriptions
-  under `config/shared/robots/` are the real-robot templates. Replace their
-  measurement placeholders and save runnable `.xml` files before using them.
+- The XML-configured robot profiles under `config/override/diagnostics/`
+  (`bench_vex_imu.xml`, `bench_vex_imu_usb.xml`, `parallel_wheels_bno08x*.xml`,
+  the three-wheel `.xml.in` templates) and the descriptions under
+  `config/shared/robots/` describe the robot in Pi XML. They still run and
+  stay tested, but they are the secondary path: every geometry change there
+  is a Pi edit and restart, and they refuse Brain profiles. The `.xml.in`
+  templates need their measurement placeholders replaced and a runnable
+  `.xml` saved before use.
 
 For example, exercise the scaffold for ten cycles:
 
@@ -129,6 +143,16 @@ composition also support inline or referenced sections. A `Robot` groups
 resources and sensors; `Field` accepts its existing single `<Resource>` or
 `<Field>` wrapper. Both main-document forms resolve into the same runtime
 `<System>` before factories run.
+
+## Brain-profiled Localization
+
+A `<Localization>` that holds a `<BrainProfile>` builds no models from XML. It
+starts with noop localization and takes its models from the robot profile the
+Brain sends over the brain_link CommandCollection, which it requires. It may
+hold nothing else; the schema and its defaults are in
+[Brain robot profiles](brain_profile.md#the-configs). Robot geometry never
+appears in such a file, and generated sensor ids start with `profile_`, a
+prefix configured sensors may not use.
 
 `calibration_status` remains a reader-only annotation, including on a reference.
 It never enables a feature, approves a calibration, or suppresses numeric

@@ -133,9 +133,12 @@ public:
     ControlTicket restartAcquisition();
     ControlStatus control(ControlTicket ticket) const;
 
-    // One READ_WHEELS read; the answer lands in wheelReadings(). False without
-    // a session or when busy.
-    bool          requestWheels();
+    // One READ_WHEELS read. 0 when refused (no session, another read
+    // pending) or busy. wheels(ticket) is kPending for a nonzero ticket when
+    // busy. wheelReadings() is the latest Ok reply of any read; busy sets
+    // its busy flag.
+    WheelTicket   requestWheels();
+    WheelStatus   wheels(WheelTicket ticket) const;
     WheelReadings wheelReadings() const;
 
     // Robot profile. setProfile validates with the shared rules and starts

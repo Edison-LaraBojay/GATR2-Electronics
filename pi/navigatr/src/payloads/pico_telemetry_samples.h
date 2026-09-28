@@ -25,7 +25,8 @@ struct PicoGyroRate {
 
     // Integrated over every decoded packet in millidegrees, so a drained
     // batch loses no rotation. accumulated_epoch bumps on every dropped
-    // interval; a difference across epochs is a discontinuity.
+    // interval and every IMU or Pico restart; a difference across epochs is
+    // a discontinuity.
     double   accumulated_mdeg  = 0.0;
     uint64_t accumulated_epoch = 0;
 };

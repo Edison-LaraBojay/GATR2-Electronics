@@ -1,57 +1,55 @@
 # USB localization bench test
 
-Connect Pi USB-A to V5 Brain micro-USB with a data cable. Keep the Brain powered
-by its V5 battery. This bypasses the HAT's RS-485 circuit. The Pico still supplies
-one forward tracking wheel (port 0) and one sideways wheel (port 1) over the
-existing UART; the VEX IMU stays on Brain
-Smart Port 1. Placement, pose replies, localization, and the 3D viewer use the
-existing naviGATR flow. This test has no motor control.
+The current bench: Pi USB-A to the V5 Brain's micro-USB port with a data
+cable, the Brain on its V5 battery. This bypasses the HAT's RS-485 circuit.
+The Pico supplies one forward tracking wheel (encoder port 0, J2) and one
+sideways wheel (port 1, J3) over its UART; the VEX IMU stays on Brain Smart
+Port 1. The Brain program is `brain/localization-test`, which never drives
+motors: push the robot by hand. No camera, AprilTags or external IMU are
+needed.
 
-The Brain test configuration currently selects USB. The service installer still
-defaults to the RS-485 `bench_vex_imu.xml` profile, so pass the USB configuration
-explicitly as shown below.
+The robot is described on the Brain and sent as a robot profile; the Pi runs
+[brain_profile_usb.xml](../config/override/brain_profile_usb.xml). See
+[Brain robot profiles](brain_profile.md) for what the Pi does with it.
 
 ## Brain
 
-In `brain/localization-test/include/robot_config.h`, use `kUseUsbBench = true`
-and `kUseVexImuBench = true`. The Smart Port link setting is ignored in USB mode.
-The starting field pose is still configured by `kStartX`, `kStartY`, and
-`kStartHeadingDegrees`.
+In [brain/robot/gatr2_robot.h](../../../brain/robot/gatr2_robot.h):
 
-With the Brain USB cable connected to the computer, run in a PROS terminal:
+- `kUseUsb = true`;
+- `kSetup = Setup::kTwoWheelVexImu` and `kVexImuPort = 1`;
+- `forwardWheel()` and `sidewaysWheel()`: port, radius (0.024 m,
+  PROVISIONAL), counts per revolution, polarity, gearing, mounting position
+  (UNMEASURED) and measuring direction;
+- the start pose `kStartX`, `kStartY`, `kStartHeadingDegrees`.
 
-```sh
-cd brain/localization-test
-pros make
-pros upload --slot 2 --name localization-test --after screen
-```
-
-Move the cable to the Pi and run the Brain app. Its first screen line must say
-**USB to Pi**. Hold still during IMU calibration. USB text logging is suppressed
-in this mode; do not run a PROS terminal or another serial reader on this link.
+Build and upload `localization-test` as in
+[Brain setup](../../../docs/brain_setup.md#2-build-and-upload). USB text
+logging stays off on this link: do not run a PROS terminal or another serial
+reader on the Brain's user port while the Pi uses it.
 
 ## Pi
 
-After updating the checkout with the USB files, run on the Pi:
+On the Pi, from `pi/navigatr`:
 
 ```sh
-cd ~/GATR2-Electronics/pi/navigatr
 cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DNAVIGATR_BUILD_TESTS=OFF -DNAVIGATR_WITH_LIBCAMERA=OFF
 cmake --build build-bench -j1
-sudo bash tools/install_service.sh --user "$USER" --config config/override/diagnostics/bench_vex_imu_usb.xml
+sudo bash tools/install_service.sh --user "$USER" --config config/override/brain_profile_usb.xml
 sudo systemctl status navigatr --no-pager -l
 ```
 
-The service now starts the USB profile at boot. Its `brain_usb` resource looks
-for the sole VEX V5 USB **user interface** (vendor `2888`, product `0501`, interface
-`02`). It waits and retries if the Brain is absent, so the viewer can still start.
-If auto selection fails or multiple Brains are connected, inspect the devices:
+The service starts this config at boot. Its `brain_usb` resource looks for the
+sole VEX V5 USB **user interface** (vendor `2888`, product `0501`, interface
+`02`) and retries once per second while the Brain is absent, so the viewer
+starts anyway. If auto selection fails or several Brains are connected,
+inspect the devices:
 
 ```sh
 ls -l /dev/ttyACM* /dev/serial/by-id/* 2>/dev/null
 ```
 
-Then replace `path="auto"` in the new XML with the user interface's stable path:
+Then replace `path="auto"` with the user interface's stable path:
 
 ```xml
 <Resource id="brain_usb" type="pros_usb_link">
@@ -59,63 +57,80 @@ Then replace `path="auto"` in the new XML with the user interface's stable path:
 </Resource>
 ```
 
-Do not use the upload/system interface or assume `ttyACM0`/`ttyACM1` numbering is
-stable. This resource has no `DriverEnable`. After editing the XML, run
-`sudo systemctl restart navigatr`.
+Do not use the upload/system interface or assume `ttyACM0`/`ttyACM1`
+numbering is stable. After editing the XML, run `sudo systemctl restart navigatr`.
 
-The profile retains `/dev/ttyAMA0` for the Pico and uses `brain_imu_planar_bench`
-to resolve both translation axes using the configured wheel directions and IMU
-rotation. Port 0 measures forward (+robot x, angle 0 degrees); port 1 measures
-leftward (+robot y, angle 90 degrees). Both contribute full measured travel,
-without averaging the forward and sideways distances together.
+## Run
 
-Wheel radius, offsets, directions, and counts per revolution are editable bench
-defaults. The current radius is 0.024 m, with the forward wheel 0.15 m left of
-the origin and the sideways wheel 0.15 m ahead. Measure actual wheel offsets
-before judging position during turns: the model removes wheel travel caused by
-rotation around the robot origin. `calibration_status` is only a reader annotation.
-Set a wheel's `direction="negative"` if counts decrease during its positive rolling
-direction. The VEX IMU bench path supplies heading, not live pitch/roll.
+1. Start the Pi service and the Brain program with the robot still.
+2. The Pi waits with no pose until the Brain connects. The Brain sends the
+   profile; the Pi log shows `event: profile <id> applied (two wheels + IMU;
+   port 0 ... port 1 ...; IMU Brain VEX smart port 1; footprint ...)`, or the
+   refusal reason.
+3. Hold still while the VEX IMU calibrates on the Brain. The Pi does no IMU
+   calibration with this profile.
+4. The Brain places the robot at its start pose once; its readiness line reads
+   Ready and the pose LIVE. Then push and rotate the robot.
 
-With heading placed at zero and the IMU held still, spin only port 0: field x
-should change. Spin only port 1: field y should change. Reverse each wheel to
-check both signs. At other headings, these body directions rotate into the field
-axes. Test slowly: this bench adapter pairs sensor readings by Pi arrival time.
+The Pi model is `brain_imu_planar_bench`: the VEX IMU gives the rotation, and
+the two wheels resolve forward and sideways travel after removing the travel a
+turn about the robot origin causes. Neither distance is averaged with the
+other. With heading placed at zero and the robot not turning, roll only port
+0: field x changes. Roll only port 1: field y changes. Reverse each to check
+the signs; a wrong sign is the wheel's `reversed` (encoder polarity) flag in
+`gatr2_robot.h`. At other headings these body directions rotate into the field
+axes. Measure the wheel offsets before judging position during turns.
 
-## Placement and viewer
+This bench model pairs wheel and IMU samples by Pi arrival time. It does not
+synchronize the Brain and Pico clocks; test slowly.
 
-Wait for **Link: connected** and **Placement: applied** on the Brain. If the Pi
-was not ready during the first ten seconds, press **A** or tap the bottom screen
-button after it connects. Once **Pose: LIVE** appears, push and rotate the robot.
-USB connection alone does not establish placement or fresh wheel data.
+## Viewer
 
-In a separate **Windows CMD** window, leave this tunnel running:
+From the viewing computer (a Windows CMD window works), leave this running:
 
 ```bat
-ssh -N -L 8765:127.0.0.1:8765 gatr2@gatr2.local
+ssh -N -L 8765:127.0.0.1:8765 <user>@<pi-host>
 ```
 
-Open <http://localhost:8765/>. The same static field and live robot pose are
-displayed. No camera or AprilTag estimation is required; the model stays level
-because this bench IMU path supplies no tilt. Drawn field objects do not block
-localization.
+Open <http://localhost:8765/>. The field, its collision boxes and the robot
+with the profile's footprint are drawn with no camera; the robot stays level
+because this IMU path supplies no tilt. The Brain link panel shows the
+readiness line (link, profile, sensors, map, calibration, placement), the
+profile, the raw wheel readings with their active corrections, and the
+recovery events. See [inspection](inspection.md).
 
 For link diagnosis, inspect `diagnostics.estimation.links` in `/api/snapshot`
-for `brain_usb`, and the Brain's reply/timeout counters. Pi link byte counters
-refer to decoded inner protocol bytes, excluding unrelated console output.
+for `brain_usb`, and the Brain's reply and timeout counters. The Pi's byte
+counters count decoded protocol bytes, not unrelated console output.
 
-## Scope and reverting
+## Cable pulls and restarts
 
-The USB adapter wraps existing protocol frames in bounded uppercase hexadecimal
-lines, avoiding PROS console input control sequences. It lives in the test app;
-the shared communiGATR Smart Port driver and existing Pi UART resource are
-unchanged. Separate USB I/O workers keep the Brain display and protocol polling
-responsive. The Pi resource reconnects when its device reappears. Disconnects
-make poses stale; reconnecting does not automatically reapply a previous placement.
+The VEX IMU samples ride on the Brain link, so a USB outage longer than 250 ms
+stops them: the Pi ends the placement ("sensor lost: brain_vex_imu stale ...:
+place again") and the Brain shows Needs placement. The link itself recovers on
+its own: the Pi reopens the device once per second and the Brain resumes its
+session. Put the robot at the start pose and place it again. A Brain program
+restart does the same; startup placement handles it at program start. See
+[Brain robot profiles](brain_profile.md#sensor-loss-and-recovery).
 
-To return to RS-485, set `kUseUsbBench = false`, check `kNavigatrPort`, rebuild and
-upload the Brain, and install the service with `bench_vex_imu.xml` again. Preserve
-that profile's Pi-specific GPIO number and calibration values. That supplied
-RS-485 profile describes two parallel wheels; for this perpendicular mounting,
-also select `brain_imu_planar_bench` and copy the USB profile's wheel geometry
-and wheel references. Transport selection does not change physical wheel geometry.
+## USB envelope
+
+Each protocol frame travels as one ASCII line: `NG1:` plus the frame in
+uppercase hexadecimal plus a newline. That keeps PROS console control
+sequences out of the stream; lines without the marker are ignored. The Brain
+side is `ProsUsbPort` in communiGATR, with its own I/O tasks so the display and
+polling stay responsive. See [pros_usb_link](../../../docs/navigatr_resources.md#pros_usb_link).
+
+## RS-485 instead
+
+Set `kUseUsb = false` and `kLinkPort` in `gatr2_robot.h`, rebuild and upload,
+and install the service with `config/override/brain_profile_rs485.xml`. Check
+that config's DE GPIO number for the Pi's kernel (see
+[setup](setup.md#serial-resource)). Nothing else changes: the transport never
+changes localization geometry.
+
+The older XML-configured bench profile
+[bench_vex_imu_usb.xml](../config/override/diagnostics/bench_vex_imu_usb.xml)
+describes the same bench in Pi XML. It refuses Brain profiles, and the
+current Brain programs, which always send one, then refuse to place; use it
+only with a Brain client built without a profile.

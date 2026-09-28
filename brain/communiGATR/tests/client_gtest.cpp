@@ -997,6 +997,54 @@ TEST(ClientControl, PendingControlGivesUpAfterControlWait) {
     EXPECT_NEAR(rig.now() - start, 0.5, 0.05);
 }
 
+// Once the Pi answered it holds the record: more lost replies than
+// control_attempts only cost time, and state polls go between the resends.
+TEST(ClientControl, AnsweredControlOutlastsLostReplies) {
+    LinkRig rig;
+    rig.pi.setControlPendingRequests(60);
+    openSession(rig);
+    Client&             client = rig.client();
+    const ControlTicket ticket = client.reinitImu();
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return client.controlStatus(ticket).result == gatr2::kResultPending; }, kLimit));
+    const std::size_t controls = sent(rig.bus, gatr2::kOpControl).size();
+    const std::size_t polls    = sent(rig.bus, gatr2::kOpGetState).size();
+
+    rig.bus.setPiPresent(false);
+    rig.run(2.0);
+    EXPECT_TRUE(client.controlPending());
+    const std::size_t resends = sent(rig.bus, gatr2::kOpControl).size() - controls;
+    EXPECT_GT(resends, static_cast<std::size_t>(client.config().control_attempts));
+    EXPECT_GT(sent(rig.bus, gatr2::kOpGetState).size() - polls, resends);
+
+    rig.bus.setPiPresent(true);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kOk);
+    EXPECT_EQ(rig.pi.controlsExecuted(), 1);
+    const auto frames = sent(rig.bus, gatr2::kOpControl);
+    for (const auto& frame : frames) {
+        EXPECT_EQ(frame, frames.front());
+    }
+}
+
+// A stalled writer (USB transmit task blocked, one-slot queue full) fails
+// writes at once: an answered control survives them.
+TEST(ClientControl, AnsweredControlOutlastsFailedWrites) {
+    LinkRig rig;
+    rig.pi.setControlPendingRequests(40);
+    openSession(rig);
+    Client&             client = rig.client();
+    const ControlTicket ticket = client.reinitImu();
+    ASSERT_TRUE(rig.runUntil(
+        [&] { return client.controlStatus(ticket).result == gatr2::kResultPending; }, kLimit));
+    const uint32_t errors = client.stats().write_errors;
+    rig.bus.failWrites(4 * client.config().control_attempts);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.controlPending(); }, kLimit));
+    EXPECT_EQ(client.stats().write_errors, errors + 4 * client.config().control_attempts);
+    EXPECT_EQ(client.controlStatus(ticket).state, ControlResult::kOk);
+    EXPECT_EQ(rig.pi.controlsExecuted(), 1);
+}
+
 // ---------------------------------------------------------------------------
 // Wheel readings
 // ---------------------------------------------------------------------------
@@ -1004,7 +1052,7 @@ TEST(ClientControl, PendingControlGivesUpAfterControlWait) {
 TEST(ClientWheels, RequestedReadingsArriveOnceWithTheirAges) {
     LinkRig rig;
     Client& client = rig.client();
-    EXPECT_FALSE(client.requestWheels()); // no session
+    EXPECT_EQ(client.requestWheels(), 0u); // no session
     gatr2::WheelReading forward;
     forward.port      = 0;
     forward.flags     = gatr2::kWheelFresh | gatr2::kWheelValid;
@@ -1019,10 +1067,23 @@ TEST(ClientWheels, RequestedReadingsArriveOnceWithTheirAges) {
     rig.pi.setWheels({forward, sideways});
     openSession(rig);
 
-    EXPECT_TRUE(client.requestWheels());
-    ASSERT_TRUE(rig.runUntil([&] { return client.wheelReadings().sequence == 1; }, kLimit));
+    const WheelTicket ticket = client.requestWheels();
+    ASSERT_NE(ticket, 0u);
+    EXPECT_EQ(client.requestWheels(), 0u); // one read at a time
+    EXPECT_EQ(client.wheelStatus(ticket).state, WheelResult::kPending);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.wheelsPending(); }, kLimit));
+    const WheelStatus s = client.wheelStatus(ticket);
+    EXPECT_EQ(s.state, WheelResult::kOk);
+    EXPECT_EQ(s.result, gatr2::kResultOk);
+    EXPECT_EQ(s.readings.sequence, 1u);
+    ASSERT_EQ(s.readings.count, 2);
+    EXPECT_EQ(s.readings.wheels[1].counts, -2000);
+    EXPECT_EQ(client.wheelStatus(ticket + 1).state, WheelResult::kNone);
+    EXPECT_EQ(client.wheelStatus(0).state, WheelResult::kNone);
     const WheelReadings& r = client.wheelReadings();
+    EXPECT_EQ(r.sequence, 1u);
     EXPECT_EQ(r.result, gatr2::kResultOk);
+    EXPECT_FALSE(r.busy);
     ASSERT_EQ(r.count, 2);
     EXPECT_EQ(r.wheels[0].counts, 12345);
     EXPECT_EQ(r.wheels[0].travel_um, 456789);
@@ -1035,6 +1096,52 @@ TEST(ClientWheels, RequestedReadingsArriveOnceWithTheirAges) {
     rig.run(0.3);
     EXPECT_EQ(client.wheelReadings().sequence, 1u);
     EXPECT_EQ(sent(rig.bus, gatr2::kOpReadWheels).size(), 1u);
+}
+
+// Every read settles: a refusal, a lost send and a lost session are each
+// visible on the ticket, and none of them looks like new readings.
+TEST(ClientWheels, RefusalTimeoutAndSessionLossSettleTheTicket) {
+    LinkRig rig;
+    rig.pi.setProfileMode(true); // no profile applied: NotReady
+    openSession(rig);
+    Client& client = rig.client();
+
+    WheelTicket ticket = client.requestWheels();
+    ASSERT_TRUE(rig.runUntil([&] { return !client.wheelsPending(); }, kLimit));
+    EXPECT_EQ(client.wheelStatus(ticket).state, WheelResult::kRejected);
+    EXPECT_EQ(client.wheelStatus(ticket).result, gatr2::kResultNotReady);
+    EXPECT_EQ(client.wheelReadings().sequence, 0u);
+    EXPECT_EQ(client.wheelReadings().result, gatr2::kResultNotReady);
+
+    // Lost request: one send, then kTimedOut; never resent.
+    ticket = client.requestWheels();
+    ASSERT_NE(ticket, 0u);
+    runUntilSent(rig, gatr2::kOpReadWheels);
+    rig.bus.fault(BusFault::kDropRequest);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.wheelsPending(); }, kLimit));
+    EXPECT_EQ(client.wheelStatus(ticket).state, WheelResult::kTimedOut);
+    rig.run(0.3);
+    EXPECT_EQ(sent(rig.bus, gatr2::kOpReadWheels).size(), 2u);
+
+    // A failed write is a lost send too. Ten failures in a row span more
+    // than a poll period, so the read is among them.
+    ticket = client.requestWheels();
+    const uint32_t errors = client.stats().write_errors;
+    rig.bus.failWrites(10);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.wheelsPending(); }, kLimit));
+    EXPECT_EQ(client.wheelStatus(ticket).state, WheelResult::kTimedOut);
+    ASSERT_TRUE(
+        rig.runUntil([&] { return client.stats().write_errors == errors + 10; }, kLimit));
+
+    // Pi restart with a read queued or in flight.
+    ticket = client.requestWheels();
+    rig.pi.restart(0x4242);
+    ASSERT_TRUE(rig.runUntil([&] { return !client.wheelsPending(); }, kLimit));
+    EXPECT_EQ(client.wheelStatus(ticket).state, WheelResult::kSessionLost);
+    EXPECT_EQ(client.requestWheels(), 0u); // no session yet
+    ASSERT_TRUE(rig.runUntil([&] { return client.ready(); }, kLimit));
+    EXPECT_NE(client.requestWheels(), 0u);
+    EXPECT_EQ(client.wheelReadings().sequence, 0u);
 }
 
 // ---------------------------------------------------------------------------

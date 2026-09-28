@@ -7,12 +7,14 @@
 // documents and notices when updates stop arriving.
 //
 // For headless checks and scripts, #status carries data-state, data-snapshots,
-// data-frames, data-session, data-cycle and data-errors, and window.__navigatr
-// exposes counters, the last documents and the error list.
+// data-frames, data-session, data-cycle, data-errors and data-readiness (the
+// Brain link readiness state, empty without a Brain link), and
+// window.__navigatr exposes counters, the last documents and the error list.
 
 import { FieldScene } from './field_scene.js';
 import { CameraPanel } from './camera_panel.js';
 import { Diagnostics } from './diagnostics.js';
+import { LinkPanel, readinessOf } from './link_panel.js';
 import { fmt, fmtMs } from './transforms.js';
 
 const STALE_MS = 1000;
@@ -60,6 +62,7 @@ if (!scene.available) {
 }
 const cameraPanel = new CameraPanel(document.getElementById('camera'));
 const diagnostics = new Diagnostics(document.getElementById('diag'), sendJson);
+const linkPanel = new LinkPanel(document.getElementById('link'));
 
 document.getElementById('btn-reset').addEventListener('click', () => {
     scene.resetView();
@@ -71,6 +74,10 @@ document.getElementById('btn-top').addEventListener('click', () => {
 });
 document.getElementById('btn-follow').addEventListener('click', () => {
     setFollowButton(!scene.followRobot);
+});
+document.getElementById('btn-planning').addEventListener('click', (e) => {
+    scene.setPlanningVisible(!scene.showPlanning);
+    e.target.classList.toggle('active', scene.showPlanning);
 });
 
 function setFollowButton(on) {
@@ -196,6 +203,7 @@ function onSnapshot(doc) {
     scene.updateSnapshot(doc, state.hello);
     cameraPanel.updateSnapshot(doc);
     diagnostics.updateSnapshot(doc);
+    linkPanel.update(doc, state.hello);
     renderLandmarks(doc);
     setConnection('live');
     updateStatus();
@@ -264,6 +272,12 @@ function updateStatus() {
     const elapsed = Math.max(0, performance.now() - state.lastReceiptMs);
     const age = (value) => typeof value === 'number' ? value + elapsed : value;
     const att = r.attitude || {};
+    const ready = readinessOf(snap, state.hello);
+    statusEl.dataset.readiness = ready ? ready.overall.state : '';
+    if (ready) {
+        badgesEl.appendChild(badge(ready.overall.state === 'ready' ? 'Brain link ready' : ready.overall.text,
+            ready.overall.cls, 'readiness'));
+    }
     if (!r.valid) {
         badgesEl.appendChild(badge('localization unavailable', 'bad', 'localization-unavailable'));
     } else if (!r.initialized) {
