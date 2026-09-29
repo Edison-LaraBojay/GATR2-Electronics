@@ -27,50 +27,68 @@ namespace robot_config
 constexpr double kDeg = investigatr::kPi / 180.0;
 
 // ---------------------------------------------------------------------------
-// Drivetrain. Tank is the current robot; the mecanum settings are a complete
-// example for a mecanum chassis.
+// Drivetrain. Pick one, then fill in its block below.
+//   kTank     left and right sides, 1 to 4 motors per side
+//   kMecanum  four wheels, each driven on its own, 1 to 4 motors per wheel
+//             (usually one)
+//
+// Motors are {Smart Port, reversed}. reversed = true for a motor that spins
+// backward when told to drive forward (usually every motor on one side).
+// Check with the wheels off the ground: sticks forward slowly, every driven
+// wheel must roll forward. A port
+// may not repeat or be the VEX IMU port; the program refuses to drive if one
+// does.
+//
+// Every value marked PLACEHOLDER below is a guess. Replace it with your
+// robot's value before driving.
 // ---------------------------------------------------------------------------
 enum class Drivetrain : uint8_t { kTank, kMecanum };
 constexpr Drivetrain kDrivetrain = Drivetrain::kTank;
 
-// PLACEHOLDER ports. Smart Port 1 is the VEX IMU; the port check at startup
-// refuses to drive if a motor shares a port with any active device.
+// Shared wheel settings, the same for tank and mecanum.
+inline actugatr::WheelDrive drivenWheels(double diameter, double gear_ratio) {
+    actugatr::WheelDrive w;
+    // PLACEHOLDER: motor cartridge, kRed 100 rpm, kGreen 200, kBlue 600.
+    w.cartridge = actugatr::Cartridge::kBlue;
+    // Share of top speed used, headroom for the motor's speed loop.
+    w.usable_fraction = 0.9;
+    w.wheel_diameter  = diameter;
+    w.gear_ratio      = gear_ratio;
+    return w;
+}
+
 inline actugatr::TankConfig tank() {
     actugatr::TankConfig c;
-    c.left.count             = 3;
-    c.left.motors[0]         = {11, true};
-    c.left.motors[1]         = {12, true};
-    c.left.motors[2]         = {13, true};
-    c.right.count            = 3;
-    c.right.motors[0]        = {18, false};
-    c.right.motors[1]        = {19, false};
-    c.right.motors[2]        = {20, false};
-    c.track_width            = 0.30;   // PLACEHOLDER, driven wheel contact spacing
-    c.wheels.wheel_diameter  = 0.1016; // PLACEHOLDER, 4 in driven wheels
-    c.wheels.gear_ratio      = 0.6;    // PLACEHOLDER, 36:60, wheel turns per motor turn
-    c.wheels.cartridge       = actugatr::Cartridge::kBlue;
-    c.wheels.usable_fraction = 0.9;
-    c.stop_mode              = actugatr::StopMode::kBrake;
+    // PLACEHOLDER: every motor on the left side, then every motor on the right.
+    c.left  = actugatr::motorGroup({{11, true}, {12, true}, {13, true}, {14, true}});
+    c.right = actugatr::motorGroup({{17, false}, {18, false}, {19, false}, {20, false}});
+    // PLACEHOLDER: meters from the center of the left wheels to the center
+    // of the right wheels, where they touch the floor.
+    c.track_width = 0.30;
+    // PLACEHOLDER: drivenWheels(diameter, gear_ratio).
+    //   diameter    driven wheel, meters, measured (4 in 0.1016, 3.25 in 0.0826)
+    //   gear_ratio  wheel turns per motor turn: motor gear teeth / wheel gear
+    //               teeth (36 driving 60 is 0.6; direct drive 1.0)
+    c.wheels    = drivenWheels(0.1016, 0.6);
+    c.stop_mode = actugatr::StopMode::kBrake;
     return c;
 }
 
 inline actugatr::MecanumConfig mecanum() {
     actugatr::MecanumConfig c;
-    c.front_left.count        = 1;
-    c.front_left.motors[0]    = {11, true};
-    c.front_right.count       = 1;
-    c.front_right.motors[0]   = {18, false};
-    c.rear_left.count         = 1;
-    c.rear_left.motors[0]     = {12, true};
-    c.rear_right.count        = 1;
-    c.rear_right.motors[0]    = {19, false};
-    c.track_width             = 0.30; // PLACEHOLDER
-    c.wheelbase               = 0.28; // PLACEHOLDER
-    c.wheels.wheel_diameter   = 0.1016;
-    c.wheels.gear_ratio       = 1.0;
-    c.wheels.cartridge        = actugatr::Cartridge::kBlue;
-    c.wheels.usable_fraction  = 0.9;
-    c.stop_mode               = actugatr::StopMode::kBrake;
+    // PLACEHOLDER: the motor(s) of each wheel.
+    c.front_left  = actugatr::motorGroup({{11, true}});
+    c.front_right = actugatr::motorGroup({{18, false}});
+    c.rear_left   = actugatr::motorGroup({{12, true}});
+    c.rear_right  = actugatr::motorGroup({{19, false}});
+    // PLACEHOLDER: meters between left and right wheel centers (track_width)
+    // and between front and rear axles (wheelbase). Check: left stick X left
+    // must strafe the robot left.
+    c.track_width = 0.30;
+    c.wheelbase   = 0.28;
+    // PLACEHOLDER: drivenWheels(diameter, gear_ratio), as for tank.
+    c.wheels    = drivenWheels(0.1016, 1.0);
+    c.stop_mode = actugatr::StopMode::kBrake;
     return c;
 }
 
@@ -80,6 +98,8 @@ inline actugatr::MecanumConfig mecanum() {
 // ---------------------------------------------------------------------------
 constexpr double kClearance = 0.06;
 
+// Safe starting limits; raise them after the first runs. Speed and turn rate
+// are also capped at what the drivetrain above can reach.
 inline investigatr::MotionLimits limits() {
     investigatr::MotionLimits l;
     l.max_speed = 0.8; // m/s
@@ -89,7 +109,8 @@ inline investigatr::MotionLimits limits() {
     return l;
 }
 
-// Tuning: see docs/actugatr.md. PLACEHOLDER, not tuned on the robot.
+// PLACEHOLDER gains: starting values, not tuned on the robot. Tune them on
+// the robot: docs/actugatr.md.
 inline actugatr::FollowerConfig follower() {
     actugatr::FollowerConfig f;
     f.position_tolerance = 0.02;
@@ -125,6 +146,8 @@ inline actugatr::DriveOwnerConfig manual() {
 // Tests. PLACEHOLDER destinations for the Override field from the
 // placeholder start pose (1.2, 1.8, 0); pick clear floor space on your
 // field. brain_link_e2e_gtest runs the same three.
+// Poses are {x, y, heading}: meters from the field origin (the inside
+// bottom left corner of the field diagram), heading CCW from +x.
 // ---------------------------------------------------------------------------
 // Direct: field origin reference, no obstacles checked. 0.5 m north.
 constexpr investigatr::Pose kDirectGoal{1.2, 2.3, 90.0 * kDeg};

@@ -55,6 +55,17 @@ investigatr::MotionModel baseModel(const investigatr::Footprint& footprint, Mete
 
 } // namespace
 
+MotorGroup motorGroup(std::initializer_list<MotorPort> motors) {
+    MotorGroup group;
+    if (motors.size() > kMaxMotorsPerGroup) {
+        return group;
+    }
+    for (const MotorPort& motor : motors) {
+        group.motors[group.count++] = motor;
+    }
+    return group;
+}
+
 MetersPerSecond maxWheelSpeed(const WheelDrive& w) {
     return cartridgeRpm(w.cartridge) * w.usable_fraction * w.gear_ratio * investigatr::kPi *
            w.wheel_diameter / 60.0;

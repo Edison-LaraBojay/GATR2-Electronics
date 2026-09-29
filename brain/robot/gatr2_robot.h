@@ -43,7 +43,9 @@ constexpr int32_t kLinkBaud     = 115200; // RS-485 only, must match the Pi
 enum class Setup : uint8_t { kTwoWheelVexImu, kTwoWheelPicoImu, kThreeWheelPicoImu };
 constexpr Setup kSetup = Setup::kTwoWheelVexImu;
 
-// VEX IMU, read by the Brain (kTwoWheelVexImu only).
+// VEX IMU, read by the Brain (kTwoWheelVexImu only). PLACEHOLDER: the Smart
+// Port it is plugged into. Mount it flat and right side up; there is no
+// heading invert setting.
 constexpr uint8_t kVexImuPort = 1;
 
 // VEX IMU mounting for the viewer's roll and pitch: the direction its +x
@@ -71,20 +73,29 @@ constexpr uint32_t kTelemetryPeriodMs = 100;
 //   measured   travel_scale from the wheel calibration in locaGATR;
 //              keep 1.0 until calibrated, never use it to hide a wrong radius
 // ---------------------------------------------------------------------------
-constexpr double   kTrackingRadius = 0.024; // UNMEASURED, provisional 48 mm wheel
-constexpr uint32_t kCountsPerRev   = 4000;  // AS5047P ABI default. CONFIRM for your encoder
+// UNMEASURED: tracking wheel radius, meters = measured diameter / 2.
+constexpr double kTrackingRadius = 0.024;
+// UNMEASURED: encoder counts per encoder shaft turn, every edge counted:
+// 4 x the encoder's pulses per rev (AS5047P default 1000 PPR = 4000).
+constexpr uint32_t kCountsPerRev = 4000;
 
+// Per wheel, measured from the robot origin to where the wheel touches the
+// floor: x meters forward (negative behind), y meters left (negative right).
+// reversed: set true if the locaGATR Wheels page reads negative when you
+// push the robot forward (forward wheel) or left (sideways wheel).
+// gear_ratio: encoder turns per wheel turn, 1.0 with the encoder on the
+// wheel's axle.
 inline communigatr::TrackingWheel forwardWheel() {
     communigatr::TrackingWheel w;
     w.encoder_port   = 0;
     w.radius         = kTrackingRadius;
     w.counts_per_rev = kCountsPerRev;
-    w.x              = 0.0;  // UNMEASURED
-    w.y              = 0.15; // UNMEASURED, left of the origin
-    w.angle          = 0.0;  // measures forward travel
-    w.reversed       = false;
-    w.gear_ratio     = 1.0;
-    w.travel_scale   = 1.0;
+    w.x              = 0.0;   // UNMEASURED
+    w.y              = 0.15;  // UNMEASURED
+    w.angle          = 0.0;   // measures forward travel
+    w.reversed       = false; // UNMEASURED
+    w.gear_ratio     = 1.0;   // PLACEHOLDER
+    w.travel_scale   = 1.0;   // from the locaGATR calibration, 1.0 until then
     return w;
 }
 
@@ -93,12 +104,12 @@ inline communigatr::TrackingWheel sidewaysWheel() {
     w.encoder_port   = 1;
     w.radius         = kTrackingRadius;
     w.counts_per_rev = kCountsPerRev;
-    w.x              = 0.15; // UNMEASURED, ahead of the origin
-    w.y              = 0.0;  // UNMEASURED
+    w.x              = 0.15;        // UNMEASURED
+    w.y              = 0.0;         // UNMEASURED
     w.angle          = 90.0 * kDeg; // measures leftward travel
-    w.reversed       = false;
-    w.gear_ratio     = 1.0;
-    w.travel_scale   = 1.0;
+    w.reversed       = false;       // UNMEASURED
+    w.gear_ratio     = 1.0;         // PLACEHOLDER
+    w.travel_scale   = 1.0;         // from the locaGATR calibration, 1.0 until then
     return w;
 }
 
@@ -118,7 +129,9 @@ inline communigatr::TrackingWheel rightWheel() {
     return w;
 }
 
-// Robot outline about the origin, for planning and the viewer. PLACEHOLDER.
+// Robot outline for planning and the viewer. PLACEHOLDER: meters from the
+// robot origin to the {front, back, left, right} edge, counting anything
+// that sticks out.
 constexpr investigatr::Footprint kFootprint{0.23, 0.23, 0.23, 0.23};
 
 // Pi IMU bias calibration settings; zeros keep the Pi defaults (2 s still
@@ -159,7 +172,10 @@ constexpr bool usesVexImu() {
 }
 
 // ---------------------------------------------------------------------------
-// Starting field pose, applied once when a program starts. Meters, degrees.
+// Starting field pose, applied once when a program starts: put the robot
+// here before starting it. x, y meters from the field origin (the inside
+// bottom left corner of the field diagram); heading degrees CCW from +x
+// (0 faces right on the diagram).
 // PLACEHOLDER: open floor west of the center goal. With this footprint and
 // the testing clearance, the corner pockets between the wall and the two
 // nearest goals (around (0.6, 0.6) and the other corners) are closed to

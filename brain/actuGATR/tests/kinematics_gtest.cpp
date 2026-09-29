@@ -167,6 +167,29 @@ TEST(Drivetrain, ConfigValidation) {
     EXPECT_FALSE(valid(m, &why));
 }
 
+TEST(Drivetrain, MotorGroupFromList) {
+    const MotorGroup four = motorGroup({{11, true}, {12, true}, {13, false}, {14, true}});
+    ASSERT_EQ(four.count, 4u);
+    EXPECT_EQ(four.motors[2].port, 13);
+    EXPECT_FALSE(four.motors[2].reversed);
+    EXPECT_TRUE(four.motors[3].reversed);
+
+    TankConfig t;
+    t.left                  = four;
+    t.right                 = motorGroup({{17, false}});
+    t.track_width           = 0.3;
+    t.wheels.wheel_diameter = 0.08;
+    const char* why         = nullptr;
+    EXPECT_TRUE(valid(t, &why)) << why;
+
+    // Too many motors or none: an empty group, refused.
+    t.left = motorGroup({{1, false}, {2, false}, {3, false}, {4, false}, {5, false}});
+    EXPECT_EQ(t.left.count, 0u);
+    EXPECT_FALSE(valid(t, &why));
+    t.left = motorGroup({});
+    EXPECT_FALSE(valid(t, &why));
+}
+
 TEST(Drivetrain, GroupOrderMatchesKinematics) {
     MecanumConfig    m;
     const MotorGroup* g[kMaxWheelGroups] = {};

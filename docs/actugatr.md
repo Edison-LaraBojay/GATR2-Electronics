@@ -115,9 +115,8 @@ The followers execute a path one segment at a time:
 
 ```cpp
 actugatr::TankConfig tank;
-tank.left.count  = 3;
-tank.left.motors[0] = {11, true}; // Smart Port, reversed
-// ...
+tank.left  = actugatr::motorGroup({{11, true}, {12, true}});   // {Smart Port, reversed}, 1..4 per side
+tank.right = actugatr::motorGroup({{17, false}, {18, false}});
 tank.track_width = 0.30;           // driven wheel contact spacing
 tank.wheels.wheel_diameter = 0.1016;
 tank.wheels.gear_ratio     = 0.6;  // wheel turns per motor turn

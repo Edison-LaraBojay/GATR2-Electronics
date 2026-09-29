@@ -6,6 +6,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 
 #include "actugatr/kinematics.h"
 #include "investigatr/motion_model.h"
@@ -30,6 +31,10 @@ struct MotorGroup {
     std::size_t count = 0;
     MotorPort   motors[kMaxMotorsPerGroup];
 };
+
+// A group from its motors: motorGroup({{11, true}, {12, true}}). More than
+// kMaxMotorsPerGroup gives an empty group, which valid() refuses.
+MotorGroup motorGroup(std::initializer_list<MotorPort> motors);
 
 struct WheelDrive {
     Meters    wheel_diameter  = 0;   // driven wheel
