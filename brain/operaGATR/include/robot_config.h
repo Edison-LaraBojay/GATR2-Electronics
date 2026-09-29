@@ -25,6 +25,7 @@ namespace robot_config
 {
 
 constexpr double kDeg = investigatr::kPi / 180.0;
+constexpr double kInch = 0.0254;
 
 // ---------------------------------------------------------------------------
 // Drivetrain. Pick one, then fill in its block below.
@@ -48,7 +49,7 @@ constexpr Drivetrain kDrivetrain = Drivetrain::kTank;
 // Shared wheel settings, the same for tank and mecanum.
 inline actugatr::WheelDrive drivenWheels(double diameter, double gear_ratio) {
     actugatr::WheelDrive w;
-    // PLACEHOLDER: motor cartridge, kRed 100 rpm, kGreen 200, kBlue 600.
+    // Installed blue 600 RPM cartridges.
     w.cartridge = actugatr::Cartridge::kBlue;
     // Share of top speed used, headroom for the motor's speed loop.
     w.usable_fraction = 0.9;
@@ -73,14 +74,10 @@ inline actugatr::TankConfig tank() {
         {12, false}, // rear
         {14, false}, // aux
     });
-    // PLACEHOLDER: meters from the center of the left wheels to the center
-    // of the right wheels, where they touch the floor.
-    c.track_width = 0.30;
-    // PLACEHOLDER: drivenWheels(diameter, gear_ratio).
-    //   diameter    driven wheel, meters, measured (4 in 0.1016, 3.25 in 0.0826)
-    //   gear_ratio  wheel turns per motor turn: motor gear teeth / wheel gear
-    //               teeth (36 driving 60 is 0.6; direct drive 1.0)
-    c.wheels    = drivenWheels(0.1016, 0.6);
+    // Full left-to-right driven-wheel center spacing, 10.65 inches.
+    c.track_width = 10.65 * kInch;
+    // 2.75-inch driven wheels, 1:1 external gearing (wheel turns/motor turn).
+    c.wheels    = drivenWheels(2.75 * kInch, 1.0);
     c.stop_mode = actugatr::StopMode::kBrake;
     return c;
 }
@@ -154,14 +151,15 @@ inline actugatr::DriveOwnerConfig manual() {
 }
 
 // ---------------------------------------------------------------------------
-// Tests. PLACEHOLDER destinations for the Override field from the
-// placeholder start pose (1.2, 1.8, 0); pick clear floor space on your
-// field. brain_link_e2e_gtest runs the same three.
+// Direct floor test from initial pose (0, 0, 0). A plans from the latest
+// localized pose to the fixed destination; it never resets the start pose.
+// X/Y destinations remain examples for the Override field; choose a valid
+// field placement before using them. The origin start overlaps the boundary.
 // Poses are {x, y, heading}: meters from the field origin (the inside
 // bottom left corner of the field diagram), heading CCW from +x.
 // ---------------------------------------------------------------------------
-// Direct: field origin reference, no obstacles checked. 0.5 m north.
-constexpr investigatr::Pose kDirectGoal{1.2, 2.3, 90.0 * kDeg};
+// Direct: (55 inches, 70 inches, 90 degrees), no obstacles checked.
+constexpr investigatr::Pose kDirectGoal{55.0 * kInch, 70.0 * kInch, 90.0 * kDeg};
 // Avoiding: field origin reference, around the center goal.
 constexpr investigatr::Pose kAvoidGoal{2.4, 1.8, 0.0};
 // Landmark relative: 0.45 m on the landmark's +x side, facing it.

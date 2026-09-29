@@ -35,16 +35,29 @@ void DriveRequests::stop() {
 DriveRequest DriveRequests::take() {
     const DriveRequest r = pending_;
     pending_             = DriveRequest{};
+    // A failed publication may leave a taken request without a visible
+    // result. An empty take must not expose the older idle snapshot again.
+    if (r.kind != DriveRequest::Kind::kNone) {
+        in_flight_ = r;
+    }
     return r;
+}
+
+void DriveRequests::publish(const DriveSnapshot& snapshot) {
+    published_ = snapshot;
+    in_flight_ = DriveRequest{};
 }
 
 DriveSnapshot DriveRequests::snapshot() const {
     DriveSnapshot s = published_;
-    if (pending_.kind == DriveRequest::Kind::kGoTo) {
+    const DriveRequest& request = pending_.kind != DriveRequest::Kind::kNone
+                                      ? pending_
+                                      : in_flight_;
+    if (request.kind == DriveRequest::Kind::kGoTo) {
         s.motion            = MotionStatus{};
-        s.motion.command_id = pending_.id;
+        s.motion.command_id = request.id;
         s.motion.state      = MotionState::kWaiting;
-        s.motion.mode       = pending_.mode;
+        s.motion.mode       = request.mode;
         s.mode              = DriveMode::kNavigate;
     }
     return s;
@@ -55,9 +68,10 @@ bool moving(const DriveSnapshot& s) {
            !isTerminal(s.motion.state);
 }
 
-bool sendManual(const ManualDemand& d, bool requested_this_cycle, const DriveSnapshot& s) {
+bool sendManual(const ManualDemand& d, bool requested_this_cycle, const DriveSnapshot& s,
+                bool status_current) {
     const bool sticks = d.forward != 0 || d.strafe != 0 || d.turn != 0;
-    return sticks || (!requested_this_cycle && !moving(s));
+    return sticks || (status_current && !requested_this_cycle && !moving(s));
 }
 
 void apply(const DriveRequest& request, DriveOwner& owner) {

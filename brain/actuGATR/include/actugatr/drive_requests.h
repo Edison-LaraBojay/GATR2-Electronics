@@ -40,16 +40,18 @@ public:
     void      manual(const ManualDemand& demand, Seconds now);
     void      stop();
 
-    // Drive task: the pending request, cleared.
+    // Drive task: take the pending request. Keep its status visible until
+    // publish(), while the task applies it outside the request mutex.
     DriveRequest take();
-    void         publish(const DriveSnapshot& snapshot) { published_ = snapshot; }
+    void         publish(const DriveSnapshot& snapshot);
 
-    // The last published snapshot; a goTo the task has not taken yet shows
-    // as waiting under its id, so the caller never sees it as idle.
+    // The last published snapshot; a pending or in-flight goTo shows as
+    // waiting under its id, so the caller never sees it as idle.
     DriveSnapshot snapshot() const;
 
 private:
     DriveRequest  pending_;
+    DriveRequest  in_flight_;
     DriveSnapshot published_;
     CommandId     last_id_ = 0;
 };
@@ -57,14 +59,15 @@ private:
 // Drive task: hands a taken request to the owner.
 void apply(const DriveRequest& request, DriveOwner& owner);
 
-// A command that has not ended, including one requested but not yet taken.
+// A command that has not ended, including one awaiting task publication.
 bool moving(const DriveSnapshot& snapshot);
 
 // Operator loop rule for manual input. Sticks off center always take over.
-// Centered sticks send a zero demand only while nothing moves, and never in
-// the cycle that requested a command: the demand would replace that request
-// (latest wins) or cancel it.
+// Centered sticks send a zero demand only with a current status showing
+// nothing moving, and never in the cycle that requested a command: the
+// demand would replace that request (latest wins) or cancel it. A failed
+// status read must not authorize zero demand using an older idle snapshot.
 bool sendManual(const ManualDemand& demand, bool requested_this_cycle,
-                const DriveSnapshot& snapshot);
+                const DriveSnapshot& snapshot, bool status_current = true);
 
 } // namespace actugatr

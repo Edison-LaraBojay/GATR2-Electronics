@@ -512,9 +512,10 @@ void opcontrol() {
                 d = actugatr::ManualDemand{};
             }
             // Sticks take over from a running test; otherwise the test keeps
-            // the drive. A fresh read shows a test requested above as waiting.
-            g_task->status(drive);
-            if (actugatr::sendManual(d, requested, drive)) {
+            // the drive. A busy read may leave an old idle snapshot, which
+            // must not turn centered sticks into a cancellation of a new test.
+            const bool status_current = g_task->status(drive);
+            if (actugatr::sendManual(d, requested, drive, status_current)) {
                 g_task->manual(d);
             }
         }

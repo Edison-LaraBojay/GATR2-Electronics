@@ -226,7 +226,7 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 
 | Button | Test |
 |---|---|
-| A | `goToDirect(kDirectGoal)`: straight moves from the field origin reference, no obstacle checks |
+| A | `goToDirect(kDirectGoal)`: from the current pose to the fixed (55 inches, 70 inches, 90 degrees) destination, relative to the field origin; no obstacle checks |
 | X | `goToAvoiding(kAvoidGoal)`: routes around the field's obstacle boxes |
 | Y | `goToAvoiding(kLandmarkOffset, landmark())`: relative to a named landmark from the generated `Field` table. Without a camera it uses the landmark's nominal map pose (`kRequireObservedLandmark = false`). |
 
@@ -235,13 +235,21 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 - The screen shows the command state and reason, errors, cross-track, segment and plan count, which is what you tune by.
 - The last row shows the VEX IMU tilt and whether telemetry is on, off or refused by the Pi. The same movement status, commanded speeds and wheel targets go to the Pi viewer as telemetry every 100 ms (section 10).
 
+The current floor test starts at (0, 0, heading 0). A does not re-place the robot:
+manual movement before pressing A is included in the localized starting pose.
+The tank drive turns toward the destination, drives the straight segment and
+turns to the final heading. The start pose and wheel geometry live in
+`brain/robot/gatr2_robot.h`; the destination and drivetrain settings live in
+`brain/operaGATR/include/robot_config.h`. Rebuild and upload the Brain after
+changing these; the Pi's `brain_profile_usb.xml` receives the robot profile.
+
 **Tuning:** see [actuGATR tuning](actugatr.md#tuning). Start at speed scale 0.3.
 
 **Planner limit:**
 - The planner treats the robot as a circle around its origin: the footprint's farthest corner plus the clearance.
 - On the Override field that circle cannot pass between diagonal goals for robots larger than about 0.4 m square. An 18 inch robot is refused there and must use direct moves in those areas.
 - The same closes each corner pocket between the walls and its two nearest goals, around (0.6, 0.6) and the other corners. An avoiding move from inside one fails with "no path"; drive out with a direct move first.
-- The placeholder start pose (1.2, 1.8, heading 0) and the three test destinations sit in open floor west of the center goal, so all three tests work from the start pose. The host end-to-end test runs the same three moves against the Pi runtime.
+- The current (0, 0) start overlaps the field boundary once the robot footprint is included. A ignores those boundaries; X/Y require placement at a valid pose inside the configured field. The host end-to-end tests use their own field-valid starting poses.
 - See [investiGATR](investigatr.md).
 
 ## 8. Sensor loss and recovery

@@ -1,6 +1,6 @@
 // drive_requests_gtest.cpp
 // Requests to the drive task: latest wins, goTo ids become Motion ids, and a
-// goTo not yet taken never reads as idle.
+// goTo awaiting task publication never reads as idle.
 
 #include "actugatr/drive_requests.h"
 
@@ -176,4 +176,117 @@ TEST(DriveRequests, AvoidingModeReachesMotion) {
     EXPECT_EQ(k.requests.snapshot().motion.mode, PlanMode::kAvoiding);
     k.step();
     EXPECT_EQ(k.owner.motion().mode, PlanMode::kAvoiding);
+}
+
+// The drive task releases the request mutex between take() and publish().
+// Another operator cycle with centered sticks must not cancel that command.
+TEST(DriveRequests, TakenCommandStaysWaitingUntilItsStatusIsPublished) {
+    Task k;
+    k.step();
+    const CommandId id = k.requests.goTo(PlanMode::kDirect, {1.5, 1, 0}, Reference::origin(), {});
+    const DriveRequest request = k.requests.take();
+
+    const DriveSnapshot during = k.requests.snapshot();
+    EXPECT_EQ(during.motion.command_id, id);
+    EXPECT_EQ(during.motion.state, MotionState::kWaiting);
+    EXPECT_EQ(during.mode, DriveMode::kNavigate);
+    EXPECT_FALSE(sendManual(ManualDemand{}, false, during));
+
+    apply(request, k.owner);
+    k.owner.step(k.t);
+    k.requests.publish({k.owner.motion(), k.owner.drive(), k.owner.mode()});
+    const DriveSnapshot after = k.requests.snapshot();
+    EXPECT_EQ(after.motion.command_id, id);
+    EXPECT_EQ(after.motion.state, k.owner.motion().state);
+    EXPECT_TRUE(moving(after));
+}
+
+TEST(DriveRequests, EmptyTakeAfterMissedPublicationKeepsCommandVisible) {
+    DriveRequests requests;
+    const CommandId id = requests.goTo(PlanMode::kDirect, {1.5, 1, 0}, Reference::origin(), {});
+    requests.take();
+    // Simulate the drive task failing to acquire the publication mutex.
+    EXPECT_EQ(requests.take().kind, DriveRequest::Kind::kNone);
+    EXPECT_EQ(requests.snapshot().motion.command_id, id);
+    EXPECT_FALSE(sendManual(ManualDemand{}, false, requests.snapshot()));
+
+    DriveSnapshot result;
+    result.motion.command_id = id;
+    result.motion.state = MotionState::kRunning;
+    requests.publish(result);
+    EXPECT_EQ(requests.snapshot().motion.state, MotionState::kRunning);
+}
+
+TEST(DriveRequests, PublishedTerminalResultClearsTakenCommandWaitingState) {
+    for (const MotionState terminal : {MotionState::kFailed, MotionState::kCompleted,
+                                       MotionState::kCancelled}) {
+        DriveRequests requests;
+        const CommandId id = requests.goTo(PlanMode::kDirect, {1.5, 1, 0}, Reference::origin(), {});
+        requests.take();
+        DriveSnapshot result;
+        result.motion.command_id = id;
+        result.motion.state = terminal;
+        requests.publish(result);
+        EXPECT_EQ(requests.snapshot().motion.state, terminal);
+        EXPECT_TRUE(sendManual(ManualDemand{}, false, requests.snapshot()));
+    }
+}
+
+TEST(DriveRequests, NewerPendingCommandSurvivesOlderPublicationAndItsOwnTake) {
+    DriveRequests requests;
+    const CommandId first = requests.goTo(PlanMode::kDirect, {1.5, 1, 0}, Reference::origin(), {});
+    requests.take();
+    const CommandId second = requests.goTo(PlanMode::kAvoiding, {2, 1, 0}, Reference::origin(), {});
+    EXPECT_EQ(requests.snapshot().motion.command_id, second);
+
+    DriveSnapshot result;
+    result.motion.command_id = first;
+    result.motion.state = MotionState::kFailed;
+    requests.publish(result);
+    EXPECT_EQ(requests.snapshot().motion.command_id, second);
+    EXPECT_EQ(requests.take().id, second);
+    EXPECT_EQ(requests.snapshot().motion.command_id, second);
+    EXPECT_EQ(requests.snapshot().motion.mode, PlanMode::kAvoiding);
+    EXPECT_FALSE(sendManual(ManualDemand{}, false, requests.snapshot()));
+}
+
+TEST(DriveRequests, SticksAndStopStillOverrideATakenCommand) {
+    for (const bool stop : {false, true}) {
+        Task k;
+        const CommandId id = k.requests.goTo(PlanMode::kDirect, {1.5, 1, 0}, Reference::origin(), {});
+        const DriveRequest request = k.requests.take();
+        if (stop) {
+            k.requests.stop();
+        } else {
+            ManualDemand push;
+            push.forward = 0.4;
+            EXPECT_TRUE(sendManual(push, false, k.requests.snapshot()));
+            k.requests.manual(push, k.t);
+        }
+        apply(request, k.owner);
+        k.owner.step(k.t);
+        k.requests.publish({k.owner.motion(), k.owner.drive(), k.owner.mode()});
+        k.step();
+        EXPECT_EQ(k.requests.snapshot().motion.command_id, id);
+        EXPECT_EQ(k.requests.snapshot().motion.state, MotionState::kCancelled);
+        EXPECT_EQ(k.requests.snapshot().mode, stop ? DriveMode::kDisabled : DriveMode::kManual);
+    }
+}
+
+TEST(DriveRequests, UnavailableStatusNeverAllowsCenteredSticksToCancelACommand) {
+    for (const MotionState cached : {MotionState::kIdle, MotionState::kCompleted,
+                                    MotionState::kFailed, MotionState::kCancelled}) {
+        DriveSnapshot old;
+        old.motion.state = cached;
+        old.motion.command_id = cached == MotionState::kIdle ? 0 : 1;
+        EXPECT_TRUE(sendManual(ManualDemand{}, false, old, true));
+        // A newer command may have started since this cached status. A failed
+        // status read must not let centered sticks overwrite that command.
+        EXPECT_FALSE(sendManual(ManualDemand{}, false, old, false));
+
+        ManualDemand sticks;
+        sticks.turn = 0.4;
+        EXPECT_TRUE(sendManual(sticks, false, old, false));
+        EXPECT_TRUE(sendManual(sticks, true, old, false));
+    }
 }

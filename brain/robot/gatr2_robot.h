@@ -73,9 +73,9 @@ constexpr uint32_t kTelemetryPeriodMs = 100;
 //   measured   travel_scale from the wheel calibration in locaGATR;
 //              keep 1.0 until calibrated, never use it to hide a wrong radius
 // ---------------------------------------------------------------------------
-// UNMEASURED: tracking wheel radius, meters = measured diameter / 2.
+// Approximate 48 mm tracking-wheel diameter; refine travel_scale after testing.
 constexpr double kTrackingRadius = 0.024;
-// UNMEASURED: encoder counts per encoder shaft turn, every edge counted:
+// Encoder counts per encoder shaft turn, every edge counted:
 // 4 x the encoder's pulses per rev (AS5047P default 1000 PPR = 4000).
 constexpr uint32_t kCountsPerRev = 4000;
 
@@ -90,8 +90,8 @@ inline communigatr::TrackingWheel forwardWheel() {
     w.encoder_port   = 0;
     w.radius         = kTrackingRadius;
     w.counts_per_rev = kCountsPerRev;
-    w.x              = 0.0;   // UNMEASURED
-    w.y              = 0.15;  // UNMEASURED
+    w.x              = 0.0;   // Along-wheel position does not affect planar odometry.
+    w.y              = 0.0;   // Approximately on the robot's lateral centerline.
     w.angle          = 0.0;   // measures forward travel
     w.reversed       = false; // UNMEASURED
     w.gear_ratio     = 1.0;   // PLACEHOLDER
@@ -104,8 +104,8 @@ inline communigatr::TrackingWheel sidewaysWheel() {
     w.encoder_port   = 1;
     w.radius         = kTrackingRadius;
     w.counts_per_rev = kCountsPerRev;
-    w.x              = 0.15;        // UNMEASURED
-    w.y              = 0.0;         // UNMEASURED
+    w.x              = 0.1125;      // Ahead of center: (29 - 35.5 / 2) cm.
+    w.y              = 0.0;         // Along-wheel position does not affect planar odometry.
     w.angle          = 90.0 * kDeg; // measures leftward travel
     w.reversed       = false;       // UNMEASURED
     w.gear_ratio     = 1.0;         // PLACEHOLDER
@@ -129,10 +129,10 @@ inline communigatr::TrackingWheel rightWheel() {
     return w;
 }
 
-// Robot outline for planning and the viewer. PLACEHOLDER: meters from the
-// robot origin to the {front, back, left, right} edge, counting anything
-// that sticks out.
-constexpr investigatr::Footprint kFootprint{0.23, 0.23, 0.23, 0.23};
+// Approximate 35.5 cm long by 31.5 cm wide chassis, origin at its midpoint.
+// Meters to {front, back, left, right}; include any protrusions before
+// obstacle-avoidance tests.
+constexpr investigatr::Footprint kFootprint{0.1775, 0.1775, 0.1575, 0.1575};
 
 // Pi IMU bias calibration settings; zeros keep the Pi defaults (2 s still
 // window). Unused with the VEX IMU, which the Brain calibrates itself.
@@ -176,13 +176,13 @@ constexpr bool usesVexImu() {
 // here before starting it. x, y meters from the field origin (the inside
 // bottom left corner of the field diagram); heading degrees CCW from +x
 // (0 faces right on the diagram).
-// PLACEHOLDER: open floor west of the center goal. With this footprint and
-// the testing clearance, the corner pockets between the wall and the two
-// nearest goals (around (0.6, 0.6) and the other corners) are closed to
-// avoiding moves: a robot started there only gets direct moves out.
+// Direct floor test: call the initial robot center (0, 0), facing +x.
+// This does not move the configured field: (0, 0) is its corner, so avoiding
+// moves from this pose fail the footprint/boundary check. Set a real start
+// inside the field before testing avoidance. UP explicitly places here again.
 // ---------------------------------------------------------------------------
-constexpr double kStartX              = 1.2; // PLACEHOLDER
-constexpr double kStartY              = 1.8; // PLACEHOLDER
+constexpr double kStartX              = 0.0;
+constexpr double kStartY              = 0.0;
 constexpr double kStartHeadingDegrees = 0.0;
 constexpr investigatr::Pose kStartPose{kStartX, kStartY, kStartHeadingDegrees * kDeg};
 
