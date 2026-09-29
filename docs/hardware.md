@@ -73,7 +73,7 @@ The Pico counts A/B quadrature for three channels. Its
 [pin map](../pico/aggreGATR/src/board.h) assigns channels to GP0/1, GP2/3, and GP4/5,
 which are J2, J3 and J4 on the v2 HAT (logical encoder ports 0, 1 and 2); pin
 and connector wiring must match the chosen HAT revision. The current bench has
-a forward-measuring wheel on port 0 (J2) and a sideways wheel on port 1 (J3),
+a forward-measuring wheel on port 1 (J3) and a sideways wheel on port 0 (J2),
 described on the Brain ([gatr2_robot.h](../brain/robot/gatr2_robot.h)); the
 earlier two parallel wheels have their own
 [XML bring-up](../pi/naviGATR/docs/parallel_wheel_bringup.md).

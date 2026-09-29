@@ -44,12 +44,12 @@ constexpr double kInch = 0.0254;
 // robot's value before driving.
 // ---------------------------------------------------------------------------
 enum class Drivetrain : uint8_t { kTank, kMecanum };
-constexpr Drivetrain kDrivetrain = Drivetrain::kTank;
+constexpr Drivetrain kDrivetrain = Drivetrain::kMecanum;
 
 // Shared wheel settings, the same for tank and mecanum.
 inline actugatr::WheelDrive drivenWheels(double diameter, double gear_ratio) {
     actugatr::WheelDrive w;
-    // Installed blue 600 RPM cartridges.
+    // Confirmed blue 600 RPM cartridges for the tank and mecanum builds.
     w.cartridge = actugatr::Cartridge::kBlue;
     // Share of top speed used, headroom for the motor's speed loop.
     w.usable_fraction = 0.9;
@@ -68,6 +68,7 @@ inline actugatr::TankConfig tank() {
         {11, true},  // rear
         {13, true},  // aux
     });
+
     c.right = actugatr::motorGroup({
         {19, false}, // front
         {16, true},  // middle
@@ -84,18 +85,22 @@ inline actugatr::TankConfig tank() {
 
 inline actugatr::MecanumConfig mecanum() {
     actugatr::MecanumConfig c;
-    // PLACEHOLDER: the motor(s) of each wheel.
-    c.front_left  = actugatr::motorGroup({{11, true}});
-    c.front_right = actugatr::motorGroup({{18, false}});
-    c.rear_left   = actugatr::motorGroup({{12, true}});
-    c.rear_right  = actugatr::motorGroup({{19, false}});
-    // PLACEHOLDER: meters between left and right wheel centers (track_width)
-    // and between front and rear axles (wheelbase). Check: left stick X left
-    // must strafe the robot left.
-    c.track_width = 0.30;
-    c.wheelbase   = 0.28;
-    // PLACEHOLDER: drivenWheels(diameter, gear_ratio), as for tank.
-    c.wheels    = drivenWheels(0.1016, 1.0);
+    // Four motors: corners named facing forward from behind the robot.
+    // Positive wheel commands should roll forward: 2/12 normal, 1/11 reversed.
+    // Verify all directions with the wheels lifted.
+    // Standard X roller layout only: matching wheel handedness on opposite
+    // diagonals. A/B wheel labels are mechanical, not motor reversal flags.
+    c.front_left  = actugatr::motorGroup({{12, false}});
+    c.front_right = actugatr::motorGroup({{11, true}});
+    c.rear_left   = actugatr::motorGroup({{2, false}});
+    c.rear_right  = actugatr::motorGroup({{1, true}});
+    // Measured full spans: 22.3 cm between left/right tread centerlines,
+    // 24.2 cm between front/rear shafts. Origin is this rectangle's center.
+    c.track_width = 0.223;
+    c.wheelbase   = 0.242;
+    // Approximately 70 mm mecanum wheel diameter.
+    // Confirmed 1:1 direct drive: motor -> shaft -> wheel.
+    c.wheels    = drivenWheels(0.070, 1.0);
     c.stop_mode = actugatr::StopMode::kBrake;
     return c;
 }
@@ -158,8 +163,8 @@ inline actugatr::DriveOwnerConfig manual() {
 // Poses are {x, y, heading}: meters from the field origin (the inside
 // bottom left corner of the field diagram), heading CCW from +x.
 // ---------------------------------------------------------------------------
-// Direct: (55 inches, 70 inches, 90 degrees), no obstacles checked.
-constexpr investigatr::Pose kDirectGoal{55.0 * kInch, 70.0 * kInch, 90.0 * kDeg};
+// Direct: (10 inches, 15 inches, 90 degrees), no obstacles checked.
+constexpr investigatr::Pose kDirectGoal{10.0 * kInch, 15.0 * kInch, 90.0 * kDeg};
 // Avoiding: field origin reference, around the center goal.
 constexpr investigatr::Pose kAvoidGoal{2.4, 1.8, 0.0};
 // Landmark relative: 0.45 m on the landmark's +x side, facing it.

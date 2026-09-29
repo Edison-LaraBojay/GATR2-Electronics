@@ -33,8 +33,8 @@ Values marked UNMEASURED or PLACEHOLDER are guesses; measure them before
 trusting the results. The tracking wheel radius, 0.024 m, is provisional.
 
 **Current bench setup**
-- Encoder port 0 (J2) measures forward travel and port 1 (J3) measures sideways travel.
-- The VEX IMU is on Smart Port 1.
+- Encoder port 0 (J2) measures sideways travel and port 1 (J3) measures forward travel; port 2 (J4) is unused.
+- The VEX IMU is on Smart Port 20.
 - The Brain talks to the Pi over USB.
 
 The program checks port conflicts: drive motors, the VEX IMU and the RS-485 port must all be different. With a conflict the drive program refuses to create its motors and says why on the screen.
@@ -145,9 +145,9 @@ Before calibrating:
 - Never calibrate against naviGATR's own pose.
 
 **Procedure (forward wheel, then sideways wheel)**
-1. Open the Wheel calibration page. LEFT/RIGHT selects the wheel (port 0 forward, port 1 sideways).
+1. Open the Wheel calibration page. LEFT/RIGHT selects the wheel (port 1 forward, port 0 sideways).
 2. Set the reference distance you will push: L1/R1 change it by 1 cm, L2/R2 by 10 cm. The starting value is `kCalibrationDistance` (1.0 m). Use at least 0.5 m.
-3. Put the robot against a straight edge with room to push along the wheel's measuring direction (forward for port 0, left for port 1).
+3. Put the robot against a straight edge with room to push along the wheel's measuring direction (forward for port 1, left for port 0).
 4. Press UP. The program reads the wheels.
 5. Push the robot exactly the reference distance, straight, without turning it. Measure the distance at a point near the robot origin (the point the profile positions are measured from): the program removes the wheel's own share of any small rotation, but not the tape point's.
 6. Press DOWN. The trial is accepted or rejected with a reason:
@@ -226,7 +226,7 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 
 | Button | Test |
 |---|---|
-| A | `goToDirect(kDirectGoal)`: from the current pose to the fixed (55 inches, 70 inches, 90 degrees) destination, relative to the field origin; no obstacle checks |
+| A | `goToDirect(kDirectGoal)`: from the current pose to the fixed (10 inches, 15 inches, 90 degrees) destination, relative to the field origin; no obstacle checks |
 | X | `goToAvoiding(kAvoidGoal)`: routes around the field's obstacle boxes |
 | Y | `goToAvoiding(kLandmarkOffset, landmark())`: relative to a named landmark from the generated `Field` table. Without a camera it uses the landmark's nominal map pose (`kRequireObservedLandmark = false`). |
 
@@ -237,8 +237,12 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 
 The current floor test starts at (0, 0, heading 0). A does not re-place the robot:
 manual movement before pressing A is included in the localized starting pose.
-The tank drive turns toward the destination, drives the straight segment and
-turns to the final heading. The start pose and wheel geometry live in
+Tank mode turns toward the destination, drives the straight segment and turns
+to the final heading. Mecanum mode translates while changing heading; it is
+currently selected in operaGATR, with four independent corner motor groups.
+Its approximate geometry and motor assignments are configured; motor/encoder
+directions and follower gains still need checking on the robot.
+The start pose and wheel geometry live in
 `brain/robot/gatr2_robot.h`; the destination and drivetrain settings live in
 `brain/operaGATR/include/robot_config.h`. Rebuild and upload the Brain after
 changing these; the Pi's `brain_profile_usb.xml` receives the robot profile.

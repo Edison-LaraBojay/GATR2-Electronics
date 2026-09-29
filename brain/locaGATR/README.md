@@ -9,9 +9,9 @@ hand. Built with the PROS toolchain; not yet run on a robot.
 
 Current bench setup (all in `gatr2_robot.h`):
 - USB link to the Pi;
-- two perpendicular tracking wheels, forward on encoder port 0 and sideways
-  on port 1;
-- the VEX IMU on Smart Port 1.
+- two perpendicular tracking wheels, forward on encoder port 1 and sideways
+  on port 0;
+- the VEX IMU on Smart Port 20.
 
 The Pi runs `config/override/brain_profile_usb.xml`. No BNO08X, camera or
 AprilTags are needed.

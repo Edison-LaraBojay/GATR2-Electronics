@@ -279,14 +279,14 @@ a typed document; the Pi never receives XML or file paths
 #include "communigatr/robot_profile.h"
 
 communigatr::TrackingWheel forward;
-forward.encoder_port   = 0;        // naviGATR encoder port: 0 J2, 1 J3, 2 J4
+forward.encoder_port   = 1;        // naviGATR encoder port: 0 J2, 1 J3, 2 J4
 forward.radius         = 0.024;    // PROVISIONAL
 forward.counts_per_rev = 4000;     // encoder shaft
 forward.x = 0.0; forward.y = 0.15; // contact point, robot frame (PLACEHOLDER)
 forward.angle          = 0.0;      // measures forward travel
 
 communigatr::TrackingWheel sideways = forward;
-sideways.encoder_port = 1;
+sideways.encoder_port = 0;
 sideways.x = 0.15; sideways.y = 0.0;   // PLACEHOLDER
 sideways.angle = investigatr::kPi / 2; // measures leftward travel
 
@@ -294,12 +294,13 @@ communigatr::RobotProfile p;
 p.topology       = communigatr::LocalizationTopology::kTwoWheelImu;
 p.wheels         = {forward, sideways};
 p.imu_source     = communigatr::ImuSource::kBrainVex;
-p.vex_smart_port = 1;
+p.vex_smart_port = 20;
 p.footprint      = {0.23, 0.23, 0.23, 0.23}; // front, back, left, right (PLACEHOLDER)
 ```
 
-The values above are the placeholders of the current bench; the real ones
-live in `gatr2_robot.h` ([Where settings live](brain_setup.md#1-where-settings-live)).
+This example demonstrates the profile format with placeholder geometry. The
+current robot's values live in `gatr2_robot.h`
+([Where settings live](brain_setup.md#1-where-settings-live)).
 
 ### Fields
 

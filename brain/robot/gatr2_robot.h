@@ -6,9 +6,9 @@
 //
 // UNMEASURED: a guess that still needs measuring.
 // PLACEHOLDER: a value that depends on how the robot is built.
-// Robot frame: +x forward, +y left, origin the point the Pi reports (pick it,
-// usually the turning center). Field frame: +x right, +y up on the field
-// diagram, heading CCW from +x.
+// Robot frame: +x forward, +y left, origin at the center of the driven-wheel
+// rectangle. Field frame: +x right, +y up on the field diagram, heading CCW
+// from +x.
 
 #pragma once
 #include <cstdint>
@@ -36,17 +36,16 @@ constexpr int32_t kLinkBaud     = 115200; // RS-485 only, must match the Pi
 
 // ---------------------------------------------------------------------------
 // Localization setup. Pick one.
-//   kTwoWheelVexImu    forward wheel on port 0, sideways wheel on port 1, VEX IMU
+//   kTwoWheelVexImu    forward wheel on port 1, sideways wheel on port 0, VEX IMU
 //   kTwoWheelPicoImu   same wheels, the Pico IMU (external BNO08X or ASM330)
 //   kThreeWheelPicoImu three wheels fused with the Pico IMU
 // ---------------------------------------------------------------------------
 enum class Setup : uint8_t { kTwoWheelVexImu, kTwoWheelPicoImu, kThreeWheelPicoImu };
 constexpr Setup kSetup = Setup::kTwoWheelVexImu;
 
-// VEX IMU, read by the Brain (kTwoWheelVexImu only). PLACEHOLDER: the Smart
-// Port it is plugged into. Mount it flat and right side up; there is no
-// heading invert setting.
-constexpr uint8_t kVexImuPort = 1;
+// VEX IMU, read by the Brain (kTwoWheelVexImu only), on Smart Port 20.
+// Mount it flat and right side up; there is no heading invert setting.
+constexpr uint8_t kVexImuPort = 20;
 
 // VEX IMU mounting for the viewer's roll and pitch: the direction its +x
 // axis points in the robot frame, CCW from forward, degrees (0, 90, 180 or
@@ -81,19 +80,19 @@ constexpr uint32_t kCountsPerRev = 4000;
 
 // Per wheel, measured from the robot origin to where the wheel touches the
 // floor: x meters forward (negative behind), y meters left (negative right).
-// reversed: set true if the locaGATR Wheels page reads negative when you
+// Toggle reversed if the locaGATR Wheels page reads negative when you
 // push the robot forward (forward wheel) or left (sideways wheel).
 // gear_ratio: encoder turns per wheel turn, 1.0 with the encoder on the
 // wheel's axle.
 inline communigatr::TrackingWheel forwardWheel() {
     communigatr::TrackingWheel w;
-    w.encoder_port   = 0;
+    w.encoder_port   = 1;
     w.radius         = kTrackingRadius;
     w.counts_per_rev = kCountsPerRev;
     w.x              = 0.0;   // Along-wheel position does not affect planar odometry.
-    w.y              = 0.0;   // Approximately on the robot's lateral centerline.
+    w.y              = -0.1115; // At the right tread centerline: -22.3 / 2 cm.
     w.angle          = 0.0;   // measures forward travel
-    w.reversed       = false; // UNMEASURED
+    w.reversed       = true;  // Inverted so a forward push gives positive travel.
     w.gear_ratio     = 1.0;   // PLACEHOLDER
     w.travel_scale   = 1.0;   // from the locaGATR calibration, 1.0 until then
     return w;
@@ -101,13 +100,13 @@ inline communigatr::TrackingWheel forwardWheel() {
 
 inline communigatr::TrackingWheel sidewaysWheel() {
     communigatr::TrackingWheel w;
-    w.encoder_port   = 1;
+    w.encoder_port   = 0;
     w.radius         = kTrackingRadius;
     w.counts_per_rev = kCountsPerRev;
-    w.x              = 0.1125;      // Ahead of center: (29 - 35.5 / 2) cm.
+    w.x              = 0.011;       // Approx. 11 cm behind front axle: (24.2 / 2 - 11) cm.
     w.y              = 0.0;         // Along-wheel position does not affect planar odometry.
     w.angle          = 90.0 * kDeg; // measures leftward travel
-    w.reversed       = false;       // UNMEASURED
+    w.reversed       = true;        // Inverted so a leftward push gives positive travel.
     w.gear_ratio     = 1.0;         // PLACEHOLDER
     w.travel_scale   = 1.0;         // from the locaGATR calibration, 1.0 until then
     return w;
@@ -117,7 +116,7 @@ inline communigatr::TrackingWheel sidewaysWheel() {
 // wheel. PLACEHOLDER geometry until the three-wheel pod exists.
 inline communigatr::TrackingWheel leftWheel() {
     communigatr::TrackingWheel w = forwardWheel();
-    w.encoder_port               = 0;
+    w.encoder_port               = 1;
     w.y                          = 0.15; // PLACEHOLDER
     return w;
 }
@@ -129,10 +128,12 @@ inline communigatr::TrackingWheel rightWheel() {
     return w;
 }
 
-// Approximate 35.5 cm long by 31.5 cm wide chassis, origin at its midpoint.
-// Meters to {front, back, left, right}; include any protrusions before
-// obstacle-avoidance tests.
-constexpr investigatr::Footprint kFootprint{0.1775, 0.1775, 0.1575, 0.1575};
+// Approximate 33.7 cm long by 29.3 cm wide mecanum body. Front/back overhangs
+// are roughly equal; equal left/right overhangs are assumed for now.
+// Meters from the drivetrain origin to {front, back, left, right}, including
+// protrusions. Refine each extent if needed before close obstacle passes.
+// This controls planning clearance and the viewer.
+constexpr investigatr::Footprint kFootprint{0.1685, 0.1685, 0.1465, 0.1465};
 
 // Pi IMU bias calibration settings; zeros keep the Pi defaults (2 s still
 // window). Unused with the VEX IMU, which the Brain calibrates itself.

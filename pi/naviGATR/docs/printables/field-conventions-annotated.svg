@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200">
+<title>GATR field coordinates and robot heading</title>
+<desc>Configured Override field: red at x zero, blue at maximum x, audience at y zero. X increases right, Y increases up. Heading zero faces blue; positive heading is counterclockwise.</desc>
+<defs>
+<marker id="arrow-ink" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#172b40"/></marker>
+<marker id="arrow-x" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#bc5d00"/></marker>
+<marker id="arrow-y" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#007f78"/></marker>
+<marker id="arrow-heading" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7542bf"/></marker>
+</defs>
+<rect width="1800" height="1200" fill="#f7f9fc"/>
+<g font-family="Arial, sans-serif">
+<text x="65" y="70" fill="#172b40" font-size="36" font-weight="bold" text-anchor="start" >FIELD COORDINATES + ROBOT HEADING</text>
+<text x="67" y="106" fill="#53657a" font-size="21" font-weight="normal" text-anchor="start" >naviGATR / spectaGATR  |  Configured Override field  |  Top-down audience view</text>
+<text x="590" y="163" fill="#53657a" font-size="20" font-weight="bold" text-anchor="middle" >OPPOSITE WALL  /  AWAY FROM AUDIENCE</text>
+<rect x="199.1745177209511" y="189.1745177209511" width="781.6509645580978" height="781.6509645580978" rx="3" fill="#637083" stroke="none" stroke-width="1"/>
+<rect x="210" y="200" width="760" height="760" rx="0" fill="#dce2e8" stroke="none" stroke-width="1"/>
+<rect x="210.0" y="200.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="336.6666666666667" y="200.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="463.33333333333337" y="200.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="590.0" y="200.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="716.6666666666667" y="200.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="843.3333333333334" y="200.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="210.0" y="326.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="336.6666666666667" y="326.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="463.33333333333337" y="326.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="590.0" y="326.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="716.6666666666667" y="326.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="843.3333333333334" y="326.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="210.0" y="453.33333333333337" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="336.6666666666667" y="453.33333333333337" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="463.33333333333337" y="453.33333333333337" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="590.0" y="453.33333333333337" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="716.6666666666667" y="453.33333333333337" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="843.3333333333334" y="453.33333333333337" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="210.0" y="580.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="336.6666666666667" y="580.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="463.33333333333337" y="580.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="590.0" y="580.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="716.6666666666667" y="580.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="843.3333333333334" y="580.0" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="210.0" y="706.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="336.6666666666667" y="706.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="463.33333333333337" y="706.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="590.0" y="706.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="716.6666666666667" y="706.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="843.3333333333334" y="706.6666666666667" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="210.0" y="833.3333333333334" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="336.6666666666667" y="833.3333333333334" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="463.33333333333337" y="833.3333333333334" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="590.0" y="833.3333333333334" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="716.6666666666667" y="833.3333333333334" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#dfe5eb" stroke="#c2cbd5" stroke-width="1.2"/>
+<rect x="843.3333333333334" y="833.3333333333334" width="126.66666666666667" height="126.66666666666667" rx="0" fill="#e7ebef" stroke="#c2cbd5" stroke-width="1.2"/>
+<g transform="translate(220.12225213100044 898.0731269627636) rotate(-0.0)">
+<rect x="-10.12225213100045" y="-10.878757290264693" width="20.2445042620009" height="21.757514580529385" rx="0" fill="#d50032" stroke="#53657a" stroke-width="1.0"/>
+</g>
+<g transform="translate(220.12225213100044 261.9268730372364) rotate(-0.0)">
+<rect x="-10.12225213100045" y="-10.878757290264693" width="20.2445042620009" height="21.757514580529385" rx="0" fill="#d50032" stroke="#53657a" stroke-width="1.0"/>
+</g>
+<g transform="translate(959.8777478689996 898.0731269627636) rotate(-0.0)">
+<rect x="-10.12225213100045" y="-10.878757290264693" width="20.2445042620009" height="21.757514580529385" rx="0" fill="#00a3e0" stroke="#53657a" stroke-width="1.0"/>
+</g>
+<g transform="translate(959.8777478689996 261.9268730372364) rotate(-0.0)">
+<rect x="-10.12225213100045" y="-10.878757290264693" width="20.2445042620009" height="21.757514580529385" rx="0" fill="#00a3e0" stroke="#53657a" stroke-width="1.0"/>
+</g>
+<g transform="translate(590.0 205.54060116644234) rotate(-0.0)">
+<rect x="-70.34432480933154" y="-5.54060116644235" width="140.68864961866308" height="11.0812023328847" rx="0" fill="#ffd100" stroke="#53657a" stroke-width="1.0"/>
+</g>
+<g transform="translate(590.0 954.4593988335577) rotate(-0.0)">
+<rect x="-70.34432480933154" y="-5.54060116644235" width="140.68864961866308" height="11.0812023328847" rx="0" fill="#ffd100" stroke="#53657a" stroke-width="1.0"/>
+</g>
+<g transform="translate(215.54060116644234 580.0) rotate(-0.0)">
+<rect x="-5.54060116644235" y="-70.34432480933154" width="11.0812023328847" height="140.68864961866308" rx="0" fill="#ffd100" stroke="#53657a" stroke-width="1.0"/>
+</g>
+<g transform="translate(964.4593988335577 580.0) rotate(-0.0)">
+<rect x="-5.54060116644235" y="-70.34432480933154" width="11.0812023328847" height="140.68864961866308" rx="0" fill="#ffd100" stroke="#53657a" stroke-width="1.0"/>
+</g>
+<g transform="translate(655.1553387169134 514.8446612830866) rotate(45.0)">
+<rect x="-92.14445939883356" y="-6.7659264244055635" width="184.28891879766712" height="13.531852848811127" rx="0" fill="#f2f2f2" stroke="#8895a5" stroke-width="1.0"/>
+</g>
+<g transform="translate(524.8446612830866 514.8446612830866) rotate(-45.0)">
+<rect x="-92.14445939883356" y="-6.7659264244055635" width="184.28891879766712" height="13.531852848811127" rx="0" fill="#f2f2f2" stroke="#8895a5" stroke-width="1.0"/>
+</g>
+<g transform="translate(524.8446612830866 645.1553387169134) rotate(45.0)">
+<rect x="-92.14445939883356" y="-6.7659264244055635" width="184.28891879766712" height="13.531852848811127" rx="0" fill="#f2f2f2" stroke="#8895a5" stroke-width="1.0"/>
+</g>
+<g transform="translate(655.1553387169134 645.1553387169134) rotate(-45.0)">
+<rect x="-92.14445939883356" y="-6.7659264244055635" width="184.28891879766712" height="13.531852848811127" rx="0" fill="#f2f2f2" stroke="#8895a5" stroke-width="1.0"/>
+</g>
+<g transform="translate(462.5536995737999 325.10739914759984) rotate(-0.0)">
+<polygon points="15.183,6.289 6.289,15.183 -6.289,15.183 -15.183,6.289 -15.183,-6.289 -6.289,-15.183 6.289,-15.183 15.183,-6.289" fill="#2b2b2b" stroke="#26364a" stroke-width="1.6"/>
+<polygon points="9.462,3.919 3.919,9.462 -3.919,9.462 -9.462,3.919 -9.462,-3.919 -3.919,-9.462 3.919,-9.462 9.462,-3.919" fill="#ffffff" stroke="#526074" stroke-width="1.6" opacity="0.35"/>
+</g>
+<g transform="translate(717.4463004262002 325.10739914759984) rotate(-0.0)">
+<polygon points="15.183,6.289 6.289,15.183 -6.289,15.183 -15.183,6.289 -15.183,-6.289 -6.289,-15.183 6.289,-15.183 15.183,-6.289" fill="#00a3e0" stroke="#26364a" stroke-width="1.6"/>
+<polygon points="9.462,3.919 3.919,9.462 -3.919,9.462 -9.462,3.919 -9.462,-3.919 -3.919,-9.462 3.919,-9.462 9.462,-3.919" fill="#ffffff" stroke="#526074" stroke-width="1.6" opacity="0.35"/>
+</g>
+<g transform="translate(335.10739914759984 452.55369957379986) rotate(-0.0)">
+<polygon points="15.183,6.289 6.289,15.183 -6.289,15.183 -15.183,6.289 -15.183,-6.289 -6.289,-15.183 6.289,-15.183 15.183,-6.289" fill="#2b2b2b" stroke="#26364a" stroke-width="1.6"/>
+<polygon points="9.462,3.919 3.919,9.462 -3.919,9.462 -9.462,3.919 -9.462,-3.919 -3.919,-9.462 3.919,-9.462 9.462,-3.919" fill="#ffffff" stroke="#526074" stroke-width="1.6" opacity="0.35"/>
+</g>
+<g transform="translate(844.8926008524002 452.55369957379986) rotate(-0.0)">
+<polygon points="15.183,6.289 6.289,15.183 -6.289,15.183 -15.183,6.289 -15.183,-6.289 -6.289,-15.183 6.289,-15.183 15.183,-6.289" fill="#00a3e0" stroke="#26364a" stroke-width="1.6"/>
+<polygon points="9.462,3.919 3.919,9.462 -3.919,9.462 -9.462,3.919 -9.462,-3.919 -3.919,-9.462 3.919,-9.462 9.462,-3.919" fill="#ffffff" stroke="#526074" stroke-width="1.6" opacity="0.35"/>
+</g>
+<g transform="translate(590.0 580.0) rotate(-0.0)">
+<polygon points="15.183,6.289 6.289,15.183 -6.289,15.183 -15.183,6.289 -15.183,-6.289 -6.289,-15.183 6.289,-15.183 15.183,-6.289" fill="#2b2b2b" stroke="#26364a" stroke-width="1.6"/>
+<polygon points="9.462,3.919 3.919,9.462 -3.919,9.462 -9.462,3.919 -9.462,-3.919 -3.919,-9.462 3.919,-9.462 9.462,-3.919" fill="#ffffff" stroke="#526074" stroke-width="1.6" opacity="0.35"/>
+</g>
+<g transform="translate(335.10739914759984 707.4463004262001) rotate(-0.0)">
+<polygon points="15.183,6.289 6.289,15.183 -6.289,15.183 -15.183,6.289 -15.183,-6.289 -6.289,-15.183 6.289,-15.183 15.183,-6.289" fill="#d50032" stroke="#26364a" stroke-width="1.6"/>
+<polygon points="9.462,3.919 3.919,9.462 -3.919,9.462 -9.462,3.919 -9.462,-3.919 -3.919,-9.462 3.919,-9.462 9.462,-3.919" fill="#ffffff" stroke="#526074" stroke-width="1.6" opacity="0.35"/>
+</g>
+<g transform="translate(844.8926008524002 707.4463004262001) rotate(-0.0)">
+<polygon points="15.183,6.289 6.289,15.183 -6.289,15.183 -15.183,6.289 -15.183,-6.289 -6.289,-15.183 6.289,-15.183 15.183,-6.289" fill="#2b2b2b" stroke="#26364a" stroke-width="1.6"/>
+<polygon points="9.462,3.919 3.919,9.462 -3.919,9.462 -9.462,3.919 -9.462,-3.919 -3.919,-9.462 3.919,-9.462 9.462,-3.919" fill="#ffffff" stroke="#526074" stroke-width="1.6" opacity="0.35"/>
+</g>
+<g transform="translate(462.5536995737999 834.8926008524002) rotate(-0.0)">
+<polygon points="15.183,6.289 6.289,15.183 -6.289,15.183 -15.183,6.289 -15.183,-6.289 -6.289,-15.183 6.289,-15.183 15.183,-6.289" fill="#d50032" stroke="#26364a" stroke-width="1.6"/>
+<polygon points="9.462,3.919 3.919,9.462 -3.919,9.462 -9.462,3.919 -9.462,-3.919 -3.919,-9.462 3.919,-9.462 9.462,-3.919" fill="#ffffff" stroke="#526074" stroke-width="1.6" opacity="0.35"/>
+</g>
+<g transform="translate(717.4463004262002 834.8926008524002) rotate(-0.0)">
+<polygon points="15.183,6.289 6.289,15.183 -6.289,15.183 -15.183,6.289 -15.183,-6.289 -6.289,-15.183 6.289,-15.183 15.183,-6.289" fill="#2b2b2b" stroke="#26364a" stroke-width="1.6"/>
+<polygon points="9.462,3.919 3.919,9.462 -3.919,9.462 -9.462,3.919 -9.462,-3.919 -3.919,-9.462 3.919,-9.462 9.462,-3.919" fill="#ffffff" stroke="#526074" stroke-width="1.6" opacity="0.35"/>
+</g>
+<line x1="204.58725886047554" y1="200" x2="204.58725886047554" y2="960" stroke="#c8334d" stroke-width="8"/>
+<line x1="975.4127411395244" y1="200" x2="975.4127411395244" y2="960" stroke="#007eae" stroke-width="8"/>
+<text x="174" y="580" fill="#c8334d" font-size="21" font-weight="bold" text-anchor="middle" transform="rotate(-90 174 580)">RED WALL  /  X = 0</text>
+<text x="1013" y="580" fill="#007eae" font-size="21" font-weight="bold" text-anchor="middle" transform="rotate(90 1013 580)">BLUE WALL  /  X = 140.4</text>
+<line x1="128" y1="960" x2="128" y2="203" stroke="#007f78" stroke-width="4" marker-end="url(#arrow-y)"/>
+<text x="111" y="580" fill="#007f78" font-size="21" font-weight="bold" text-anchor="middle" transform="rotate(-90 111 580)">+Y  INCREASES</text>
+<line x1="65" y1="200" x2="65" y2="956" stroke="#007f78" stroke-width="3" marker-end="url(#arrow-y)"/>
+<text x="48" y="580" fill="#007f78" font-size="19" font-weight="normal" text-anchor="middle" transform="rotate(-90 48 580)">-Y  DECREASES</text>
+<line x1="330" y1="1035" x2="964" y2="1035" stroke="#bc5d00" stroke-width="4" marker-end="url(#arrow-x)"/>
+<text x="650" y="1025" fill="#bc5d00" font-size="21" font-weight="bold" text-anchor="middle" >+X INCREASES</text>
+<line x1="965" y1="1085" x2="330" y2="1085" stroke="#bc5d00" stroke-width="3" marker-end="url(#arrow-x)"/>
+<text x="650" y="1110" fill="#bc5d00" font-size="20" font-weight="normal" text-anchor="middle" >-X DECREASES</text>
+<text x="210" y="183" fill="#172b40" font-size="19" font-weight="normal" text-anchor="start" >(0, 140.4)</text>
+<text x="970" y="183" fill="#172b40" font-size="19" font-weight="normal" text-anchor="end" >(140.4, 140.4)</text>
+<text x="970" y="993" fill="#172b40" font-size="19" font-weight="normal" text-anchor="end" >(140.4, 0)</text>
+<circle cx="210" cy="960" r="9" fill="#fff" stroke="#172b40" stroke-width="4"/>
+<text x="200" y="994" fill="#172b40" font-size="27" font-weight="bold" text-anchor="start" >(0, 0)</text>
+<text x="200" y="1020" fill="#172b40" font-size="16" font-weight="bold" text-anchor="start" >FIELD ORIGIN</text>
+<text x="200" y="1042" fill="#53657a" font-size="16" font-weight="normal" text-anchor="start" >Red / audience corner</text>
+<text x="590" y="992" fill="#53657a" font-size="19" font-weight="bold" text-anchor="middle" >AUDIENCE WALL  /  Y = 0</text>
+<g transform="translate(394.0331987438313 581.1081202332884) rotate(0)">
+<rect x="-39" y="-32" width="78" height="64" rx="7" fill="#ffcf86" stroke="#925113" stroke-width="2.5"/>
+<rect x="-35" y="-38" width="16" height="9" rx="2" fill="#26364a" stroke="none" stroke-width="1"/>
+<rect x="-35" y="29" width="16" height="9" rx="2" fill="#26364a" stroke="none" stroke-width="1"/>
+<rect x="16" y="-38" width="16" height="9" rx="2" fill="#26364a" stroke="none" stroke-width="1"/>
+<rect x="16" y="29" width="16" height="9" rx="2" fill="#26364a" stroke="none" stroke-width="1"/>
+<line x1="-15" y1="0" x2="63" y2="0" stroke="#172b40" stroke-width="4" marker-end="url(#arrow-ink)"/>
+<circle r="4" fill="#fff" stroke="#172b40" stroke-width="2"/></g>
+<rect x="292.0331987438313" y="629.1081202332884" width="230" height="54" rx="7" fill="#ffffff" stroke="none" stroke-width="1"/>
+<text x="407.0331987438313" y="652.1081202332884" fill="#172b40" font-size="19" font-weight="bold" text-anchor="middle" >0°: FORWARD → +X</text>
+<text x="407.0331987438313" y="674.1081202332884" fill="#53657a" font-size="16" font-weight="normal" text-anchor="middle" >Robot left points +Y</text>
+<g transform="translate(783.7505607895916 581.1081202332884) rotate(-90)">
+<rect x="-39" y="-32" width="78" height="64" rx="7" fill="#ffcf86" stroke="#925113" stroke-width="2.5"/>
+<rect x="-35" y="-38" width="16" height="9" rx="2" fill="#26364a" stroke="none" stroke-width="1"/>
+<rect x="-35" y="29" width="16" height="9" rx="2" fill="#26364a" stroke="none" stroke-width="1"/>
+<rect x="16" y="-38" width="16" height="9" rx="2" fill="#26364a" stroke="none" stroke-width="1"/>
+<rect x="16" y="29" width="16" height="9" rx="2" fill="#26364a" stroke="none" stroke-width="1"/>
+<line x1="-15" y1="0" x2="63" y2="0" stroke="#172b40" stroke-width="4" marker-end="url(#arrow-ink)"/>
+<circle r="4" fill="#fff" stroke="#172b40" stroke-width="2"/></g>
+<rect x="656.7505607895916" y="629.1081202332884" width="253" height="54" rx="7" fill="#ffffff" stroke="none" stroke-width="1"/>
+<text x="783.7505607895916" y="652.1081202332884" fill="#172b40" font-size="19" font-weight="bold" text-anchor="middle" >90°: FORWARD → +Y</text>
+<text x="783.7505607895916" y="674.1081202332884" fill="#53657a" font-size="16" font-weight="normal" text-anchor="middle" >Robot left points -X</text>
+<rect x="1070" y="160" width="665" height="537" rx="20" fill="#ffffff" stroke="#dce4ed" stroke-width="1"/>
+<text x="1102" y="207" fill="#172b40" font-size="24" font-weight="bold" text-anchor="start" >HEADING — VIEWED FROM ABOVE</text>
+<text x="1102" y="239" fill="#53657a" font-size="20" font-weight="normal" text-anchor="start" >0° faces +X; positive rotation is counterclockwise.</text>
+<line x1="1400" y1="440" x2="1531.0" y2="440.0" stroke="#172b40" stroke-width="3" marker-end="url(#arrow-ink)"/>
+<line x1="1400" y1="440" x2="1400.0" y2="309.0" stroke="#172b40" stroke-width="3" marker-end="url(#arrow-ink)"/>
+<line x1="1400" y1="440" x2="1269.0" y2="440.0" stroke="#172b40" stroke-width="3" marker-end="url(#arrow-ink)"/>
+<line x1="1400" y1="440" x2="1400.0" y2="571.0" stroke="#172b40" stroke-width="3" marker-end="url(#arrow-ink)"/>
+<circle cx="1400" cy="440" r="6" fill="#7542bf"/>
+<text x="1547" y="446" fill="#172b40" font-size="24" font-weight="bold" text-anchor="start" >0°</text>
+<text x="1547" y="471" fill="#53657a" font-size="17" font-weight="normal" text-anchor="start" >+X / blue</text>
+<text x="1253" y="446" fill="#172b40" font-size="24" font-weight="bold" text-anchor="end" >180°</text>
+<text x="1253" y="471" fill="#53657a" font-size="17" font-weight="normal" text-anchor="end" >-X / red</text>
+<text x="1400" y="286" fill="#172b40" font-size="24" font-weight="bold" text-anchor="middle" >+90°</text>
+<text x="1400" y="306" fill="#53657a" font-size="16" font-weight="normal" text-anchor="middle" >+Y</text>
+<text x="1400" y="606" fill="#172b40" font-size="24" font-weight="bold" text-anchor="middle" >-90° / 270°</text>
+<text x="1400" y="631" fill="#53657a" font-size="17" font-weight="normal" text-anchor="middle" >-Y / audience</text>
+<path d="M 1488.03,421.29 L 1487.24,417.87 L 1486.31,414.49 L 1485.25,411.14 L 1484.06,407.84 L 1482.74,404.59 L 1481.30,401.40 L 1479.73,398.26 L 1478.05,395.18 L 1476.24,392.17 L 1474.32,389.24 L 1472.28,386.38 L 1470.14,383.61 L 1467.89,380.92 L 1465.54,378.31 L 1463.08,375.81 L 1460.53,373.40 L 1457.89,371.09 L 1455.16,368.89 L 1452.35,366.79 L 1449.46,364.81 L 1446.49,362.94 L 1443.45,361.18 L 1440.35,359.55 L 1437.18,358.04 L 1433.96,356.65 L 1430.68,355.39 L 1427.36,354.26 L 1424.00,353.26 L 1420.60,352.39 L 1417.17,351.65 L 1413.72,351.05 L 1410.24,350.58 L 1406.75,350.25 L 1403.25,350.06 L 1399.74,350.00 L 1396.23,350.08 L 1392.73,350.29 L 1389.24,350.65 L 1385.77,351.13 L 1382.31,351.75 L 1378.89,352.51 L 1375.49,353.40 L 1372.14,354.42 L 1368.82,355.57 L 1365.56,356.85 L 1362.34,358.26 L 1359.19,359.79 L 1356.09,361.44 L 1353.06,363.21 L 1350.11,365.10 L 1347.23,367.10 L 1344.43,369.21 L 1341.71,371.43 L 1339.08,373.75 L 1336.55,376.18 L 1334.11,378.70 L 1331.77,381.31 L 1329.53,384.01 L 1327.40,386.80 L 1325.39,389.67" fill="none" stroke="#7542bf" stroke-width="4" marker-end="url(#arrow-heading)"/>
+<text x="1400" y="665" fill="#7542bf" font-size="20" font-weight="normal" text-anchor="middle" >↶ heading increases     ↷ heading decreases</text>
+<rect x="1070" y="720" width="665" height="239" rx="20" fill="#eef4fb" stroke="#dce4ed" stroke-width="1"/>
+<text x="1102" y="763" fill="#172b40" font-size="24" font-weight="bold" text-anchor="start" >FORWARD IS RELATIVE TO THE ROBOT</text>
+<text x="1102" y="798" fill="#53657a" font-size="20" font-weight="normal" text-anchor="start" >Field X and Y stay fixed when the robot turns.</text>
+<text x="1102" y="840" fill="#53657a" font-size="18" font-weight="bold" text-anchor="start" >Heading</text>
+<text x="1278" y="840" fill="#53657a" font-size="18" font-weight="bold" text-anchor="start" >Forward</text>
+<text x="1497" y="840" fill="#53657a" font-size="18" font-weight="bold" text-anchor="start" >Strafe left</text>
+<line x1="1102" y1="851" x2="1701" y2="851" stroke="#cedbe9" stroke-width="1"/>
+<text x="1102" y="882" fill="#172b40" font-size="23" font-weight="bold" text-anchor="start" >0°</text>
+<text x="1278" y="882" fill="#172b40" font-size="21" font-weight="normal" text-anchor="start" >X increases</text>
+<text x="1497" y="882" fill="#172b40" font-size="21" font-weight="normal" text-anchor="start" >Y increases</text>
+<text x="1102" y="923" fill="#172b40" font-size="23" font-weight="bold" text-anchor="start" >90°</text>
+<text x="1278" y="923" fill="#172b40" font-size="21" font-weight="normal" text-anchor="start" >Y increases</text>
+<text x="1497" y="923" fill="#172b40" font-size="21" font-weight="normal" text-anchor="start" >X decreases</text>
+<text x="1084" y="1005" fill="#172b40" font-size="22" font-weight="bold" text-anchor="start" >CURRENT TEST STARTS AT (0, 0, 0°)</text>
+<text x="1084" y="1037" fill="#53657a" font-size="19" font-weight="normal" text-anchor="start" >Startup assigns this pose; it does not detect placement.</text>
+<text x="1084" y="1067" fill="#53657a" font-size="19" font-weight="normal" text-anchor="start" >Use the viewer’s Top Down button for this orientation.</text>
+<text x="1084" y="1097" fill="#53657a" font-size="19" font-weight="normal" text-anchor="start" >Orbiting the camera does not change field coordinates.</text>
+<line x1="65" y1="1131" x2="1735" y2="1131" stroke="#ced8e4" stroke-width="1"/>
+<text x="65" y="1160" fill="#53657a" font-size="17" font-weight="normal" text-anchor="start" >Inside field: 140.4 × 140.4 in (3.5664 × 3.5664 m).  Nominal geometry from config/override/field.xml.</text>
+<text x="65" y="1187" fill="#53657a" font-size="16" font-weight="normal" text-anchor="start" >Robot drawings illustrate heading, not starting positions. Goals, loaders, toggles and tape are drawn from the configured field.</text>
+</g></svg>
