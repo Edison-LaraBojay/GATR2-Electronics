@@ -59,9 +59,20 @@ inline actugatr::WheelDrive drivenWheels(double diameter, double gear_ratio) {
 
 inline actugatr::TankConfig tank() {
     actugatr::TankConfig c;
-    // PLACEHOLDER: every motor on the left side, then every motor on the right.
-    c.left  = actugatr::motorGroup({{11, true}, {12, true}, {13, true}, {14, true}});
-    c.right = actugatr::motorGroup({{17, false}, {18, false}, {19, false}, {20, false}});
+    // Every motor on the left side, then every motor on the right. reversed
+    // true is a negative port in PROS terms.
+    c.left  = actugatr::motorGroup({
+        {18, true},  // front
+        {15, false}, // middle
+        {11, true},  // rear
+        {13, true},  // aux
+    });
+    c.right = actugatr::motorGroup({
+        {19, false}, // front
+        {16, true},  // middle
+        {12, false}, // rear
+        {14, false}, // aux
+    });
     // PLACEHOLDER: meters from the center of the left wheels to the center
     // of the right wheels, where they touch the floor.
     c.track_width = 0.30;
