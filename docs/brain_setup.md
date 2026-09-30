@@ -226,8 +226,8 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 
 | Button | Test |
 |---|---|
-| A | `goToDirect(kDirectGoal)`: from the current pose to the fixed (10 inches, 15 inches, 90 degrees) destination, relative to the field origin; no obstacle checks |
-| X | `goToAvoiding(kAvoidGoal)`: routes around the field's obstacle boxes |
+| A | `goToDirect(kDirectGoal)`: from the current pose to the fixed (72 inches, 24 inches, 90 degrees) destination, relative to the field origin; no obstacle checks |
+| X | `goToAvoiding(kAvoidGoal)`: same destination as A, routing around the field's obstacle boxes |
 | Y | `goToAvoiding(kLandmarkOffset, landmark())`: relative to a named landmark from the generated `Field` table. Without a camera it uses the landmark's nominal map pose (`kRequireObservedLandmark = false`). |
 
 - autonomous() runs the direct test, then the avoiding test.
@@ -235,7 +235,7 @@ The perpendicular wheels calibrate independently: a forward push must leave the 
 - The screen shows the command state and reason, errors, cross-track, segment and plan count, which is what you tune by.
 - The last row shows the VEX IMU tilt and whether telemetry is on, off or refused by the Pi. The same movement status, commanded speeds and wheel targets go to the Pi viewer as telemetry every 100 ms (section 10).
 
-The current floor test starts at (0, 0, heading 0). A does not re-place the robot:
+The current test starts at (7 inches, 24 inches, heading 0 degrees). A does not re-place the robot:
 manual movement before pressing A is included in the localized starting pose.
 Tank mode turns toward the destination, drives the straight segment and turns
 to the final heading. Mecanum mode translates while changing heading; it is
@@ -253,7 +253,8 @@ changing these; the Pi's `brain_profile_usb.xml` receives the robot profile.
 - The planner treats the robot as a circle around its origin: the footprint's farthest corner plus the clearance.
 - On the Override field that circle cannot pass between diagonal goals for robots larger than about 0.4 m square. An 18 inch robot is refused there and must use direct moves in those areas.
 - The same closes each corner pocket between the walls and its two nearest goals, around (0.6, 0.6) and the other corners. An avoiding move from inside one fails with "no path"; drive out with a direct move first.
-- The current (0, 0) start overlaps the field boundary once the robot footprint is included. A ignores those boundaries; X/Y require placement at a valid pose inside the configured field. The host end-to-end tests use their own field-valid starting poses.
+- The current start is close to the red wall. A ignores field bounds and obstacles; X/Y check the footprint and configured clearance. The host end-to-end tests use their own field-valid starting poses.
+- For the current (7 in, 24 in) to (72 in, 24 in) test, A crosses `red_goal_3_south` near (46.66 in, 23.11 in). Use X on the assembled field. The initial rear wall gap is approximately 9 mm; the avoiding planner supports a straight exit from this near-wall pose before normal routing.
 - See [investiGATR](investigatr.md).
 
 ## 8. Sensor loss and recovery

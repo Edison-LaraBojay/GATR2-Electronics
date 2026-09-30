@@ -3,6 +3,7 @@
 - [US Letter checkerboard](checkerboard-9x6-25mm-letter.pdf)
 - [A4 checkerboard](checkerboard-9x6-25mm-a4.pdf)
 - [Field coordinate guide](field-coordinate-guide.pdf)
+- [Annotated field map: axes and heading](field-conventions-annotated.png) ([editable SVG](field-conventions-annotated.svg))
 
 The checkerboards have **10 columns by 7 rows of squares**, producing **9 by 6
 inner corners**. Each square is drawn at **25 mm**. Both paper versions contain

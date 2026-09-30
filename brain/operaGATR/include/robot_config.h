@@ -156,17 +156,16 @@ inline actugatr::DriveOwnerConfig manual() {
 }
 
 // ---------------------------------------------------------------------------
-// Direct floor test from initial pose (0, 0, 0). A plans from the latest
-// localized pose to the fixed destination; it never resets the start pose.
-// X/Y destinations remain examples for the Override field; choose a valid
-// field placement before using them. The origin start overlaps the boundary.
+// A/X plan from the latest localized pose to the same fixed destination;
+// neither resets the start pose. A is direct, X checks field obstacles.
+// Starting pose is in gatr2_robot.h; Y remains a separate landmark example.
 // Poses are {x, y, heading}: meters from the field origin (the inside
 // bottom left corner of the field diagram), heading CCW from +x.
 // ---------------------------------------------------------------------------
-// Direct: (10 inches, 15 inches, 90 degrees), no obstacles checked.
-constexpr investigatr::Pose kDirectGoal{10.0 * kInch, 15.0 * kInch, 90.0 * kDeg};
-// Avoiding: field origin reference, around the center goal.
-constexpr investigatr::Pose kAvoidGoal{2.4, 1.8, 0.0};
+// Edit this destination for both A and X: (72 inches, 24 inches, 90 degrees).
+constexpr investigatr::Pose kDirectGoal{35.0 * kInch, 24.0 * kInch, 90.0 * kDeg};
+// Same field-relative destination with obstacle avoidance.
+constexpr investigatr::Pose kAvoidGoal = kDirectGoal;
 // Landmark relative: 0.45 m on the landmark's +x side, facing it.
 constexpr investigatr::Pose kLandmarkOffset{0.45, 0.0, 180.0 * kDeg};
 inline investigatr::Reference landmark() { return Field::RedGoal2West; }

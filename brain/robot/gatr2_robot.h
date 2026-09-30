@@ -21,6 +21,7 @@ namespace gatr2_robot
 {
 
 constexpr double kDeg = investigatr::kPi / 180.0;
+constexpr double kInch = 0.0254;
 
 // ---------------------------------------------------------------------------
 // Pi link. The Pi must run the matching config: brain_profile_usb.xml for
@@ -72,8 +73,16 @@ constexpr uint32_t kTelemetryPeriodMs = 100;
 //   measured   travel_scale from the wheel calibration in locaGATR;
 //              keep 1.0 until calibrated, never use it to hide a wrong radius
 // ---------------------------------------------------------------------------
-// Approximate 48 mm tracking-wheel diameter; refine travel_scale after testing.
+// Approximate physical 48 mm tracking-wheel diameter.
 constexpr double kTrackingRadius = 0.024;
+// Temporary distance multipliers from separate 23-inch straight pushes:
+// forward 0.167 -> 0.445 m, sideways 0.443 -> 0.740 m.
+// The existing Pi accepts travel_scale only within 0.9..1.1, so send an
+// effective radius (physical radius * multiplier) for this bench workaround.
+// Keep travel_scale at 1.0; reset these to 1.0 before correcting CPR/gearing
+// or physical radius so the correction is not applied twice.
+constexpr double kForwardTravelMultiplier = (23.0 * kInch) / (0.445 - 0.167);
+constexpr double kSidewaysTravelMultiplier = (23.0 * kInch) / (0.740 - 0.443);
 // Encoder counts per encoder shaft turn, every edge counted:
 // 4 x the encoder's pulses per rev (AS5047P default 1000 PPR = 4000).
 constexpr uint32_t kCountsPerRev = 4000;
@@ -87,7 +96,7 @@ constexpr uint32_t kCountsPerRev = 4000;
 inline communigatr::TrackingWheel forwardWheel() {
     communigatr::TrackingWheel w;
     w.encoder_port   = 1;
-    w.radius         = kTrackingRadius;
+    w.radius         = kTrackingRadius * kForwardTravelMultiplier;
     w.counts_per_rev = kCountsPerRev;
     w.x              = 0.0;   // Along-wheel position does not affect planar odometry.
     w.y              = -0.1115; // At the right tread centerline: -22.3 / 2 cm.
@@ -101,7 +110,7 @@ inline communigatr::TrackingWheel forwardWheel() {
 inline communigatr::TrackingWheel sidewaysWheel() {
     communigatr::TrackingWheel w;
     w.encoder_port   = 0;
-    w.radius         = kTrackingRadius;
+    w.radius         = kTrackingRadius * kSidewaysTravelMultiplier;
     w.counts_per_rev = kCountsPerRev;
     w.x              = 0.011;       // Approx. 11 cm behind front axle: (24.2 / 2 - 11) cm.
     w.y              = 0.0;         // Along-wheel position does not affect planar odometry.
@@ -124,6 +133,7 @@ inline communigatr::TrackingWheel leftWheel() {
 inline communigatr::TrackingWheel rightWheel() {
     communigatr::TrackingWheel w = forwardWheel();
     w.encoder_port               = 2;
+    w.radius                     = kTrackingRadius; // Port 2 has not been calibrated.
     w.y                          = -0.15; // PLACEHOLDER
     return w;
 }
@@ -177,13 +187,12 @@ constexpr bool usesVexImu() {
 // here before starting it. x, y meters from the field origin (the inside
 // bottom left corner of the field diagram); heading degrees CCW from +x
 // (0 faces right on the diagram).
-// Direct floor test: call the initial robot center (0, 0), facing +x.
-// This does not move the configured field: (0, 0) is its corner, so avoiding
-// moves from this pose fail the footprint/boundary check. Set a real start
-// inside the field before testing avoidance. UP explicitly places here again.
+// Current test: robot center (7 in, 24 in), facing +x. Use inches * kInch
+// below to enter distances; kStartHeadingDegrees is directly in degrees.
+// UP assigns this pose again: return to this physical placement first.
 // ---------------------------------------------------------------------------
-constexpr double kStartX              = 0.0;
-constexpr double kStartY              = 0.0;
+constexpr double kStartX              = 7.0 * kInch;
+constexpr double kStartY              = 24.0 * kInch;
 constexpr double kStartHeadingDegrees = 0.0;
 constexpr investigatr::Pose kStartPose{kStartX, kStartY, kStartHeadingDegrees * kDeg};
 

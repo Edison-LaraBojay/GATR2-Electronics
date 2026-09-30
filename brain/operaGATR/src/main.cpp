@@ -255,10 +255,45 @@ void display() {
         row(3, "Pose: %s", investigatr::toString(robot.status));
     }
     row(4, "Speed scale %.2f  Start: %s", g_speed_scale, communigatr::toString(g_startup->state()));
-    row(5, "Last: %s", g_events.size() > 0 ? communigatr::toString(g_events.at(0).event) : "-");
-    row(6, "A direct  X avoid  Y landmark  B cancel");
-    row(7, "UP place  DOWN recal IMU  LEFT/RIGHT speed");
-    row(8, "%s", g_message);
+    if (!link.busy && !link.connected) {
+        // Show the existing snapshot while connecting: no extra transport
+        // reads or console traffic, and no stale counters from a busy read.
+        row(5, "I/O %s opens %lu session %08lx", link.port_open ? "on" : "off",
+            static_cast<unsigned long>(link.link.opens),
+            static_cast<unsigned long>(link.session));
+        if (gatr2_robot::kUseUsb) {
+            row(6, "USB tx %lu rx %lu short %lu",
+                static_cast<unsigned long>(link.usb.frames_out),
+                static_cast<unsigned long>(link.usb.frames_in),
+                static_cast<unsigned long>(link.usb.short_writes));
+        } else {
+            row(6, "Serial req %lu readerr %lu writeerr %lu",
+                static_cast<unsigned long>(link.stats.requests),
+                static_cast<unsigned long>(link.stats.read_errors),
+                static_cast<unsigned long>(link.stats.write_errors));
+        }
+        row(7, "Reply %lu TO %lu bad %lu stray %lu",
+            static_cast<unsigned long>(link.stats.replies),
+            static_cast<unsigned long>(link.stats.timeouts),
+            static_cast<unsigned long>(link.stats.bad_frames),
+            static_cast<unsigned long>(link.stats.uncorrelated));
+        if (link.error == communigatr::LinkError::kUnsupportedVersion) {
+            row(8, "Pi protocol v%u: unsupported version", unsigned(link.peer_version));
+        } else if (link.error == communigatr::LinkError::kUnsupportedOp) {
+            row(8, "Pi protocol v%u: unsupported command", unsigned(link.peer_version));
+        } else if (gatr2_robot::kUseUsb) {
+            row(8, "USB readerr %lu drop %lu | task %u",
+                static_cast<unsigned long>(link.usb.read_errors),
+                static_cast<unsigned long>(link.usb.lines_dropped), unsigned(link.started));
+        } else {
+            row(8, "%s", g_message);
+        }
+    } else {
+        row(5, "Last: %s", g_events.size() > 0 ? communigatr::toString(g_events.at(0).event) : "-");
+        row(6, "A direct  X avoid  Y landmark  B cancel");
+        row(7, "UP place  DOWN recal IMU  LEFT/RIGHT speed");
+        row(8, "%s", g_message);
+    }
     const communigatr::RobotAttitude a = attitude();
     const char* telemetry = !gatr2_robot::kSendTelemetry ? "off"
                             : link.telemetry_unsupported ? "refused by the Pi"
