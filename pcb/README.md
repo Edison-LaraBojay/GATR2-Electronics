@@ -7,8 +7,9 @@ schematics, layouts, libraries and design/test notes.
 |---|---|
 | [IMU](IMU/README.md) | Inertial measurements for attitude and heading. |
 | [Magnetic encoder](MagneticEncoder/README.md) | Compact tracking-wheel encoders. |
+| [Pi HAT](PiHat/README.md) | Deprecated Pi/Pico carrier; complete design history retained. |
 
-The complete [Pi HAT family](../deprecated/pcb/PiHat/README.md) is deprecated
+The complete [Pi HAT family](PiHat/README.md) is deprecated
 with the Pi-based system. Its design history remains available for reference.
 
 Choose an iteration and open its `.kicad_pro`. Keep project files and custom
@@ -16,5 +17,4 @@ libraries together. The magnetic encoder symbol table contains a historical
 workstation-specific library path that may need configuring on another machine.
 
 Follow the [PCB contribution guide](../docs/contributing/README.md) for new
-boards and iterations. The [former hardware rationale](../deprecated/docs/hardware.md)
-is historical; [Pico acquisition](../pico/README.md) remains active.
+boards and iterations. [Pico acquisition](../pico/README.md) remains active.
