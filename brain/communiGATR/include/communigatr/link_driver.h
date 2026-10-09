@@ -1,5 +1,5 @@
 // link_driver.h
-// investiGATR StateSource and PathSink over a Client. Converts brain link
+// Legacy Pi StateSource, FieldSource and PathSink over a Client. Converts brain link
 // state and field documents (mm, centidegrees, ms) to meters, radians and
 // seconds, derives the robot status, and numbers field frames. No I/O: the
 // owner polls the client, on the same clock it passes here.
@@ -10,6 +10,7 @@
 #include "communigatr/client.h"
 #include "communigatr/readiness.h"
 #include "communigatr/robot_profile.h"
+#include "investigatr/field_source.h"
 #include "investigatr/path.h"
 #include "investigatr/state_source.h"
 
@@ -22,7 +23,9 @@ struct LinkDriverConfig {
     bool accept_configured_anchor = false;
 };
 
-class LinkDriver : public investigatr::StateSource, public investigatr::PathSink {
+class LinkDriver : public investigatr::StateSource,
+                   public investigatr::FieldSource,
+                   public investigatr::PathSink {
 public:
     explicit LinkDriver(Client& client, const LinkDriverConfig& config = {});
 

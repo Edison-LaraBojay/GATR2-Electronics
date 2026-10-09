@@ -2,7 +2,7 @@
 
 #include "asm330_supervisor.h"
 
-#include "frames.h"
+#include "imu_status.h"
 
 namespace asm330
 {
@@ -40,7 +40,7 @@ Action Supervisor::step(uint32_t now_us) {
 
     case State::Reset:
         if (now_us - since_us_ > kResetUs) {
-            fail(now_us, translagatr::kPicoImuReasonBoot);
+            fail(now_us, imu::kReasonBoot);
             return Action::None;
         }
         if (now_us - last_poll_us_ < kPollUs) {
@@ -70,7 +70,7 @@ void Supervisor::probed(uint32_t now_us, bool who_am_i_ok) {
         return;
     }
     if (!who_am_i_ok) {
-        fail(now_us, translagatr::kPicoImuReasonNoResponse);
+        fail(now_us, imu::kReasonNoResponse);
         return;
     }
     state_        = State::Reset;
@@ -85,7 +85,7 @@ void Supervisor::resetPolled(uint32_t now_us, bool cleared) {
     if (cleared) {
         state_ = State::Configure;
     } else if (now_us - since_us_ > kResetUs) {
-        fail(now_us, translagatr::kPicoImuReasonBoot);
+        fail(now_us, imu::kReasonBoot);
     }
 }
 
@@ -94,7 +94,7 @@ void Supervisor::configured(uint32_t now_us, bool ok) {
         return;
     }
     if (!ok) {
-        fail(now_us, translagatr::kPicoImuReasonFeatures);
+        fail(now_us, imu::kReasonFeatures);
         return;
     }
     state_          = State::Run;
@@ -107,7 +107,7 @@ void Supervisor::checked(uint32_t now_us, uint8_t reason) {
     if (state_ != State::Run) {
         return;
     }
-    if (reason == translagatr::kPicoImuReasonNone) {
+    if (reason == imu::kReasonNone) {
         check_failures_ = 0;
         return;
     }

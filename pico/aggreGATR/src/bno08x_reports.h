@@ -29,7 +29,7 @@ class Bno08xReports {
     uint32_t alignmentSamples() const { return alignment_.samples(); }
     uint8_t ackMask() const { return ack_mask_; } // bit 0 accel, bit 1 gyro
 
-    // Existing scalar yaw wire units. No output until aligned and healthy.
+    // Scalar yaw in millidegrees per second. No output until aligned and healthy.
     bool take(uint32_t cut_us, int32_t& yaw_mdps);
 
   private:

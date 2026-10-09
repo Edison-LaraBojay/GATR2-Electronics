@@ -76,7 +76,7 @@ struct World {
           sim(*kinematics, wheels(), out),
           follower(holonomic ? std::unique_ptr<Follower>(new HolonomicFollower())
                              : std::unique_ptr<Follower>(new DifferentialFollower())),
-          motion(state, planner, *follower, config(holonomic)) {}
+          motion(state, state, planner, *follower, config(holonomic)) {}
 
     static MotionConfig config(bool holonomic) {
         MotionConfig c;

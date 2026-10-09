@@ -18,6 +18,7 @@
 #include "actugatr/chassis.h"
 #include "actugatr/follower.h"
 #include "investigatr/field.h"
+#include "investigatr/field_source.h"
 #include "investigatr/motion_model.h"
 #include "investigatr/path.h"
 #include "investigatr/planner.h"
@@ -137,7 +138,9 @@ bool valid(const MotionConfig& config, const char** why = nullptr);
 class Motion {
 public:
     // follower.holonomic() must match config.model.holonomic.
-    Motion(investigatr::StateSource& source, const investigatr::PathPlanner& planner,
+    // Pose input and Brain-owned field geometry have independent lifetimes.
+    Motion(investigatr::StateSource& source, investigatr::FieldSource& fields,
+           const investigatr::PathPlanner& planner,
            Follower& follower, const MotionConfig& config);
 
     // Each command replaces the previous one at once and gets a new id.
@@ -150,8 +153,13 @@ public:
     // Active command -> kCancelled. No effect once terminal.
     void cancel();
 
-    // Cancels an active command with kSourceChanged.
+    // Cancels an active command with kSourceChanged; keeps the independent
+    // field. Observed estimates must remain bound to the new pose source's
+    // frame namespace, or the caller must replace their FieldSource as well.
     void setSource(investigatr::StateSource& source);
+
+    // Cancels an active command and discards the previous field snapshot.
+    void setFieldSource(investigatr::FieldSource& fields);
 
     // The next command gets this id (0 ignored); later ones continue from it.
     // For owners that hand out ids before the command reaches Motion.
@@ -182,6 +190,7 @@ private:
     ChassisCommand      zero();
 
     investigatr::StateSource*       source_;
+    investigatr::FieldSource*       fields_;
     const investigatr::PathPlanner& planner_;
     Follower&                       follower_;
     MotionConfig                    config_;

@@ -1,5 +1,5 @@
 // board.h
-// Pico pin map per Pi HAT revision, selected by GATR2_HAT_REV. Values are
+// Existing acquisition-board pin map, selected by GATR2_HAT_REV. Values are
 // RP2040 GPIO numbers (GPn); Pico header pins and HAT connectors are noted.
 
 #pragma once
@@ -28,10 +28,6 @@ constexpr uint8_t kImuCsPin   = 9;  // pin 12, J7-6
 // BNO08X only, direct wires off the PCB. PS1 is tied to 3.3 V.
 constexpr uint8_t kImuRstPin  = 12; // pin 16, RST
 constexpr uint8_t kImuWakePin = 13; // pin 17, PS0/WAKE
-
-// UART to the Pi, Serial1 (UART0).
-constexpr uint8_t kPiTxPin = 16; // pin 21
-constexpr uint8_t kPiRxPin = 17; // pin 22
 
 } // namespace board
 

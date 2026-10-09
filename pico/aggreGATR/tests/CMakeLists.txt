@@ -30,10 +30,6 @@ set(TEST_SOURCES
     shtp_header_gtest.cpp
     imu_retry_gtest.cpp
     asm330_supervisor_gtest.cpp
-    command_records_gtest.cpp
-    pico_commands_gtest.cpp
-    pi_link_gtest.cpp
-    diag_report_gtest.cpp
 )
 
 # Sources under test.
@@ -44,11 +40,6 @@ set(CODE_UNDER_TEST
     ../src/bno08x_supervisor.cpp
     ../src/imu_retry.cpp
     ../src/asm330_supervisor.cpp
-    ../src/command_records.cpp
-    ../src/pico_commands.cpp
-    ../src/pi_link.cpp
-    ../src/diag_report.cpp
-    ../../../translaGATR/frame_codec.cpp
 )
 
 add_executable(pico_tests
@@ -57,7 +48,6 @@ add_executable(pico_tests
 )
 target_include_directories(pico_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../translaGATR
 )
 target_compile_options(pico_tests PRIVATE -Wall -Wextra)
 target_link_libraries(pico_tests PRIVATE GTest::gtest_main)

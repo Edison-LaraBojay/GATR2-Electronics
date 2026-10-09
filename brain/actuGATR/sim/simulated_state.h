@@ -1,10 +1,11 @@
 // simulated_state.h
-// Host StateSource fed with truth: pose samples with latency, status, link
-// state, frame, and a settable complete field.
+// Host pose and field sources fed with truth: pose samples with latency,
+// status, link state, frame, and a separately settable complete field.
 
 #pragma once
 #include <deque>
 
+#include "investigatr/field_source.h"
 #include "investigatr/state_source.h"
 
 namespace actugatr
@@ -15,7 +16,7 @@ using investigatr::Pose;
 using investigatr::RobotStatus;
 using investigatr::Seconds;
 
-class SimulatedState : public investigatr::StateSource {
+class SimulatedState : public investigatr::StateSource, public investigatr::FieldSource {
 public:
     // Truth at time now. robot() reports the newest sample at least latency
     // old, aged from its sample time.

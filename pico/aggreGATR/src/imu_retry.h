@@ -1,5 +1,5 @@
 // imu_retry.h
-// IMU bring-up retry bookkeeping and the IMU fields of the Pico status frame,
+// IMU bring-up retry bookkeeping and local health status,
 // shared by both IMU drivers. No hardware dependencies.
 
 #pragma once
@@ -28,7 +28,7 @@ class RetryPolicy {
     uint16_t attempt();
 
     // The current attempt, or a running device, failed. reason is a
-    // translagatr::PicoImuReason. Returns the wait before the next attempt.
+    // imu::Reason. Returns the wait before the next attempt.
     uint32_t failed(uint8_t reason);
 
     // The device stayed up for kStableUs. Idempotent.
@@ -53,10 +53,10 @@ struct DeviceView {
     bool waiting = false; // between attempts
 };
 
-// translagatr::PicoImuState. Aligning is up but not ready.
-uint8_t wireState(const DeviceView& d, const RetryPolicy& retry);
+// imu::State. Aligning is up but not ready.
+uint8_t statusState(const DeviceView& d, const RetryPolicy& retry);
 
-// translagatr::PicoImuReason: the last failure, none while disabled or up.
-uint8_t wireReason(const DeviceView& d, const RetryPolicy& retry);
+// imu::Reason: the last failure, none while disabled or up.
+uint8_t statusReason(const DeviceView& d, const RetryPolicy& retry);
 
 } // namespace imu

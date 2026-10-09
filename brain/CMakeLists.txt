@@ -26,5 +26,9 @@ enable_testing()
 include(GoogleTest)
 
 add_subdirectory(investiGATR)
-add_subdirectory(communiGATR)
 add_subdirectory(actuGATR)
+
+option(GATR2_BUILD_COMMUNIGATR "Build the legacy Pi link and its host tests" ON)
+if(GATR2_BUILD_COMMUNIGATR)
+    add_subdirectory(communiGATR)
+endif()

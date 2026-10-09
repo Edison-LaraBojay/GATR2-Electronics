@@ -149,9 +149,10 @@ bool valid(const MotionConfig& c, const char** why) {
     return investigatr::valid(c.model, why);
 }
 
-Motion::Motion(investigatr::StateSource& source, const investigatr::PathPlanner& planner,
+Motion::Motion(investigatr::StateSource& source, investigatr::FieldSource& fields,
+               const investigatr::PathPlanner& planner,
                Follower& follower, const MotionConfig& config)
-    : source_(&source), planner_(planner), follower_(follower), config_(config),
+    : source_(&source), fields_(&fields), planner_(planner), follower_(follower), config_(config),
       config_valid_(valid(config) && follower.holonomic() == config.model.holonomic) {}
 
 CommandId Motion::goToDirect(const Pose& destination, const Reference& relative_to,
@@ -221,7 +222,14 @@ void Motion::setSource(investigatr::StateSource& source) {
     if (active()) {
         finish(MotionState::kCancelled, MotionReason::kSourceChanged);
     }
-    source_     = &source;
+    source_ = &source;
+}
+
+void Motion::setFieldSource(investigatr::FieldSource& fields) {
+    if (active()) {
+        finish(MotionState::kCancelled, MotionReason::kSourceChanged);
+    }
+    fields_     = &fields;
     field_      = investigatr::Field{};
     have_field_ = false;
 }
@@ -368,7 +376,7 @@ ChassisCommand Motion::update(Seconds now) {
     have_last_update_ = true;
     last_update_      = now;
 
-    if (source_->field(field_)) {
+    if (fields_->field(field_)) {
         have_field_ = true;
     }
     if (!active()) {

@@ -1,7 +1,7 @@
 // imu_bno08x.cpp
 // BNO08X over SPI1 through CEVA sh2 v1.4.0, non-blocking. Reports 0x01/0x07:
 // startup gravity alignment from acceleration, then XYZ gyro projected onto
-// the learned up axis. Gyro bias remains for the Pi to calibrate.
+// the learned up axis. Gyro bias is not removed by acquisition.
 // Datasheet 1000-3927, SH-2 manual 1000-3625, SHTP 1000-3535.
 //
 // Bounded blocking: sh2_open (10 ms reset pulse, then up to 200 ms polling
@@ -21,7 +21,7 @@
 #include "bno08x_supervisor.h"
 #include "bno08x_reports.h"
 #include "config.h"
-#include "frames.h"
+#include "imu_status.h"
 #include "shtp_header.h"
 
 extern "C" {
@@ -381,14 +381,12 @@ Status status() {
     const DeviceView d = view();
     Status           s;
     s.enabled  = d.enabled;
-    s.state    = wireState(d, g_sup.retry());
-    s.reason   = wireReason(d, g_sup.retry());
+    s.state    = statusState(d, g_sup.retry());
+    s.reason   = statusReason(d, g_sup.retry());
     s.attempts = g_sup.retry().attempts();
     s.epoch    = g_sup.epoch();
     return s;
 }
-
-uint8_t firmware() { return translagatr::kPicoFirmwareBno08x; }
 
 bool readGyroZ(uint32_t cut_us, int32_t& gyro_z_mdps) { return g_reports.take(cut_us, gyro_z_mdps); }
 

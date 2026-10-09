@@ -97,7 +97,9 @@ struct ProsLinkStatus {
     ProsUsbStats  usb; // kUsb only
 };
 
-class ProsLink : public investigatr::StateSource, public investigatr::PathSink {
+class ProsLink : public investigatr::StateSource,
+                 public investigatr::FieldSource,
+                 public investigatr::PathSink {
 public:
     explicit ProsLink(const LinkConfig& config);
 
@@ -116,7 +118,7 @@ public:
 
     ProsLinkStatus status() const;
 
-    // StateSource and PathSink. On a busy mutex: kNoLink robot; field() leaves
+    // StateSource, FieldSource and PathSink. On a busy mutex: kNoLink robot; field() leaves
     // out as it was; a path report is dropped.
     investigatr::RobotState robot(Seconds now) override;
     bool                    field(investigatr::Field& out) override;

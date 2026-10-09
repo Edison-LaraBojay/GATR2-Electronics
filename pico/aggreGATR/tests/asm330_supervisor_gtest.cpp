@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "asm330_supervisor.h"
-#include "frames.h"
+#include "imu_status.h"
 
 using namespace asm330;
 
@@ -56,7 +56,7 @@ TEST(Asm330Supervisor, WrongWhoAmIIsRetriedNotPermanent) {
         t += wait;
     }
     EXPECT_TRUE(s.retry().exhausted());
-    EXPECT_EQ(s.retry().reason(), translagatr::kPicoImuReasonNoResponse);
+    EXPECT_EQ(s.retry().reason(), imu::kReasonNoResponse);
 
     // The chip appears: the next slow attempt brings it up.
     t = bringUp(s, t);
@@ -84,7 +84,7 @@ TEST(Asm330Supervisor, ResetPollIsRateLimitedAndBounded) {
     }
     EXPECT_EQ(s.state(), State::Wait);
     EXPECT_EQ(s.holdUs(), imu::kBackoffMinUs);
-    EXPECT_EQ(s.retry().reason(), translagatr::kPicoImuReasonBoot);
+    EXPECT_EQ(s.retry().reason(), imu::kReasonBoot);
 }
 
 TEST(Asm330Supervisor, ConfigureReadbackMismatchFails) {
@@ -97,7 +97,7 @@ TEST(Asm330Supervisor, ConfigureReadbackMismatchFails) {
     EXPECT_EQ(s.step(kPollUs), Action::Configure);
     s.configured(kPollUs, false);
     EXPECT_EQ(s.state(), State::Wait);
-    EXPECT_EQ(s.retry().reason(), translagatr::kPicoImuReasonFeatures);
+    EXPECT_EQ(s.retry().reason(), imu::kReasonFeatures);
 }
 
 TEST(Asm330Supervisor, HealthCheckFailureRestartsTheDevice) {
@@ -108,20 +108,20 @@ TEST(Asm330Supervisor, HealthCheckFailureRestartsTheDevice) {
     EXPECT_EQ(s.step(t + kCheckUs - 1), Action::None);
     t += kCheckUs;
     EXPECT_EQ(s.step(t), Action::Check);
-    s.checked(t, translagatr::kPicoImuReasonNone);
+    s.checked(t, imu::kReasonNone);
     EXPECT_TRUE(s.running());
 
     // Past kStableUs: failures are the loss of a stable device.
     t += imu::kStableUs;
     EXPECT_EQ(s.step(t), Action::Check);
-    s.checked(t, translagatr::kPicoImuReasonStream);
+    s.checked(t, imu::kReasonStream);
     EXPECT_TRUE(s.running());
     t += kCheckUs;
     EXPECT_EQ(s.step(t), Action::Check);
-    s.checked(t, translagatr::kPicoImuReasonStream);
+    s.checked(t, imu::kReasonStream);
     EXPECT_EQ(s.state(), State::Wait);
     EXPECT_EQ(s.holdUs(), imu::kBackoffMinUs);
-    EXPECT_EQ(s.retry().reason(), translagatr::kPicoImuReasonStream);
+    EXPECT_EQ(s.retry().reason(), imu::kReasonStream);
 
     const uint8_t epoch = s.epoch();
     bringUp(s, t + imu::kBackoffMinUs);
@@ -135,7 +135,7 @@ TEST(Asm330Supervisor, OneBadCheckIsTolerated) {
     for (int i = 0; i < 6; ++i) {
         t += kCheckUs;
         EXPECT_EQ(s.step(t), Action::Check);
-        s.checked(t, i % 2 == 0 ? translagatr::kPicoImuReasonNoResponse : translagatr::kPicoImuReasonNone);
+        s.checked(t, i % 2 == 0 ? imu::kReasonNoResponse : imu::kReasonNone);
         EXPECT_TRUE(s.running()) << i;
     }
     EXPECT_EQ(s.epoch(), 1);

@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "bno08x_supervisor.h"
-#include "frames.h"
+#include "imu_status.h"
 #include "gyro_window.h"
 
 using namespace bno08x;
@@ -81,7 +81,7 @@ TEST(Bno08xSupervisor, AbsentImuRetriesFiveTimesQuicklyThenSlowly) {
     }
     EXPECT_TRUE(s.retry().exhausted());
     EXPECT_EQ(s.retry().attempts(), 8);
-    EXPECT_EQ(s.retry().reason(), translagatr::kPicoImuReasonBoot);
+    EXPECT_EQ(s.retry().reason(), imu::kReasonBoot);
 }
 
 TEST(Bno08xSupervisor, BootEnableAckRun) {
@@ -111,7 +111,7 @@ TEST(Bno08xSupervisor, AckTimeoutFails) {
     EXPECT_EQ(s.step(1000 + kAckUs, reportEvent()), Action::None);
     EXPECT_EQ(s.step(1000 + kAckUs + 1, Events{}), Action::HoldReset);
     expectHold(s, 1000 + kAckUs + 1, imu::kBackoffMinUs);
-    EXPECT_EQ(s.retry().reason(), translagatr::kPicoImuReasonFeatures);
+    EXPECT_EQ(s.retry().reason(), imu::kReasonFeatures);
 }
 
 TEST(Bno08xSupervisor, EnableErrorFails) {
@@ -128,7 +128,7 @@ TEST(Bno08xSupervisor, FailedOpenIsRetriedLikeAnyAttempt) {
     Supervisor s;
     s.start(0);
     EXPECT_EQ(s.step(1000, openFailedEvent()), Action::HoldReset);
-    EXPECT_EQ(s.retry().reason(), translagatr::kPicoImuReasonNoResponse);
+    EXPECT_EQ(s.retry().reason(), imu::kReasonNoResponse);
     expectHold(s, 1000, imu::kBackoffMinUs);
 
     // The driver opens again on this release; now it succeeds.
@@ -177,7 +177,7 @@ TEST(Bno08xSupervisor, StaleReportsFail) {
     EXPECT_EQ(s.step(t + kStaleUs, Events{}), Action::None);
     EXPECT_EQ(s.step(t + kStaleUs + 1, Events{}), Action::HoldReset);
     expectHold(s, t + kStaleUs + 1, imu::kBackoffMinUs);
-    EXPECT_EQ(s.retry().reason(), translagatr::kPicoImuReasonStream);
+    EXPECT_EQ(s.retry().reason(), imu::kReasonStream);
 }
 
 TEST(Bno08xSupervisor, StableRunEndsTheEpisode) {
@@ -197,7 +197,7 @@ TEST(Bno08xSupervisor, StableRunEndsTheEpisode) {
     // The third attempt boots and runs past kStableUs with steady reports.
     t = runStable(s, bootToRun(s, t));
     EXPECT_EQ(s.retry().attempts(), 3);
-    EXPECT_EQ(s.retry().reason(), translagatr::kPicoImuReasonNone);
+    EXPECT_EQ(s.retry().reason(), imu::kReasonNone);
 
     // Losing the stable device starts a new episode with the shortest hold.
     t += kStaleUs + 1;

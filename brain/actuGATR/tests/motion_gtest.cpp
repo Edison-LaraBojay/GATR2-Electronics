@@ -1,7 +1,7 @@
 // motion_gtest.cpp
 // Motion: references applied once, direct vs avoiding, waiting and failure
 // reasons, cancellation, identity, deadlines through replans, field
-// corrections, path reports and the TELEMETRY target bit. Uses the host test
+// corrections and path reports. Uses the host test
 // planner; the real planner runs in the integration tests.
 
 #include "actugatr/motion.h"
@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "actugatr/drive.h"
-#include "actugatr/telemetry.h"
 #include "sim/drive_sim.h"
 #include "sim/simulated_state.h"
 #include "sim/straight_planner.h"
@@ -89,6 +88,28 @@ public:
     std::vector<Report> reports;
 };
 
+// A future localization backend only implements pose input, with no field API.
+class PoseOnlySource : public investigatr::StateSource {
+public:
+    investigatr::RobotState robot(Seconds) override { return state; }
+
+    investigatr::RobotState state{RobotStatus::kValid, {1, 1, 0}, 0, 1, true, 0};
+};
+
+class BrainField : public investigatr::FieldSource {
+public:
+    explicit BrainField(const Field& field) : value(field) { value.generation = 1; }
+
+    bool field(Field& out) override {
+        if (out.generation != value.generation) {
+            out = value;
+        }
+        return true;
+    }
+
+    Field value;
+};
+
 struct Loop {
     explicit Loop(bool holonomic = false)
         : kinematics(holonomic ? std::unique_ptr<Kinematics>(new MecanumKinematics(0.3, 0.3))
@@ -97,7 +118,7 @@ struct Loop {
           sim(*kinematics, wheels(), out),
           follower(holonomic ? std::unique_ptr<Follower>(new HolonomicFollower())
                              : std::unique_ptr<Follower>(new DifferentialFollower())),
-          motion(state, planner, *follower, config(holonomic)) {
+          motion(state, state, planner, *follower, config(holonomic)) {
         motion.setPathSink(&sink);
         sim.setPose(Pose{1.0, 1.0, 0});
     }
@@ -250,48 +271,6 @@ TEST(Motion, NominalReferenceWaitsForAnObservationUnlessAllowed) {
     EXPECT_EQ(allowed.run(10.0), MotionState::kCompleted);
 }
 
-// The viewer draws target_* only with kTelemetryTarget: clear while the
-// reference is unresolved, set from the first plan on, clear again for a new
-// command.
-TEST(Motion, TelemetryTargetBitFollowsTheResolvedDestination) {
-    const uint8_t kTarget   = translagatr::kTelemetryTarget;
-    auto          telemetry = [](const Loop& l) {
-        DriveSnapshot s;
-        s.motion = l.motion.status();
-        return telemetryOf(s);
-    };
-    Loop l;
-    l.state.setField(field({landmark(5, {2.0, 1.0, 0}, EstimateSource::kNominal)}));
-    l.motion.goToDirect({-0.5, 0, 0}, Reference::object(5, kMapId));
-    for (int i = 0; i < 20; ++i) {
-        l.step();
-    }
-    ASSERT_EQ(l.motion.status().state, MotionState::kWaiting);
-    translagatr::BrainTelemetry t = telemetry(l);
-    EXPECT_EQ(t.flags & kTarget, 0);
-    EXPECT_EQ(t.target_x_mm, 0);
-    EXPECT_EQ(t.target_y_mm, 0);
-
-    l.state.setField(field({landmark(5, {2.02, 1.0, 0}, EstimateSource::kObserved)}));
-    for (int i = 0; i < 20 && !l.motion.status().has_destination; ++i) {
-        l.step();
-    }
-    ASSERT_TRUE(l.motion.status().has_destination) << toString(l.motion.status().reason);
-    t = telemetry(l);
-    EXPECT_EQ(t.flags & kTarget, kTarget);
-    EXPECT_EQ(t.target_x_mm, 1520);
-    EXPECT_EQ(t.target_y_mm, 1000);
-    EXPECT_EQ(t.target_heading_cdeg, 0);
-
-    ASSERT_EQ(l.run(10.0), MotionState::kCompleted);
-    EXPECT_EQ(telemetry(l).flags & kTarget, kTarget);
-
-    l.motion.goToDirect({1.0, 1.0, 0}); // not yet updated, so not resolved
-    t = telemetry(l);
-    EXPECT_EQ(t.flags & kTarget, 0);
-    EXPECT_EQ(t.target_x_mm, 0);
-}
-
 TEST(Motion, AvoidingNeedsAFieldAndNeverFallsBackToDirect) {
     Loop l;
     l.motion.goToAvoiding({1.5, 1.0, 0});
@@ -427,7 +406,7 @@ TEST(Motion, MismatchedFollowerIsAnInvalidConfig) {
     SimulatedState   state;
     StraightPlanner  planner;
     HolonomicFollower follower;
-    Motion           motion(state, planner, follower, config(false));
+    Motion           motion(state, state, planner, follower, config(false));
     motion.goToDirect({1, 1, 0});
     EXPECT_EQ(motion.status().reason, MotionReason::kInvalidConfig);
 }
@@ -550,6 +529,66 @@ TEST(Motion, SourceChangeCancels) {
     l.motion.setSource(other);
     EXPECT_EQ(l.motion.status().state, MotionState::kCancelled);
     EXPECT_EQ(l.motion.status().reason, MotionReason::kSourceChanged);
+}
+
+TEST(Motion, PoseOnlySourceUsesIndependentBrainField) {
+    PoseOnlySource pose;
+    auto fixed = landmark(5, {2.0, 1.0, 0}, EstimateSource::kNominal);
+    fixed.kind = ObjectKind::kFixed;
+    fixed.estimated = false;
+    BrainField fields(field({fixed}));
+    StraightPlanner planner;
+    DifferentialFollower follower;
+    Motion motion(pose, fields, planner, follower, config(false));
+
+    motion.goToAvoiding({-0.5, 0, 0}, Reference::object(5, kMapId));
+    motion.update(0);
+    ASSERT_EQ(motion.status().plans, 1u);
+    EXPECT_DOUBLE_EQ(planner.lastRequest().start.x, 1.0);
+    EXPECT_DOUBLE_EQ(motion.status().destination.x, 1.5);
+    ASSERT_NE(planner.lastRequest().field, nullptr);
+    EXPECT_EQ(planner.lastRequest().field->map.id, kMapId);
+}
+
+TEST(Motion, PoseSourceChangePreservesTheIndependentFieldSnapshot) {
+    Loop l;
+    l.state.setField(field({}));
+    l.motion.goToAvoiding({2.5, 1.0, 0});
+    l.step();
+    ASSERT_EQ(l.motion.status().plans, 1u);
+    l.state.clearField(); // The last complete Brain field remains available to Motion.
+
+    PoseOnlySource replacement;
+    l.motion.setSource(replacement);
+    EXPECT_EQ(l.motion.status().state, MotionState::kCancelled);
+    l.motion.goToAvoiding({2.0, 1.0, 0});
+    l.motion.update(l.t);
+    EXPECT_EQ(l.motion.status().plans, 1u);
+    ASSERT_NE(l.planner.lastRequest().field, nullptr);
+    EXPECT_EQ(l.planner.lastRequest().field->map.id, kMapId);
+}
+
+TEST(Motion, FieldSourceChangeCancelsAndDiscardsTheOldGeneration) {
+    Loop l;
+    l.state.setField(field({landmark(5, {2.0, 1.0, 0}, EstimateSource::kObserved)}));
+    l.motion.goToDirect({-0.5, 0, 0}, Reference::object(5, kMapId));
+    l.step();
+    ASSERT_DOUBLE_EQ(l.motion.status().destination.x, 1.5);
+
+    // Independent providers can use the same generation for different fields.
+    BrainField replacement(field({landmark(5, {3.0, 1.0, 0}, EstimateSource::kObserved)}));
+    l.motion.setFieldSource(replacement);
+    EXPECT_EQ(l.motion.status().state, MotionState::kCancelled);
+    EXPECT_EQ(l.motion.status().reason, MotionReason::kSourceChanged);
+    l.motion.goToDirect({-0.5, 0, 0}, Reference::object(5, kMapId));
+    l.step();
+    EXPECT_DOUBLE_EQ(l.motion.status().destination.x, 2.5);
+
+    SimulatedState unavailable;
+    l.motion.setFieldSource(unavailable);
+    l.motion.goToAvoiding({2.0, 1.0, 0});
+    EXPECT_EQ(l.run(3.0), MotionState::kFailed);
+    EXPECT_EQ(l.motion.status().reason, MotionReason::kFieldUnavailable);
 }
 
 TEST(Motion, SpeedScaleLimitsThePlanModel) {

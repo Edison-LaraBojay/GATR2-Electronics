@@ -19,7 +19,7 @@ void Bno08xReports::reset() {
     accel_ = {};
     gyro_ = {};
     alignment_.reset();
-    window_.clear(); // the Pico clock and telemetry cuts do not reset with the hub
+    window_.clear(); // the Pico clock and acquisition cuts do not reset with the hub
 }
 
 void Bno08xReports::acknowledge(uint8_t report_id, uint32_t interval_us) {

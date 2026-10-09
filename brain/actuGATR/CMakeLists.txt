@@ -1,8 +1,6 @@
 # actuGATR: path following, drive control and drivetrain adapters, host
 # simulation, tests. pros/ holds PROS-only sources and is never built here.
 
-get_filename_component(GATR2_REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../.. ABSOLUTE)
-
 # Library.
 add_library(actugatr STATIC
     src/chassis.cpp
@@ -15,10 +13,8 @@ add_library(actugatr STATIC
     src/drive_owner.cpp
     src/drive_requests.cpp
     src/ports.cpp
-    src/telemetry.cpp
 )
-# frames.h only: the TELEMETRY struct, no codec.
-target_include_directories(actugatr PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${GATR2_REPO_ROOT})
+target_include_directories(actugatr PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(actugatr PUBLIC investigatr_types)
 target_compile_features(actugatr PUBLIC cxx_std_17)
 
@@ -43,7 +39,6 @@ set(ACTUGATR_TEST_SOURCES
     tests/drive_owner_gtest.cpp
     tests/drive_requests_gtest.cpp
     tests/ports_gtest.cpp
-    tests/telemetry_gtest.cpp
 )
 
 add_executable(actugatr_tests ${ACTUGATR_TEST_SOURCES})

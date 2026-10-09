@@ -2,7 +2,7 @@
 
 #include "bno08x_supervisor.h"
 
-#include "frames.h"
+#include "imu_status.h"
 
 namespace bno08x
 {
@@ -47,13 +47,13 @@ Action Supervisor::step(uint32_t now_us, const Events& ev) {
 
     case State::Boot:
         if (ev.open_failed) {
-            return fail(now_us, translagatr::kPicoImuReasonNoResponse);
+            return fail(now_us, imu::kReasonNoResponse);
         }
         if (ev.reset) {
             return enable(now_us);
         }
         if (elapsed(now_us, since_us_, kBootUs)) {
-            return fail(now_us, translagatr::kPicoImuReasonBoot);
+            return fail(now_us, imu::kReasonBoot);
         }
         return Action::None;
 
@@ -62,7 +62,7 @@ Action Supervisor::step(uint32_t now_us, const Events& ev) {
             return enable(now_us);
         }
         if (ev.enable_failed) {
-            return fail(now_us, translagatr::kPicoImuReasonFeatures);
+            return fail(now_us, imu::kReasonFeatures);
         }
         if (ev.ack) {
             state_          = State::Run;
@@ -71,7 +71,7 @@ Action Supervisor::step(uint32_t now_us, const Events& ev) {
             return Action::None;
         }
         if (elapsed(now_us, since_us_, kAckUs)) {
-            return fail(now_us, translagatr::kPicoImuReasonFeatures);
+            return fail(now_us, imu::kReasonFeatures);
         }
         return Action::None;
 
@@ -82,7 +82,7 @@ Action Supervisor::step(uint32_t now_us, const Events& ev) {
         if (ev.report) {
             last_report_us_ = now_us;
         } else if (elapsed(now_us, last_report_us_, kStaleUs)) {
-            return fail(now_us, translagatr::kPicoImuReasonStream);
+            return fail(now_us, imu::kReasonStream);
         }
         if (now_us - since_us_ >= imu::kStableUs) {
             retry_.stable();

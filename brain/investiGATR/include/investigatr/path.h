@@ -40,7 +40,7 @@ struct Path {
     bool   empty() const { return segments.empty(); }
 };
 
-// Receives every new plan of a command for display. An empty path clears it.
+// Optional observer of each new plan. An empty path clears the command.
 class PathSink {
 public:
     virtual ~PathSink() = default;

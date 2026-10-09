@@ -12,7 +12,7 @@ Standalone 3.3 V inertial sensor board using the custom ASM330 symbol. It
 connects to the carrier over an eight-pin horizontal JST-PH connector carrying
 SPI, an interrupt signal, power, and ground.
 
-The [hardware rationale](../../../docs/hardware.md) identifies the intended part as
+The [hardware rationale](../../../deprecated/docs/hardware.md) identifies the intended part as
 ASM330LHHG1. The schematic's custom symbol does not record the complete ordering
 code in its value field.
 

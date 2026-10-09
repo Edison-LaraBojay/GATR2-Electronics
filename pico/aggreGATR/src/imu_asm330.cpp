@@ -13,7 +13,7 @@
 
 #include "asm330_supervisor.h"
 #include "config.h"
-#include "frames.h"
+#include "imu_status.h"
 
 namespace imu
 {
@@ -55,7 +55,7 @@ asm330::Supervisor g_sup;
 
 // Diagnostic counters (imu.h Counters), from results the driver already has.
 uint32_t g_samples = 0, g_failures = 0, g_resets = 0;
-uint8_t  g_last_reason = translagatr::kPicoImuReasonNone;
+uint8_t  g_last_reason = imu::kReasonNone;
 uint64_t g_last_sample_us = 0;
 
 void select() { digitalWrite(board::kImuCsPin, LOW); }
@@ -147,7 +147,7 @@ void service() {
             ++g_resets;
         } else {
             ++g_failures;
-            g_last_reason = translagatr::kPicoImuReasonNoResponse;
+            g_last_reason = imu::kReasonNoResponse;
         }
         g_sup.probed(now, found);
         break;
@@ -162,19 +162,19 @@ void service() {
         const bool ok = readReg(kRegCtrl3C) == kCtrl3CInit && readReg(kRegCtrl2G) == kCtrl2GInit;
         if (!ok) {
             ++g_failures;
-            g_last_reason = translagatr::kPicoImuReasonFeatures;
+            g_last_reason = imu::kReasonFeatures;
         }
         g_sup.configured(now, ok);
         break;
     }
     case asm330::Action::Check: {
-        uint8_t reason = translagatr::kPicoImuReasonNone;
+        uint8_t reason = imu::kReasonNone;
         if (readReg(kRegWhoAmI) != kWhoAmIValue) {
-            reason = translagatr::kPicoImuReasonNoResponse;
+            reason = imu::kReasonNoResponse;
         } else if (readReg(kRegCtrl2G) != kCtrl2GInit) {
-            reason = translagatr::kPicoImuReasonStream; // the chip lost its configuration
+            reason = imu::kReasonStream; // the chip lost its configuration
         }
-        if (reason != translagatr::kPicoImuReasonNone) {
+        if (reason != imu::kReasonNone) {
             ++g_failures;
             g_last_reason = reason;
         }
@@ -207,14 +207,12 @@ Status status() {
     const DeviceView d = view();
     Status           s;
     s.enabled  = d.enabled;
-    s.state    = wireState(d, g_sup.retry());
-    s.reason   = wireReason(d, g_sup.retry());
+    s.state    = statusState(d, g_sup.retry());
+    s.reason   = statusReason(d, g_sup.retry());
     s.attempts = g_sup.retry().attempts();
     s.epoch    = g_sup.epoch();
     return s;
 }
-
-uint8_t firmware() { return translagatr::kPicoFirmwareAsm330; }
 
 bool readGyroZ(uint32_t, int32_t& gyro_z_mdps) {
     if (!g_sup.running()) {

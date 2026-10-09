@@ -35,7 +35,7 @@ std::array<uint8_t, 16> gyro(int16_t x, int16_t y, int16_t z) {
     putI16(report, 4, x);
     putI16(report, 6, y);
     putI16(report, 8, z);
-    // The existing telemetry contract deliberately leaves bias removal to Pi.
+    // Acquisition deliberately leaves gyro bias unchanged.
     // These fields must not be subtracted or mistaken for measured rates.
     putI16(report, 10, 12345);
     putI16(report, 12, -23456);
@@ -61,7 +61,7 @@ void acknowledgeBoth(Bno08xReports& reports) {
 }
 
 // Realistic 100 Hz accelerometer / 200 Hz gyro callback order, including
-// telemetry cuts during calibration. Caller controls acknowledgments.
+// acquisition cuts during calibration. Caller controls acknowledgments.
 uint32_t settle(Bno08xReports& reports, const std::array<uint8_t, 10>& gravity,
                 uint32_t start_us = 1000) {
     const auto stationary = gyro(0, 0, 0);
@@ -102,7 +102,7 @@ TEST(Bno08xReports, NeedsBothFeatureAcknowledgmentsAndRevocationStopsOutput) {
     EXPECT_TRUE(reports.acknowledged());
     ASSERT_TRUE(add(reports, gyro(0, 0, 512), now + 5000));
     ASSERT_TRUE(reports.take(now + 5000, value));
-    EXPECT_EQ(value, 57296); // 1 rad/s, existing millidegrees/second wire unit.
+    EXPECT_EQ(value, 57296); // 1 rad/s, millidegrees/second acquisition unit.
 
     reports.acknowledge(kGyro, 0);
     EXPECT_FALSE(reports.acknowledged());

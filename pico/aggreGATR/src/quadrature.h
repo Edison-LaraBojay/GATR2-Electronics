@@ -1,6 +1,6 @@
 // quadrature.h
 // Interrupt-driven x4 decode of encoder A/B signals. Counts accumulate in
-// the background and can be sampled independently of the UART send loop.
+// the background and can be sampled by the acquisition loop.
 
 #pragma once
 #include <stdint.h>

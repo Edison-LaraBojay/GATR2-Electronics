@@ -1,21 +1,23 @@
 // imu.h
 // IMU port 0: yaw rate source over SPI1, one IMU model per build
 // (GATR2_IMU_BNO08X or GATR2_IMU_ASM330). A missing device or no new
-// measurement leaves the gyro bit clear in the outgoing sensor frame.
+// measurement makes readGyroZ return false for that acquisition tick.
 // While enabled, a failed device is retried by the driver (imu_retry.h).
 
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
 
+#include "imu_status.h"
+
 namespace imu
 {
 
-// IMU fields of the Pico status frame.
+// Local acquisition health snapshot.
 struct Status {
     bool     enabled  = false;
-    uint8_t  state    = 0; // translagatr::PicoImuState
-    uint8_t  reason   = 0; // translagatr::PicoImuReason
+    uint8_t  state    = 0; // imu::State
+    uint8_t  reason   = 0; // imu::Reason
     uint16_t attempts = 0; // in the current episode
     uint8_t  epoch    = 0; // (re)initializations started this boot
 };
@@ -36,9 +38,6 @@ void reinit();
 
 Status status();
 
-// translagatr::PicoFirmware of this build.
-uint8_t firmware();
-
 // Yaw rate in millidegrees per second, bias not removed. cut_us is the
 // tick's time snapshot on the time_us_32() clock. True only for a new
 // measurement since the previous true return.
@@ -52,14 +51,14 @@ bool readGyroZ(uint32_t cut_us, int32_t& gyro_z_mdps);
 // Returns the number of bytes written, or zero if capacity is too small.
 size_t formatDiagnostics(char* output, size_t capacity);
 
-// Driver counters for the Pi diagnostic frame, free-running since boot,
+// Local driver diagnostic counters, free-running since boot,
 // from state the driver already keeps (no extra bus traffic).
 //   BNO08X: rx SHTP packets read, bad nonzero headers without a length,
 //           resets hub reset events (SH2_RESET), error the last sh2 result
 //           (SH2_ERR_*, 0 none), reports accepted and rejected sensor reports.
 //   ASM330: rx gyro samples read, bad failed probes, configurations and
 //           health checks, resets software resets issued, error the last
-//           failure reason (translagatr::PicoImuReason), reports_ok = rx,
+//           failure reason (imu::Reason), reports_ok = rx,
 //           reports_rejected not applicable (always 0).
 struct Counters {
     uint32_t rx               = 0;

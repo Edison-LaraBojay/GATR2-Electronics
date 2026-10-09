@@ -1,5 +1,5 @@
 // gyro_window.h
-// BNO08X yaw rate reports grouped by sample time into one mean per telemetry
+// BNO08X yaw rate reports grouped by sample time into one mean per acquisition
 // tick. Times are on the 32-bit microsecond clock and may wrap.
 
 #pragma once

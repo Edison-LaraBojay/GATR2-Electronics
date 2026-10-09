@@ -29,7 +29,7 @@ MotionConfig config() {
 }
 
 struct Task {
-    Task() : out(2), drive(tank, wheels(), out), motion(state, planner, follower, config()),
+    Task() : out(2), drive(tank, wheels(), out), motion(state, state, planner, follower, config()),
              owner(motion, drive) {
         state.setRobot(Pose{1, 1, 0}, 0);
     }

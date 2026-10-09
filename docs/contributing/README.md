@@ -11,14 +11,14 @@ For example:
 
 ```text
 pcb/
-  PiHat/
+  ExampleBoard/
     README.md
-    PiHat_V1/
+    ExampleBoard_V1/
       README.md
-      PiHat.kicad_pro
-      PiHat.kicad_sch
-      PiHat.kicad_pcb
-    PiHat_V2/
+      ExampleBoard.kicad_pro
+      ExampleBoard.kicad_sch
+      ExampleBoard.kicad_pcb
+    ExampleBoard_V2/
       README.md
       ...
 ```

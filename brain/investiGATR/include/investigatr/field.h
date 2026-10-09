@@ -13,7 +13,7 @@ namespace investigatr
 {
 
 using ObjectId = uint16_t; // stable id from the field definition, 0 = none
-using MapId    = uint32_t; // crc32 of the Pi field map document, 0 = none
+using MapId    = uint32_t; // stable identity of the field definition, 0 = none
 
 struct MapIdentity {
     MapId    id       = 0;

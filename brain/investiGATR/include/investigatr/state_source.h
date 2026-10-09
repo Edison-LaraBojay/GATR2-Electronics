@@ -1,12 +1,11 @@
 // state_source.h
-// What a robot state and field source hands planning and control. Source
-// independent: communiGATR implements it over the Pi link, simulations and
-// fallbacks implement it directly. Both calls are nonblocking.
+// Robot pose input for planning and control. A localizer supplies pose,
+// freshness and frame identity; field geometry is provided separately by
+// the Brain through FieldSource. robot() is nonblocking.
 
 #pragma once
 #include <cstdint>
 
-#include "investigatr/field.h"
 #include "investigatr/geometry.h"
 
 namespace investigatr
@@ -41,10 +40,6 @@ public:
 
     // Newest robot state, ages relative to now.
     virtual RobotState robot(Seconds now) = 0;
-
-    // Copies the newest complete field into out unless out already holds that
-    // generation. True when out holds a complete field afterwards.
-    virtual bool field(Field& out) = 0;
 };
 
 } // namespace investigatr

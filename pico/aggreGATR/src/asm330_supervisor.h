@@ -51,7 +51,7 @@ class Supervisor {
     void resetPolled(uint32_t now_us, bool cleared);
     void configured(uint32_t now_us, bool ok);
 
-    // translagatr::PicoImuReason: none when healthy, no response for a wrong
+    // imu::Reason: none when healthy, no response for a wrong
     // WHO_AM_I, stream when the chip lost its configuration. kCheckFailures
     // failures in a row restart the chip.
     void checked(uint32_t now_us, uint8_t reason);

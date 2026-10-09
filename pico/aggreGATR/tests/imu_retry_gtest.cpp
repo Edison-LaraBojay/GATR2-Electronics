@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 
-#include "frames.h"
+#include "imu_status.h"
 #include "imu_retry.h"
 
 using namespace imu;
@@ -13,7 +13,7 @@ namespace
 // Fails one attempt with a boot timeout; returns the wait.
 uint32_t failAttempt(RetryPolicy& r) {
     r.attempt();
-    return r.failed(translagatr::kPicoImuReasonBoot);
+    return r.failed(imu::kReasonBoot);
 }
 
 DeviceView enabled() {
@@ -59,13 +59,13 @@ TEST(ImuRetry, StableEndsTheEpisode) {
     r.attempt();
     r.stable();
     EXPECT_EQ(r.attempts(), 3);
-    EXPECT_EQ(r.reason(), translagatr::kPicoImuReasonNone);
+    EXPECT_EQ(r.reason(), imu::kReasonNone);
     EXPECT_FALSE(r.exhausted());
 
     // Losing the stable device opens a new episode with the shortest wait.
-    EXPECT_EQ(r.failed(translagatr::kPicoImuReasonStream), kBackoffMinUs);
+    EXPECT_EQ(r.failed(imu::kReasonStream), kBackoffMinUs);
     EXPECT_EQ(r.attempts(), 0);
-    EXPECT_EQ(r.reason(), translagatr::kPicoImuReasonStream);
+    EXPECT_EQ(r.reason(), imu::kReasonStream);
     EXPECT_EQ(failAttempt(r), 500000u);
     EXPECT_EQ(failAttempt(r), 1000000u);
     EXPECT_EQ(r.attempts(), 2);
@@ -92,7 +92,7 @@ TEST(ImuRetry, RestartGivesFreshQuickAttempts) {
     r.restart();
     EXPECT_FALSE(r.exhausted());
     EXPECT_EQ(r.attempts(), 0);
-    EXPECT_EQ(r.reason(), translagatr::kPicoImuReasonNone);
+    EXPECT_EQ(r.reason(), imu::kReasonNone);
     EXPECT_EQ(failAttempt(r), 500000u);
 }
 
@@ -104,46 +104,46 @@ TEST(ImuRetry, AttemptsSaturate) {
     EXPECT_EQ(r.attempts(), UINT16_MAX);
 }
 
-TEST(ImuRetry, WireStateFollowsTheDevice) {
+TEST(ImuRetry, StatusStateFollowsTheDevice) {
     RetryPolicy r;
     DeviceView  d;
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuDisabled);
+    EXPECT_EQ(statusState(d, r), imu::kStateDisabled);
 
     d = enabled();
     r.attempt();
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuInitializing);
+    EXPECT_EQ(statusState(d, r), imu::kStateInitializing);
 
     d.up = true;
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuAligning);
+    EXPECT_EQ(statusState(d, r), imu::kStateAligning);
     d.ready = true;
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuReady);
-    EXPECT_EQ(wireReason(d, r), translagatr::kPicoImuReasonNone);
+    EXPECT_EQ(statusState(d, r), imu::kStateReady);
+    EXPECT_EQ(statusReason(d, r), imu::kReasonNone);
 
     d = enabled();
-    r.failed(translagatr::kPicoImuReasonStream);
+    r.failed(imu::kReasonStream);
     d.waiting = true;
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuRetrying);
-    EXPECT_EQ(wireReason(d, r), translagatr::kPicoImuReasonStream);
+    EXPECT_EQ(statusState(d, r), imu::kStateRetrying);
+    EXPECT_EQ(statusReason(d, r), imu::kReasonStream);
     d.waiting = false;
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuInitializing);
+    EXPECT_EQ(statusState(d, r), imu::kStateInitializing);
 }
 
-TEST(ImuRetry, WireStateFailedWhileExhausted) {
+TEST(ImuRetry, StatusStateFailedWhileExhausted) {
     RetryPolicy r;
     for (int i = 0; i < kQuickAttempts; ++i) {
         failAttempt(r);
     }
     DeviceView d = enabled();
     d.waiting    = true;
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuFailed);
-    EXPECT_EQ(wireReason(d, r), translagatr::kPicoImuReasonBoot);
+    EXPECT_EQ(statusState(d, r), imu::kStateFailed);
+    EXPECT_EQ(statusReason(d, r), imu::kReasonBoot);
 
     // A slow attempt in progress still reports failed until the device is up.
     d.waiting = false;
     r.attempt();
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuFailed);
+    EXPECT_EQ(statusState(d, r), imu::kStateFailed);
     d.up = d.ready = true;
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuReady);
+    EXPECT_EQ(statusState(d, r), imu::kStateReady);
 }
 
 TEST(ImuRetry, RestartWaitIsNotRetrying) {
@@ -152,13 +152,13 @@ TEST(ImuRetry, RestartWaitIsNotRetrying) {
     r.restart();
     DeviceView d = enabled();
     d.waiting    = true;
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuInitializing);
+    EXPECT_EQ(statusState(d, r), imu::kStateInitializing);
 }
 
 TEST(ImuRetry, DisabledReportsNoReason) {
     RetryPolicy r;
     failAttempt(r);
     DeviceView d;
-    EXPECT_EQ(wireState(d, r), translagatr::kPicoImuDisabled);
-    EXPECT_EQ(wireReason(d, r), translagatr::kPicoImuReasonNone);
+    EXPECT_EQ(statusState(d, r), imu::kStateDisabled);
+    EXPECT_EQ(statusReason(d, r), imu::kReasonNone);
 }

@@ -1,39 +1,20 @@
 # PCBs
 
-Custom boards for the GATR2 sensing system. Each board folder explains its
-general purpose and contains its numbered iterations. Each iteration has its
-own README describing changes, status, and KiCad project files.
-
-## Boards
+Each active board family has a purpose README and numbered iterations with
+schematics, layouts, libraries and design/test notes.
 
 | Board | Purpose |
 |---|---|
-| [Pi HAT](PiHat/README.md) | A stable connection through the Pi's 40-pin header, with dedicated sensor and peripheral ports to reduce loose wiring. |
-| [IMU](IMU/README.md) | Inertial measurements for robot attitude estimation, primarily heading. |
-| [Magnetic encoder](MagneticEncoder/README.md) | Contactless rotation sensing for compact custom tracking-wheel assemblies. |
+| [IMU](IMU/README.md) | Inertial measurements for attitude and heading. |
+| [Magnetic encoder](MagneticEncoder/README.md) | Compact tracking-wheel encoders. |
 
-## Working with a board
+The complete [Pi HAT family](../deprecated/pcb/PiHat/README.md) is deprecated
+with the Pi-based system. Its design history remains available for reference.
 
-Choose a board, then an iteration, and open the `.kicad_pro` linked from its
-README. Keep the schematic, layout, and accompanying libraries together.
+Choose an iteration and open its `.kicad_pro`. Keep project files and custom
+libraries together. The magnetic encoder symbol table contains a historical
+workstation-specific library path that may need configuring on another machine.
 
-The Pi HAT symbol tables and the magnetic encoder's symbol table still contain
-workstation-specific library paths. The Pi HAT's custom symbols are included in
-its `RP4Pinout/` directory; library paths may need updating when editing on
-another machine. Project locations and library notes are linked from each
-revision README.
-
-When a revision changes, update its short description and the comparison with
-the previous revision. Record fabrication or test results alongside that
-revision when available. The schematic remains the source for the BOM and
-connector pin assignments.
-
-For new boards and iterations, follow the
-[PCB contribution guide](../docs/contributing/README.md).
-
-## Related documentation
-
-- [Hardware parts and rationale](../docs/hardware.md)
-- [RP2040 acquisition firmware](../pico/README.md)
-- [Pi sensing and estimation software](../pi/navigatr/README.md)
-- [Shared interfaces](../docs/interfaces.md)
+Follow the [PCB contribution guide](../docs/contributing/README.md) for new
+boards and iterations. The [former hardware rationale](../deprecated/docs/hardware.md)
+is historical; [Pico acquisition](../pico/README.md) remains active.

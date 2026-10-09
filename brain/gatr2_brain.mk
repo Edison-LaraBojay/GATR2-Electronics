@@ -62,7 +62,6 @@ GATR2_SRC_actugatr := \
 	$(GATR2_ROOT)/brain/actuGATR/src/drive_owner.cpp \
 	$(GATR2_ROOT)/brain/actuGATR/src/drive_requests.cpp \
 	$(GATR2_ROOT)/brain/actuGATR/src/ports.cpp \
-	$(GATR2_ROOT)/brain/actuGATR/src/telemetry.cpp \
 	$(GATR2_ROOT)/brain/actuGATR/pros/pros_motor_output.cpp \
 	$(GATR2_ROOT)/brain/actuGATR/pros/pros_drive.cpp
 
@@ -73,7 +72,6 @@ EXTRA_INCDIR += \
 	$(GATR2_ROOT)/brain/investiGATR/include \
 	$(GATR2_ROOT)/brain/communiGATR/include \
 	$(GATR2_ROOT)/brain/actuGATR/include \
-	$(GATR2_ROOT)/brain/robot \
 	$(GATR2_ROOT)
 ELF_DEPS += $(GATR2_OBJ)
 

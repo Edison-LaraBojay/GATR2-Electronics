@@ -2,7 +2,7 @@
 
 #include "imu_retry.h"
 
-#include "frames.h"
+#include "imu_status.h"
 
 namespace imu
 {
@@ -11,7 +11,7 @@ void RetryPolicy::restart() {
     open_      = true;
     exhausted_ = false;
     attempts_  = 0;
-    reason_    = translagatr::kPicoImuReasonNone;
+    reason_    = imu::kReasonNone;
 }
 
 uint16_t RetryPolicy::attempt() {
@@ -46,30 +46,30 @@ uint32_t RetryPolicy::failed(uint8_t reason) {
 void RetryPolicy::stable() {
     open_      = false;
     exhausted_ = false;
-    reason_    = translagatr::kPicoImuReasonNone;
+    reason_    = imu::kReasonNone;
 }
 
-uint8_t wireState(const DeviceView& d, const RetryPolicy& retry) {
+uint8_t statusState(const DeviceView& d, const RetryPolicy& retry) {
     if (!d.enabled) {
-        return translagatr::kPicoImuDisabled;
+        return imu::kStateDisabled;
     }
     if (d.ready) {
-        return translagatr::kPicoImuReady;
+        return imu::kStateReady;
     }
     if (d.up) {
-        return translagatr::kPicoImuAligning;
+        return imu::kStateAligning;
     }
     if (retry.exhausted()) {
-        return translagatr::kPicoImuFailed;
+        return imu::kStateFailed;
     }
-    if (d.waiting && retry.reason() != translagatr::kPicoImuReasonNone) {
-        return translagatr::kPicoImuRetrying;
+    if (d.waiting && retry.reason() != imu::kReasonNone) {
+        return imu::kStateRetrying;
     }
-    return translagatr::kPicoImuInitializing;
+    return imu::kStateInitializing;
 }
 
-uint8_t wireReason(const DeviceView& d, const RetryPolicy& retry) {
-    return d.enabled && !d.up ? retry.reason() : static_cast<uint8_t>(translagatr::kPicoImuReasonNone);
+uint8_t statusReason(const DeviceView& d, const RetryPolicy& retry) {
+    return d.enabled && !d.up ? retry.reason() : static_cast<uint8_t>(imu::kReasonNone);
 }
 
 } // namespace imu

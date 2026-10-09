@@ -1,38 +1,27 @@
-# brain
+# Brain libraries
 
-V5 Brain software. The libraries are portable C++ with host tests; PROS
-programs compile them in place from this folder.
+Portable C++17 libraries, with host tests and optional PROS motor adapters:
 
-- [`investiGATR/`](investiGATR/README.md): path planning (direct and obstacle
-  avoiding) and the shared Brain types: field, state source, references,
-  motion model, paths.
-- [`communiGATR/`](communiGATR/README.md): the Pi link over USB or RS-485:
-  sessions, robot profile upload, field map and estimates, placement,
-  calibration and recovery, wheel calibration, telemetry and VEX IMU tilt
-  for the Pi viewer.
-- [`actuGATR/`](actuGATR/README.md): movement: `goToDirect` and
-  `goToAvoiding`, path following, tank and mecanum drives, the drive task.
-- [`robot/`](robot/README.md): this robot's description (tracking wheels,
-  IMU, footprint, link, start pose), shared by the programs.
-- [`locaGATR/`](locaGATR/README.md): motor-free bench
-  program: placement, pose, IMU and wheel calibration, recovery history.
-- [`operaGATR/`](operaGATR/README.md): drive program: direct, avoiding and
-  landmark tests, manual driving, tuning.
-- `gatr2_brain.mk`: make fragment that compiles the libraries into a PROS
-  project.
-- `CMakeLists.txt`: host build and tests of the three libraries.
+- [investiGATR](investiGATR/README.md): geometry, references, pose and field
+  interfaces, and direct or obstacle-avoiding planning.
+- [actuGATR](actuGATR/README.md): path following, PID, tank and mecanum control.
+- [communiGATR](communiGATR/README.md): retained legacy Pi-link client and
+  transports, pending restructure; it does not implement the future MCU link.
+- `gatr2_brain.mk`: compiles selected libraries into a PROS project.
 
-Host build and tests, from the repository root (the CI job `brain` runs the
-same commands; CI does not build the PROS programs):
+Pose comes from a `StateSource`; field geometry comes separately from a
+`FieldSource`. The intended MCU supplies pose without field knowledge; the
+Brain application owns the field used for planning.
 
-```
+The former operaGATR, locaGATR and robot-specific configuration are in
+[deprecated/brain](../deprecated/brain/). No replacement hardware test app
+exists yet.
+
+```sh
 cmake -S brain -B build-brain
-cmake --build build-brain -j
+cmake --build build-brain --parallel
 ctest --test-dir build-brain --output-on-failure
 ```
 
-Setup, calibration, tuning and the test programs:
-[Brain setup](../docs/brain_setup.md). Libraries:
-[investiGATR](../docs/investigatr.md), [communiGATR](../docs/communigatr.md),
-[actuGATR](../docs/actugatr.md), [wire interface](../docs/interfaces.md).
-Nothing here has run on the robot yet.
+See [planning](../docs/investigatr.md), [control](../docs/actugatr.md),
+and [legacy communications](../docs/communigatr.md).

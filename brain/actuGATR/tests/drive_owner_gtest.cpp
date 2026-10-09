@@ -30,7 +30,7 @@ MotionConfig config() {
 }
 
 struct Owner {
-    Owner() : out(2), drive(tank, wheels(), out), motion(state, planner, follower, config()),
+    Owner() : out(2), drive(tank, wheels(), out), motion(state, state, planner, follower, config()),
               owner(motion, drive) {
         state.setRobot(Pose{1, 1, 0}, 0);
     }
