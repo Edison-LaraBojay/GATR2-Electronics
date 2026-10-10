@@ -1,6 +1,7 @@
 // forwarder_gtest.cpp
 
 #include "forwarder.h"
+#include "input_drain.h"
 
 #include <gtest/gtest.h>
 
@@ -80,6 +81,119 @@ TEST(Forwarder, FinishesAPartlyWrittenLineBeforeTheNext) {
     out += writeAll(f);
     EXPECT_EQ(out, text(1) + text(3));
     EXPECT_EQ(f.stats().superseded, 1u);
+}
+
+TEST(Forwarder, ReplacesAPendingLineWhenNoBytesWereWritten) {
+    Forwarder f;
+    feed(f, raw(1));
+    ASSERT_EQ(f.pending().size, encoder_record::kLineSize); // poll/write preparation
+    f.wrote(0); // a nonblocking write made no progress
+    feed(f, raw(2));
+    feed(f, raw(3));
+    EXPECT_EQ(writeAll(f), text(3));
+    EXPECT_EQ(f.stats().superseded, 2u);
+}
+
+// A nonblocking source that returns no more than a real UART read's capacity.
+struct BurstInput {
+    std::vector<uint8_t> bytes;
+    std::size_t at = 0;
+    std::size_t calls = 0;
+
+    void append(uint16_t seq) {
+        const auto record = raw(seq, seq, -seq);
+        bytes.insert(bytes.end(), record.begin(), record.end());
+    }
+
+    std::ptrdiff_t read(uint8_t* buffer, std::size_t capacity) {
+        ++calls;
+        const std::size_t count = std::min(capacity, bytes.size() - at);
+        std::copy_n(bytes.data() + at, count, buffer);
+        at += count;
+        return static_cast<std::ptrdiff_t>(count);
+    }
+};
+
+TEST(InputDrain, SendsNewestFromABurstLargerThanOneRead) {
+    Forwarder f;
+    feed(f, raw(0));
+    ASSERT_GT(f.pending().size, 0u); // an old line was selected before polling
+    BurstInput input;
+    for (uint16_t seq = 1; seq <= 100; ++seq) {
+        input.append(seq);
+    }
+    const DrainResult result = drainInput(f, [&](uint8_t* data, std::size_t capacity) {
+        return input.read(data, capacity);
+    });
+    EXPECT_GT(input.calls, 2u); // several data reads, then the empty read
+    EXPECT_EQ(input.at, input.bytes.size());
+    EXPECT_FALSE(result.limited);
+    EXPECT_EQ(result.records, 100u);
+    EXPECT_EQ(writeAll(f), text(100, 100, -100));
+    EXPECT_EQ(f.stats().superseded, 100u);
+}
+
+TEST(InputDrain, RetainsPartialTailUntilTheNextPass) {
+    Forwarder f;
+    BurstInput input;
+    for (uint16_t seq = 1; seq <= 40; ++seq) {
+        input.append(seq);
+    }
+    const auto tail = raw(41, -12, 80);
+    input.bytes.insert(input.bytes.end(), tail.begin(), tail.begin() + 9);
+    const auto read = [&](uint8_t* data, std::size_t capacity) {
+        return input.read(data, capacity);
+    };
+    EXPECT_EQ(drainInput(f, read).records, 40u);
+    EXPECT_EQ(writeAll(f), text(40, 40, -40));
+    input.bytes.insert(input.bytes.end(), tail.begin() + 9, tail.end());
+    EXPECT_EQ(drainInput(f, read).records, 1u);
+    EXPECT_EQ(writeAll(f), text(41, -12, 80));
+}
+
+TEST(InputDrain, FinishesStartedLineThenSendsNewestFromTheBurst) {
+    Forwarder f;
+    feed(f, raw(0));
+    const Pending p = f.pending();
+    std::string output(p.data, 10);
+    f.wrote(10);
+    BurstInput input;
+    for (uint16_t seq = 1; seq <= 100; ++seq) {
+        input.append(seq);
+    }
+    drainInput(f, [&](uint8_t* data, std::size_t capacity) {
+        return input.read(data, capacity);
+    });
+    output += writeAll(f);
+    EXPECT_EQ(output, text(0) + text(100, 100, -100));
+}
+
+TEST(InputDrain, ContinuousInputYieldsAtTheReadLimit) {
+    Forwarder f;
+    std::size_t calls = 0;
+    const DrainResult result = drainInput(f, [&](uint8_t* data, std::size_t capacity) {
+        const auto record = raw(static_cast<uint16_t>(++calls));
+        EXPECT_GE(capacity, record.size());
+        std::copy(record.begin(), record.end(), data);
+        return static_cast<std::ptrdiff_t>(record.size());
+    });
+    EXPECT_TRUE(result.limited);
+    EXPECT_EQ(calls, kInputReadLimit);
+    EXPECT_EQ(result.records, kInputReadLimit);
+    EXPECT_EQ(writeAll(f), text(static_cast<uint16_t>(kInputReadLimit)));
+}
+
+TEST(InputDrain, RepeatedInterruptionsAreAlsoBounded) {
+    Forwarder f;
+    std::size_t calls = 0;
+    const DrainResult result = drainInput(f, [&](uint8_t*, std::size_t) {
+        ++calls;
+        return std::ptrdiff_t{-1};
+    });
+    EXPECT_TRUE(result.limited);
+    EXPECT_EQ(calls, kInputReadLimit);
+    EXPECT_EQ(result.records, 0u);
+    EXPECT_EQ(f.pending().size, 0u);
 }
 
 TEST(Forwarder, DropPendingAfterReconnect) {
