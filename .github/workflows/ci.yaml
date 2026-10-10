@@ -66,7 +66,7 @@ jobs:
         run: pip install platformio
 
       - name: Build firmware
-        run: pio run -e hat2_bno08x -e hat2_asm330
+        run: pio run -e hat2_encoder_demo -e hat2_bno08x -e hat2_asm330
         working-directory: pico/aggreGATR
 
       - name: Host tests
@@ -74,3 +74,25 @@ jobs:
           cmake -S pico/aggreGATR/tests -B build-pico-tests
           cmake --build build-pico-tests -j
           ctest --test-dir build-pico-tests --output-on-failure
+
+  encoder-relay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtest-dev cmake
+
+      - name: Build and test encoder records
+        run: |
+          cmake -S encoder-record -B build-encoder-record
+          cmake --build build-encoder-record --parallel
+          ctest --test-dir build-encoder-record --output-on-failure
+
+      - name: Build Linux relay and run its tests
+        run: |
+          cmake -S pi/encoder-relay -B build-relay -DENCODER_RELAY_BUILD_TESTS=ON
+          cmake --build build-relay --parallel
+          ctest --test-dir build-relay --output-on-failure

@@ -84,7 +84,10 @@ int openSerial(const std::string& path, int baud) {
     ::cfmakeraw(&settings);
     ::cfsetispeed(&settings, speed);
     ::cfsetospeed(&settings, speed);
+    settings.c_cflag &= ~(CSIZE | PARENB | CSTOPB);
+    settings.c_cflag |= CS8;
     settings.c_cflag |= CLOCAL | CREAD;
+    settings.c_iflag &= ~(IXON | IXOFF | IXANY);
 #ifdef CRTSCTS
     settings.c_cflag &= ~CRTSCTS;
 #endif

@@ -9,9 +9,11 @@ Brain program --stdout--> V5 controller --radio/USB--> laptop: spectagatr receiv
      (brain/spectaGATR)     or Brain USB user port       (spectaGATR/receiver)          (spectaGATR/web)
 ```
 
-It needs no Pi, naviGATR, investiGATR, cameras or custom electronics, and it
-computes nothing: x, y and orientation come from your code. The laptop owns the
-field and robot drawing.
+Position and orientation come from the Brain program. The laptop owns the
+field and robot drawing. For the active Pico -> Pi relay -> Brain odometry
+path, start with the
+[encoder localization demo guide](../brain/localization-demo/README.md),
+including its visualization routes and hardware limitations.
 
 | Folder | What |
 |---|---|
@@ -22,11 +24,7 @@ field and robot drawing.
 | [`tools/`](tools/) | `mock_feed.py` (browser-only mock), `ws_probe.py` (feed checker) |
 | [`../brain/spectaGATR/`](../brain/spectaGATR/README.md) | Brain publisher library |
 | [`../brain/spectaGATR-demo/`](../brain/spectaGATR-demo/README.md) | Example PROS program; never moves motors |
-
-The former Pi system (Pico -> Pi naviGATR -> Brain over USB, with its own
-viewer) is a separate fallback. It is not in the current tree: build it from
-commit `10c568e`, whose own docs describe it
-(`git worktree add ../GATR2-fallback 10c568e`).
+| [`../brain/localization-demo/`](../brain/localization-demo/README.md) | Encoder and VEX IMU odometry from the active Pico and Pi relay path; never moves motors |
 
 ## Status (2026-10-09)
 
@@ -204,22 +202,17 @@ robot's forward/left/up markers, and repeats this list in its side panel.
   the screen is not measured, and the Brain's `t_ms` is never compared with
   laptop time.
 
-## Operating modes and limitations
+## Connection limits
 
-**Mode A, spectaGATR:**
-- The laptop reads the Brain through the controller or the Brain's USB.
-- No Pi is on the Brain's USB port, and the retired communiGATR USB link is not
-  in the program.
+With `spectaGATR-demo`, the laptop reads the Brain through the controller or
+the Brain's USB. With `localization-demo`, the Pi relay occupies Brain USB.
+Simultaneous controller viewing is untested: the Pi may consume stdout bytes
+before the controller receives them. The
+[localization demo guide](../brain/localization-demo/README.md#9-visualization)
+describes how to check that route and forward the output through the Pi with
+`--echo-brain` over SSH if needed. Neither localization viewing route has
+been tested on hardware.
 
-**Mode B, the Pi fallback** (built from commit `10c568e`):
-- The Brain's USB port feeds the Pi, and the old Pi viewer is the display.
-- Do not run this receiver against the controller in this mode. Whether
-  controller polling and the Brain-to-Pi USB link share the Brain's one stdout
-  stream without stealing bytes from each other is untested.
-- Do not open `pros terminal` in this mode, and do not upload a program that
-  uses the publisher.
-
-**Other limitations:**
 - **One program per port.** While the receiver holds the controller port,
   `pros upload` and `pros terminal` through that controller cannot open it. Stop
   the receiver (Ctrl+C) first.

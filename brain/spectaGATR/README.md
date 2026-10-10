@@ -2,8 +2,7 @@
 
 Brain side of [spectaGATR](../../spectaGATR/README.md): a small library that
 publishes the robot pose your program already computed to the laptop viewer.
-It does no localization, owns no `initialize()`/`opcontrol()`, and needs no
-investiGATR, communiGATR or Pi.
+The caller owns localization and `initialize()`/`opcontrol()`.
 
 - `include/spectagatr/pose.h`: `Meters`, `Radians`, `Attitude`, unit helpers
 - `include/spectagatr/publisher.h`, `src/`: portable core, host tested
@@ -12,6 +11,8 @@ investiGATR, communiGATR or Pi.
 - Wire format: [spectaGATR/protocol](../../spectaGATR/protocol/include/spectagatr/protocol/pose_line.h)
 
 Example PROS project: [brain/spectaGATR-demo](../spectaGATR-demo/README.md).
+The active [encoder localization demo](../localization-demo/README.md) uses
+this publisher for its encoder and VEX IMU pose.
 
 ## Add it to a PROS project
 
@@ -100,14 +101,14 @@ task, so a control loop that only calls `updatePose` never waits for the
 laptop. Whether VEXos keeps
 draining the output with no host attached is not verified.
 
-## Not with the retired communiGATR USB link
+## Encoder localization demo
 
-Do not run this publisher and communiGATR, the retired Pi fallback link (commit 10c568e), in one
-program. That link turns COBS off for all output, owns stdin and uses the same
-single user channel and output buffer: pose lines would go out raw next to its
-frames and delay them, to whichever host reads the channel. Run the Pi fallback
-and spectaGATR as separate programs. A laptop on the controller while the Pi
-uses the Brain USB port is untested.
+The active demo receives encoder records from the Pi relay on stdin and
+publishes pose lines on stdout, with COBS enabled. A laptop on the controller
+while the Pi uses Brain USB is untested; the Pi may consume the output first.
+See the [demo's visualization steps](../localization-demo/README.md#9-visualization)
+for the controller check and the `--echo-brain` route through the Pi over SSH.
+Neither route has been tested on hardware.
 
 ## Tests
 

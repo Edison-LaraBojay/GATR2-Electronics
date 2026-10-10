@@ -223,17 +223,6 @@ ssh USER@PI_HOST "encoder-relay --echo-brain" | build-spectagatr\receiver\specta
 The relay exits when the pipe closes (Ctrl+C). Afterwards:
 `ssh USER@PI_HOST "sudo systemctl start encoder-relay"`.
 
-## 10. Back to the Pi fallback
-
-1. `sudo systemctl disable --now encoder-relay`, then
-   `sudo systemctl enable --now navigatr`.
-2. Reflash the Pico with the pre-refactor firmware. This demo firmware does not
-   speak the old protocol.
-3. Run `operaGATR` (slot 1) on the Brain.
-
-The fallback is pinned commit 10c568e, for example `git worktree add ../GATR2-fallback 10c568e`.
-Full steps are in `deprecated/FALLBACK.md` (route 1). That file is local only and not in Git.
-
 ## Tests and status
 
 Host tests (Windows, MinGW GCC 15.2) for the codec, odometry, record handling,

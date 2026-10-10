@@ -14,6 +14,12 @@ std::size_t Forwarder::receive(const uint8_t* data, std::size_t size) {
         if (has_next_) {
             ++stats_.superseded;
         }
+        // pending() may have exposed this line for a nonblocking write that
+        // made no progress. Until a byte is sent it can still be replaced.
+        if (has_current_ && current_at_ == 0) {
+            ++stats_.superseded;
+            has_current_ = false;
+        }
         next_     = encoder_record::encodeLine(scanner_.bytes());
         has_next_ = true;
         ++stats_.records;

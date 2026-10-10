@@ -1,11 +1,12 @@
 # Documentation
 
-## Current libraries and hardware
+## Active demo and hardware
 
+- [Encoder localization demo](../brain/localization-demo/README.md): start here for Pico firmware, Pi relay, Brain odometry, calibration and visualization.
+- [Encoder record](../encoder-record/README.md): shared record format and codec.
+- [Pi encoder relay](../pi/encoder-relay/README.md): forwards encoder records from UART to Brain USB.
 - [spectaGATR](../spectaGATR/README.md): live pose viewer ([protocol](../spectaGATR/docs/PROTOCOL.md)).
-- [investiGATR](investigatr.md): pose inputs, field geometry and planning.
-- [actuGATR](actugatr.md): following, control and drivetrain adapters.
-- [Brain libraries](../brain/README.md): host build and integration boundaries.
+- [Brain programs and publisher](../brain/README.md): localization program, pose publisher and host tests.
 - [Pico acquisition](../pico/aggreGATR/README.md): encoder and IMU firmware.
 - [PCB overview](../pcb/README.md): sensor boards and historical designs.
 - [Contribution conventions](contributing/README.md): PCB families and iterations.
@@ -13,7 +14,7 @@
 
 ## Retired system
 
-The retired Pi runtime, viewer, test apps, communiGATR/translaGATR Pi link and
-deployment instructions are not included in a fresh checkout. Previous
-versions remain in Git history. A replacement MCU link is not implemented yet.
-[Pi HAT design history](../pcb/PiHat/README.md) remains tracked with the PCBs.
+The former planning and motor-control libraries, old Brain test applications,
+and old Pi runtime and link are retired. Previous versions remain in Git
+history. The active demo uses a small encoder relay on the Pi and computes
+pose on the Brain; its hardware route is still unverified.

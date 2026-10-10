@@ -18,6 +18,7 @@
 
 #include "brain_port.h"
 #include "forwarder.h"
+#include "input_drain.h"
 #include "serial_port.h"
 
 namespace
@@ -30,7 +31,7 @@ using std::chrono::seconds;
 constexpr milliseconds kRetry{1000};       // reopen attempts
 constexpr milliseconds kPoll{20};          // longest wait in one pass
 constexpr milliseconds kBrainStall{500};   // no write progress: drop queued output
-constexpr std::size_t  kReadChunk = 512;   // bytes per read call
+constexpr std::size_t kReadChunk = relay::kInputReadChunk;
 
 struct Options {
     std::string uart       = "/dev/ttyAMA0";
@@ -161,11 +162,17 @@ bool readSome(Port& port, short revents, uint8_t* buffer, ssize_t& count) {
     if (count > 0) {
         return true;
     }
-    if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+    if (count < 0 && errno == EINTR) {
+        return true; // negative asks the UART drain to retry, within its bound
+    }
+    if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
         count = 0;
         return true;
     }
-    // Readable but no bytes: the USB device is gone.
+    // With VMIN=0 an emptied nonblocking tty may return zero instead of EAGAIN.
+    if (count == 0 && !(revents & (POLLERR | POLLHUP))) {
+        return true;
+    }
     port.close(count == 0 ? "hang up" : std::strerror(errno));
     count = 0;
     return false;
@@ -248,8 +255,12 @@ int main(int argc, char** argv) {
         }
 
         ssize_t count = 0;
-        if (uart.fd >= 0 && readSome(uart, fds[0].revents, buffer, count) && count > 0) {
-            if (forwarder.receive(buffer, static_cast<std::size_t>(count)) > 0) {
+        if (uart.fd >= 0) {
+            const relay::DrainResult drained = relay::drainInput(
+                forwarder, [&](uint8_t* data, std::size_t) -> std::ptrdiff_t {
+                    return readSome(uart, fds[0].revents, data, count) ? count : 0;
+                });
+            if (drained.records > 0) {
                 const uint16_t run = forwarder.lastRecord().run_id;
                 if (!seen_run || run != last_run) {
                     logLine("pico run %04X%s", run, seen_run ? " (Pico restarted)" : "");
@@ -269,6 +280,8 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Even when the UART drain hits its read limit, service the Brain and
+        // send the newest record seen so continuous input cannot starve output.
         if (brain.fd >= 0) {
             const relay::Pending p = forwarder.pending();
             if (p.size == 0) {

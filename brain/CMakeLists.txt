@@ -25,6 +25,5 @@ endif()
 enable_testing()
 include(GoogleTest)
 
-add_subdirectory(investiGATR)
-add_subdirectory(actuGATR)
 add_subdirectory(spectaGATR)
+add_subdirectory(localization-demo/tests)
