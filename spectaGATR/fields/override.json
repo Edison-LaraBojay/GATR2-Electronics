@@ -1,0 +1,264 @@
+{
+  "schema": "spectagatr-field/1",
+  "name": "override",
+  "title": "V5RC Override 2026-2027 (nominal)",
+  "source": "converted from pi/naviGATR/config/override/field.xml at commit 10c568e (revision 1) by convert_override.py; V5RC Override Game Manual v2.0 Appendix A sheets A10 and A13; CAD 276-9250-000 (2026-04-26)",
+  "dimensions": {
+    "inside_x_m": 3.5664,
+    "inside_y_m": 3.5664,
+    "wall_height_m": 0.293,
+    "wall_thickness_m": 0.0508,
+    "tile_m": 0.5944
+  },
+  "walls": {
+    "x_min": {
+      "label": "red wall",
+      "color": "#ff8a8a"
+    },
+    "x_max": {
+      "label": "blue wall",
+      "color": "#8ad0ff"
+    },
+    "y_min": {
+      "label": "audience",
+      "color": "#d8dde6"
+    }
+  },
+  "objects": [
+    {
+      "id": "loader_red_south",
+      "kind": "box",
+      "x_m": 0.0475,
+      "y_m": 0.2906,
+      "z_m": 0.29175,
+      "size_x_m": 0.095,
+      "size_y_m": 0.1021,
+      "size_z_m": 0.5835,
+      "yaw_deg": 0.0,
+      "color": "#d50032"
+    },
+    {
+      "id": "loader_red_north",
+      "kind": "box",
+      "x_m": 0.0475,
+      "y_m": 3.2758,
+      "z_m": 0.29175,
+      "size_x_m": 0.095,
+      "size_y_m": 0.1021,
+      "size_z_m": 0.5835,
+      "yaw_deg": 0.0,
+      "color": "#d50032"
+    },
+    {
+      "id": "loader_blue_south",
+      "kind": "box",
+      "x_m": 3.5189,
+      "y_m": 0.2906,
+      "z_m": 0.29175,
+      "size_x_m": 0.095,
+      "size_y_m": 0.1021,
+      "size_z_m": 0.5835,
+      "yaw_deg": 0.0,
+      "color": "#00a3e0"
+    },
+    {
+      "id": "loader_blue_north",
+      "kind": "box",
+      "x_m": 3.5189,
+      "y_m": 3.2758,
+      "z_m": 0.29175,
+      "size_x_m": 0.095,
+      "size_y_m": 0.1021,
+      "size_z_m": 0.5835,
+      "yaw_deg": 0.0,
+      "color": "#00a3e0"
+    },
+    {
+      "id": "toggle_north",
+      "kind": "box",
+      "x_m": 1.7832,
+      "y_m": 3.5404,
+      "z_m": 0.3093,
+      "size_x_m": 0.6602,
+      "size_y_m": 0.052,
+      "size_z_m": 0.052,
+      "yaw_deg": 0.0,
+      "color": "#ffd100"
+    },
+    {
+      "id": "toggle_south",
+      "kind": "box",
+      "x_m": 1.7832,
+      "y_m": 0.026,
+      "z_m": 0.3093,
+      "size_x_m": 0.6602,
+      "size_y_m": 0.052,
+      "size_z_m": 0.052,
+      "yaw_deg": 0.0,
+      "color": "#ffd100"
+    },
+    {
+      "id": "toggle_west",
+      "kind": "box",
+      "x_m": 0.026,
+      "y_m": 1.7832,
+      "z_m": 0.3093,
+      "size_x_m": 0.052,
+      "size_y_m": 0.6602,
+      "size_z_m": 0.052,
+      "yaw_deg": 0.0,
+      "color": "#ffd100"
+    },
+    {
+      "id": "toggle_east",
+      "kind": "box",
+      "x_m": 3.5404,
+      "y_m": 1.7832,
+      "z_m": 0.3093,
+      "size_x_m": 0.052,
+      "size_y_m": 0.6602,
+      "size_z_m": 0.052,
+      "yaw_deg": 0.0,
+      "color": "#ffd100"
+    },
+    {
+      "id": "midfield_tape_ne",
+      "kind": "tape",
+      "x_m": 2.08895,
+      "y_m": 2.08895,
+      "size_x_m": 0.8648,
+      "size_y_m": 0.0635,
+      "yaw_deg": -45.0,
+      "color": "#f2f2f2"
+    },
+    {
+      "id": "midfield_tape_nw",
+      "kind": "tape",
+      "x_m": 1.47745,
+      "y_m": 2.08895,
+      "size_x_m": 0.8648,
+      "size_y_m": 0.0635,
+      "yaw_deg": 45.0,
+      "color": "#f2f2f2"
+    },
+    {
+      "id": "midfield_tape_sw",
+      "kind": "tape",
+      "x_m": 1.47745,
+      "y_m": 1.47745,
+      "size_x_m": 0.8648,
+      "size_y_m": 0.0635,
+      "yaw_deg": -45.0,
+      "color": "#f2f2f2"
+    },
+    {
+      "id": "midfield_tape_se",
+      "kind": "tape",
+      "x_m": 2.08895,
+      "y_m": 1.47745,
+      "size_x_m": 0.8648,
+      "size_y_m": 0.0635,
+      "yaw_deg": 45.0,
+      "color": "#f2f2f2"
+    },
+    {
+      "id": "neutral_goal_4_north",
+      "kind": "octagon",
+      "x_m": 1.185141466,
+      "y_m": 2.979317068,
+      "yaw_deg": 0.0,
+      "height_m": 0.1465,
+      "base_across_flats_m": 0.1425,
+      "top_across_flats_m": 0.0888,
+      "color": "#2b2b2b"
+    },
+    {
+      "id": "blue_goal_3_north",
+      "kind": "octagon",
+      "x_m": 2.381258534,
+      "y_m": 2.979317068,
+      "yaw_deg": 0.0,
+      "height_m": 0.0825,
+      "base_across_flats_m": 0.1425,
+      "top_across_flats_m": 0.0888,
+      "color": "#00a3e0"
+    },
+    {
+      "id": "neutral_goal_1_west",
+      "kind": "octagon",
+      "x_m": 0.587082932,
+      "y_m": 2.381258534,
+      "yaw_deg": 0.0,
+      "height_m": 0.1465,
+      "base_across_flats_m": 0.1425,
+      "top_across_flats_m": 0.0888,
+      "color": "#2b2b2b"
+    },
+    {
+      "id": "blue_goal_2_east",
+      "kind": "octagon",
+      "x_m": 2.979317068,
+      "y_m": 2.381258534,
+      "yaw_deg": 0.0,
+      "height_m": 0.0825,
+      "base_across_flats_m": 0.1425,
+      "top_across_flats_m": 0.0888,
+      "color": "#00a3e0"
+    },
+    {
+      "id": "neutral_goal_0_center",
+      "kind": "octagon",
+      "x_m": 1.7832,
+      "y_m": 1.7832,
+      "yaw_deg": 0.0,
+      "height_m": 0.2227,
+      "base_across_flats_m": 0.1425,
+      "top_across_flats_m": 0.0888,
+      "color": "#2b2b2b"
+    },
+    {
+      "id": "red_goal_2_west",
+      "kind": "octagon",
+      "x_m": 0.587082932,
+      "y_m": 1.185141466,
+      "yaw_deg": 0.0,
+      "height_m": 0.0825,
+      "base_across_flats_m": 0.1425,
+      "top_across_flats_m": 0.0888,
+      "color": "#d50032"
+    },
+    {
+      "id": "neutral_goal_1_east",
+      "kind": "octagon",
+      "x_m": 2.979317068,
+      "y_m": 1.185141466,
+      "yaw_deg": 0.0,
+      "height_m": 0.1465,
+      "base_across_flats_m": 0.1425,
+      "top_across_flats_m": 0.0888,
+      "color": "#2b2b2b"
+    },
+    {
+      "id": "red_goal_3_south",
+      "kind": "octagon",
+      "x_m": 1.185141466,
+      "y_m": 0.587082932,
+      "yaw_deg": 0.0,
+      "height_m": 0.0825,
+      "base_across_flats_m": 0.1425,
+      "top_across_flats_m": 0.0888,
+      "color": "#d50032"
+    },
+    {
+      "id": "neutral_goal_4_south",
+      "kind": "octagon",
+      "x_m": 2.381258534,
+      "y_m": 0.587082932,
+      "yaw_deg": 0.0,
+      "height_m": 0.1465,
+      "base_across_flats_m": 0.1425,
+      "top_across_flats_m": 0.0888,
+      "color": "#2b2b2b"
+    }
+  ]
+}

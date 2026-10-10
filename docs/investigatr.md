@@ -438,9 +438,8 @@ or keep `max_vertices` small enough that the worst case fits the budget.
   opponents or other dynamic obstacles.
 - **No curvature or speed planning.** `min_turn_radius` is refused; the
   follower profiles speed.
-- **Zero-size obstacles.** The link's map validator rejects obstacles without
-  a size; other sources may pass one, and the planner treats it as a point or
-  a line grown like any box.
+- **Zero-size obstacles.** If a field source supplies an obstacle with a zero
+  box dimension, the planner treats it as a point or a line grown like any box.
 - Not validated on the robot.
 
 ## Build and tests

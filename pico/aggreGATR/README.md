@@ -14,15 +14,21 @@ unavailable for that sample; encoder acquisition continues.
 [Pins](src/board.h), [rates and build selection](src/config.h), and
 [local IMU health labels](src/imu_status.h) belong to this firmware. It does not
 use the retired shared communication protocol. The former Pi UART loop,
-commands, frame scheduling and diagnostic packet code are preserved in
-[deprecated/pico](../../deprecated/pico/README.md).
+commands, frame scheduling and diagnostic packet code are not included here.
 
 The existing revision 2 sensor pin mapping and PlatformIO environment names
 remain for hardware bring-up. The corresponding board design is archived in
-[deprecated/pcb/PiHat](../../deprecated/pcb/PiHat/). GPIO 16/17 are no longer
+[pcb/PiHat](../../pcb/PiHat/). GPIO 16/17 are no longer
 configured or reserved for Pi UART by this firmware; this does not change the
 wiring on an existing board. The BNO08X uses CEVA's sh2 driver,
 [vendored here](third_party/README.md).
+
+## Encoder demo env
+
+`pio run -e hat2_encoder_demo` builds separate firmware from `src/encoder_demo/`
+and `quadrature.cpp` only, with no IMU code. It sends encoder channels 0 and 1
+as fixed records on UART0 (TX GP16, RX GP17) to the Pi at 50 Hz. Guide:
+[brain/localization-demo](../../brain/localization-demo/README.md).
 
 ## IMU retry
 

@@ -15,6 +15,9 @@ void begin(uint8_t ch, uint8_t pin_a, uint8_t pin_b);
 // Accumulated count. Safe to call from the main loop at any time.
 int32_t count(uint8_t ch);
 
+// Every channel's count at one instant with respect to the encoder interrupts.
+void snapshot(int32_t (&counts)[kChannels]);
+
 // True once begin has run for this channel.
 bool started(uint8_t ch);
 

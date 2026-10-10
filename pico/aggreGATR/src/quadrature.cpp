@@ -71,6 +71,14 @@ int32_t count(uint8_t ch) {
     return g_ch[ch].count;
 }
 
+void snapshot(int32_t (&counts)[kChannels]) {
+    noInterrupts();
+    for (uint8_t ch = 0; ch < kChannels; ++ch) {
+        counts[ch] = g_ch[ch].count;
+    }
+    interrupts();
+}
+
 bool started(uint8_t ch) {
     return ch < kChannels && g_ch[ch].started;
 }

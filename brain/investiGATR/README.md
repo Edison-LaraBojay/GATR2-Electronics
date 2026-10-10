@@ -16,10 +16,10 @@ Static geometry and pose use the same field coordinates. Providers of observed
 field updates must share the pose source's frame namespace and controller clock;
 replacing a pose backend also requires rebinding those observations.
 
-Build planner and control host tests without the legacy Pi link or its protocol:
+Build planner and control host tests:
 
 ```sh
-cmake -S brain -B build/brain-core -DGATR2_BUILD_COMMUNIGATR=OFF
+cmake -S brain -B build/brain-core
 cmake --build build/brain-core
 ctest --test-dir build/brain-core --output-on-failure
 ```

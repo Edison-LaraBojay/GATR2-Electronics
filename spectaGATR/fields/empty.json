@@ -1,0 +1,15 @@
+{
+  "schema": "spectagatr-field/1",
+  "name": "empty",
+  "title": "Empty 12 ft square",
+  "source": "plain 12 ft (3.6576 m) square, 2 ft tiles, no objects",
+  "dimensions": {
+    "inside_x_m": 3.6576,
+    "inside_y_m": 3.6576,
+    "wall_height_m": 0.293,
+    "wall_thickness_m": 0.0508,
+    "tile_m": 0.6096
+  },
+  "walls": {},
+  "objects": []
+}

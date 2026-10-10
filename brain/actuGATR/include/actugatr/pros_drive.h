@@ -2,7 +2,7 @@
 // The drive task: the only code that touches the DriveOwner and writes the
 // drive motors. Application calls post a request (DriveRequests, latest
 // wins) and read the last published snapshot under a mutex held only to
-// copy; planning, path reports and Pi link reads all run in the drive task.
+// copy; planning, path reports and state source reads run in the drive task.
 //
 // PROS deletes competition tasks at mode changes without releasing mutexes
 // they hold. Every take is bounded. When the task cannot take the mutex it
@@ -32,7 +32,7 @@ struct ProsDriveConfig {
 class ProsDrive {
 public:
     // owner and drive must outlive this object; now is the clock the state
-    // source uses (communigatr::ProsLink::now).
+    // source uses.
     ProsDrive(DriveOwner& owner, Drive& drive, Seconds (*now)(), const ProsDriveConfig& config = {});
     // Ends the task (bounded wait) and stops the drive.
     ~ProsDrive();

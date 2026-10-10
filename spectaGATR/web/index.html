@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>spectaGATR</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="./style.css">
+<!-- 'three' resolves to the vendored copy; OrbitControls imports it through
+     this map. No CDN, no build step, no network. -->
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.min.js"}}</script>
+</head>
+<body data-state="connecting" data-poses="0" data-field="" data-view="overhead" data-webgl="">
+
+<header id="bar">
+  <span class="brand">spectaGATR</span>
+  <span id="pill" class="pill">connecting</span>
+  <label class="ctl">Field <select id="field-select"><option value="">(loading)</option></select></label>
+  <span class="group" role="group" aria-label="Camera">
+    <button type="button" data-view="overhead" class="active" title="Top-down: +X right, +Y up. Drag pans, wheel zooms.">Overhead</button>
+    <button type="button" data-view="orbit" title="Free 3D view: drag rotates, right drag pans, wheel zooms.">3D orbit</button>
+    <button type="button" data-view="follow" title="3D view that keeps the robot centered.">Follow robot</button>
+    <button type="button" id="btn-reset" title="Reset the current camera view.">Reset</button>
+  </span>
+  <button type="button" id="btn-clear" title="Erase the trail.">Clear trail</button>
+  <label class="ctl" title="Presentation only: blends the drawn robot to each new pose over at most 100 ms. Readouts and trail always use received values. Off by default."><input type="checkbox" id="smooth"> Smooth 100 ms</label>
+</header>
+
+<main>
+  <div id="view">
+    <div id="banner" hidden>
+      <div id="banner-title"></div>
+      <div id="banner-detail"></div>
+    </div>
+    <div id="view-note" hidden></div>
+  </div>
+
+  <aside id="side">
+    <section class="panel">
+      <h2>Pose <span class="muted">(received values)</span></h2>
+      <table class="readout">
+        <tr><th>x</th><td id="r-x">--</td></tr>
+        <tr><th>y</th><td id="r-y">--</td></tr>
+        <tr><th>heading</th><td id="r-heading">--</td></tr>
+        <tr><th>roll</th><td id="r-roll">--</td></tr>
+        <tr><th>pitch</th><td id="r-pitch">--</td></tr>
+        <tr><th>session</th><td id="r-session">--</td></tr>
+        <tr><th>epoch / seq</th><td id="r-seq">--</td></tr>
+        <tr><th>t_ms</th><td id="r-tms">--</td></tr>
+        <tr><th>source</th><td id="r-source">--</td></tr>
+        <tr><th>port</th><td id="r-port">--</td></tr>
+        <tr><th>link</th><td id="r-link">--</td></tr>
+        <tr><th>receive age</th><td id="r-age">--</td></tr>
+        <tr><th>counts</th><td id="r-counts">--</td></tr>
+      </table>
+      <div class="muted small" id="r-field">field: --</div>
+      <div class="muted small" id="r-robot">robot box: --</div>
+    </section>
+
+    <section class="panel legend">
+      <h2>Conventions</h2>
+      <ul>
+        <li><b>Origin</b> (white ring): inside bottom-left corner of the field diagram.</li>
+        <li><b class="cx">+X</b> right on the diagram, <b class="cy">+Y</b> up on the diagram, <b class="cz">+Z</b> up. Overhead view shows the diagram as drawn.</li>
+        <li><b>Heading</b>: robot forward measured from +X, <b>counterclockwise positive</b>. 0 faces +X (right), +90 faces +Y (up). Shown in degrees.</li>
+        <li><b>Robot</b>: <b class="cx">+x forward</b> (red arrow, white face), <b class="cy">+y left</b> (green arrow, green side), <b class="cz">+z up</b> (blue arrow). Box drawn about the pose origin.</li>
+        <li><b>Roll</b> about robot +x: positive lifts the left side.</li>
+        <li><b>Pitch</b> about robot +y: positive tips the nose down.</li>
+        <li><b>Rotation</b> robot to field: R = Rz(yaw) Ry(pitch) Rx(roll). Attitude only rotates the box; it never raises it.</li>
+        <li><b>Trail</b>: received positions; it breaks on a new session, a pose reset (epoch), a reconnect, or a gap longer than the stale time.</li>
+        <li><b>Receive age</b>: time since the receiver accepted the shown pose (laptop clock). It is not end-to-end latency.</li>
+      </ul>
+    </section>
+  </aside>
+</main>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

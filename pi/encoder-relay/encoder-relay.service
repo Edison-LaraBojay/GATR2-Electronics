@@ -1,0 +1,19 @@
+# Encoder relay for the localization demo. Install:
+#   sudo cp encoder-relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now encoder-relay
+# Conflicts: starting either this or navigatr stops the other, so the two
+# never share the Pico UART or the Brain USB port.
+
+[Unit]
+Description=GATR2 encoder relay (Pico UART to V5 Brain USB)
+Conflicts=navigatr.service
+
+[Service]
+ExecStart=/usr/local/bin/encoder-relay --uart /dev/ttyAMA0 --baud 115200 --brain auto
+Restart=always
+RestartSec=2
+DynamicUser=yes
+SupplementaryGroups=dialout
+
+[Install]
+WantedBy=multi-user.target

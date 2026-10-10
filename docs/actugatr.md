@@ -13,16 +13,12 @@ from a separate `investigatr::FieldSource` owned by the Brain application.
 The pose provider does not need to know the field. Construct movement as
 `Motion(pose_source, field_source, planner, follower, config)`.
 
-```
-investiGATR  shared types, references, planner
-   ^      ^
-   |      |
-communiGATR   actuGATR   (neither depends on the other)
-```
+actuGATR depends on investiGATR's shared types, references and planner
+interfaces. The application supplies its own pose and field sources.
 
 Sources: [brain/actuGATR](../brain/actuGATR). Planner and shared types:
 [investiGATR](investigatr.md). The old Pi-specific programs and deployment
-instructions are [deprecated](../deprecated/README.md). No replacement
+instructions are retired and no longer distributed. No replacement
 hardware test program exists yet.
 
 ## Units and frames
@@ -166,13 +162,13 @@ Configs and kinematics:
 - Every take is bounded (`lock_timeout_ms`). A busy call returns 0 or false; `status()` then leaves the caller's copy unchanged.
 - PROS deletes competition tasks at mode changes without releasing their mutexes. If that ever leaks this mutex, the task keeps stepping without new requests and counts lock timeouts: the current command still runs closed loop, and a manual demand goes stale and stops. A stop that cannot take the mutex is carried by an atomic, ordered against posted requests.
 
-`PortMap` checks every active Smart Port device: drive motors, the VEX IMU when it is the IMU source, and the RS-485 link when selected. A conflict names both devices. `distinctPorts()` checks constant lists in a `static_assert`.
+`PortMap` checks the Smart Port devices registered by the application, including drive motors and sensors. A conflict names both devices. `distinctPorts()` checks constant lists in a `static_assert`.
 
 ## Observability
 
 `DriveSnapshot`, `DriveStatus` and `MotionStatus` expose control state and errors
-without a wire format. The former Pi-viewer `telemetryOf` adapter is archived;
-actuGATR no longer depends on translaGATR or a visualization server.
+without a wire format. Applications can observe these snapshots without a
+transport or visualization server.
 
 ## Tuning
 

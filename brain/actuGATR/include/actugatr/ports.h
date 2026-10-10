@@ -1,7 +1,7 @@
 // ports.h
 // V5 Smart Port bookkeeping: every active device on its own port 1..21.
-// Applications list the motors, the VEX IMU when it is the IMU source, and
-// the Smart Port link when RS-485 is selected.
+// Applications list the motors and any other Smart Port devices they use,
+// such as a VEX IMU.
 
 #pragma once
 #include <cstddef>

@@ -1,7 +1,7 @@
 # investiGATR: shared types, reference resolution, path planning, tests.
 
 # Shared value types and interfaces: poses, field, state source, references,
-# motion model, paths. communiGATR and actuGATR build on these.
+# motion model, paths. actuGATR builds on these.
 add_library(investigatr_types STATIC
     src/geometry.cpp
     src/field.cpp
