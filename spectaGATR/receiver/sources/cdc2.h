@@ -6,7 +6,8 @@
 //   simple reply      AA 55 <cmd> <len u8> <payload>
 //   extended request  C9 36 B8 47 56 <ecmd> <size VarU16> <payload> <crc16 BE>
 //   extended reply    AA 55 56 <size VarU16> <ecmd> <ack> <payload> <crc16 BE>
-// No request that writes to the Brain or switches the radio exists here.
+// Nothing here writes to the Brain. radioChannelRequest switches the controller radio and is
+// sent only with --radio-download.
 
 #pragma once
 #include <cstddef>
@@ -22,10 +23,13 @@ namespace spectagatr::receiver::sources
 constexpr Byte kCommandSystemVersion = 0xA4;
 constexpr Byte kCommandExtended      = 0x56; // USER_CDC
 constexpr Byte kExtendedUserRead     = 0x27;
+constexpr Byte kExtendedFileControl  = 0x10; // FILE_CTRL, radio channel with action 1
 constexpr Byte kExtendedRadioStatus  = 0x26;
 constexpr Byte kAck                  = 0x76;
 constexpr Byte kUserChannel          = 1;    // stdio, channel 1
-constexpr Byte kUserReadLength       = 0x40; // what pros-cli asks for
+constexpr Byte kUserReadLength       = 0x00; // as vexide: up to kUserReadMaxBytes per reply
+constexpr Byte kProsCliReadLength    = 0x40; // what pros-cli asks for: up to 64 bytes per reply
+constexpr std::size_t kUserReadMaxBytes = 224; // measured on hardware with length 0
 constexpr Byte kProductBrain         = 0x10;
 constexpr Byte kProductController    = 0x11;
 constexpr Byte kLinkedByCable        = 0x01;
@@ -38,6 +42,8 @@ uint16_t crc16Xmodem(const Byte* data, std::size_t size);
 Bytes systemVersionRequest();
 Bytes userReadRequest(Byte channel, Byte length);
 Bytes radioStatusRequest();
+// FILE_CTRL action 1: download channel (true) or pit (false), as pros-cli ft_transfer_channel.
+Bytes radioChannelRequest(bool download);
 
 struct CdcReply {
     Byte  command = 0;

@@ -1,36 +1,92 @@
-# Pico acquisition firmware
+# Pico encoder firmware
 
-RP2040 acquisition firmware retained as a working sensor baseline for the future
-MCU rewrite. It reads three A/B quadrature encoder channels and IMU yaw rate over
-SPI1, taking a local sensor snapshot at 50 Hz. Optional USB text output supports
-local bench diagnostics. It has no Pi or Brain transport, accepts no host commands,
-and performs no localization.
+The default RP2040 firmware counts two A/B quadrature encoder channels and sends
+16 byte encoder records to the Pi over UART at 50 Hz. It runs from
+[`src/main.cpp`](src/main.cpp), with no IMU code, host commands or localization.
+The Pi forwards the counts to the Brain, where the VEX IMU supplies heading.
+See the [localization demo guide](../../brain/localization-demo/README.md) for
+the complete setup.
+
+## Build and upload
+
+From `pico/aggreGATR`, with the Pico connected by USB:
+
+```sh
+pio run
+pio run -t upload
+```
+
+Both commands select the default `hat2_encoder_demo` environment. The explicit
+form, `pio run -e hat2_encoder_demo -t upload`, is equivalent. The default build
+uses `src/main.cpp`, `quadrature.cpp` and the shared
+[encoder record codec](../../encoder-record/README.md).
+
+## Wiring and status
+
+The firmware uses the existing HAT v2 wiring:
+
+| Signal | Pico pins | Connector / role |
+|---|---|---|
+| Encoder channel 0 | GP0 / GP1 | J2, sideways tracking wheel |
+| Encoder channel 1 | GP2 / GP3 | J3, forward tracking wheel |
+| UART0 to Pi | TX GP16 / RX GP17 | 115200 baud |
+
+Pins are defined in [`src/board.h`](src/board.h); UART settings, the 50 Hz send
+rate and USB diagnostics are in [`src/encoder_config.h`](src/encoder_config.h)
+under `encoder_cfg`. The firmware runs without a receiver. Counts accumulate
+from boot and are never reset while running; each boot selects a random run id
+so the Brain can detect a restart.
+
+`pio device monitor` shows status twice a second when USB is connected:
+
+```text
+encoder demo run=3F2A seq=1234 ch0=-152 ch1=8801 sent=1235 skipped=0
+```
+
+The firmware never waits for USB to connect. Set `encoder_cfg::kUsbDebug` to
+`false` and rebuild to disable USB text. The complete Pico-to-Brain route has
+not been tested on hardware.
+
+## Optional IMU sensor monitor
+
+The separate sensor monitor is retained in
+[`src/sensor_monitor/main.cpp`](src/sensor_monitor/main.cpp) for local bench
+diagnostics. It reads three A/B quadrature encoder channels and IMU yaw rate over
+SPI1, taking a local sensor snapshot at 50 Hz. It has no Pi or Brain transport,
+accepts no host commands, and performs no localization. Select an IMU environment
+explicitly to build or upload it:
+
+```sh
+pio run -e hat2_bno08x -e hat2_asm330
+pio run -e hat2_bno08x -t upload
+```
+
+- `hat2_bno08x`: revision 2 sensor wiring with a BNO08X.
+- `hat2_asm330`: revision 2 sensor wiring with an ASM330LHHG1; use this environment
+  in the upload command for that sensor.
+
+Uploading a sensor monitor replaces the encoder sender. Run `pio run -t upload`
+to restore the default encoder firmware. The sections below describe only the
+optional sensor monitor.
 
 The IMU model is selected at build time: BNO08X (three-axis gyro projected onto
 the up axis learned at startup, averaged per acquisition interval) or ASM330LHHG1
 (physical gyro Z). A missing or failed IMU, or a BNO08X still aligning, makes yaw
 unavailable for that sample; encoder acquisition continues.
 
-[Pins](src/board.h), [rates and build selection](src/config.h), and
-[local IMU health labels](src/imu_status.h) belong to this firmware. It does not
+[Pins](src/board.h), [sensor monitor settings](src/config.h), and
+[local IMU health labels](src/imu_status.h) belong to this monitor. It does not
 use the retired shared communication protocol. The former Pi UART loop,
 commands, frame scheduling and diagnostic packet code are not included here.
 
 The existing revision 2 sensor pin mapping and PlatformIO environment names
 remain for hardware bring-up. The corresponding board design is archived in
-[pcb/PiHat](../../pcb/PiHat/). GPIO 16/17 are no longer
-configured or reserved for Pi UART by this firmware; this does not change the
+[pcb/PiHat](../../pcb/PiHat/). GPIO 16/17 are not
+configured or reserved for Pi UART by the sensor monitor; this does not change the
 wiring on an existing board. The BNO08X uses CEVA's sh2 driver,
 [vendored here](third_party/README.md).
 
-## Encoder demo env
-
-`pio run -e hat2_encoder_demo` builds separate firmware from `src/encoder_demo/`
-and `quadrature.cpp` only, with no IMU code. It sends encoder channels 0 and 1
-as fixed records on UART0 (TX GP16, RX GP17) to the Pi at 50 Hz. Guide:
-[brain/localization-demo](../../brain/localization-demo/README.md).
-
-## IMU retry
+### IMU retry
 
 The IMU is enabled at boot. A failing device is retried by the Pico itself;
 encoder acquisition continues during recovery.
@@ -56,7 +112,7 @@ then up to 200 ms waiting for the boot) until it first succeeds, normally
 once in `setup()`, and the BNO08X WAKE handshake (at most 2 ms). A failed
 open returns after the pulse.
 
-## BNO08X startup alignment
+### BNO08X startup alignment
 
 The driver enables accelerometer report `0x01` at 100 Hz and uncalibrated gyro
 report `0x07` at 200 Hz. Keep the robot stationary and level at startup and
@@ -76,19 +132,7 @@ or compensate dynamic rocking. The ASM330 path keeps its existing physical
 gyro-Z behavior. A hub reset repeats BNO08X alignment. After remounting the
 IMU, reset it and repeat the stationary startup.
 
-## Build
-
-One PlatformIO environment per existing board revision and IMU model:
-
-- `hat2_bno08x`, the default: revision 2 sensor wiring with a BNO08X
-- `hat2_asm330`: revision 2 sensor wiring with an ASM330LHHG1
-
-```sh
-pio run -e hat2_bno08x -e hat2_asm330
-```
-
-Upload by hand with `pio run -e hat2_bno08x --target upload` once the board is
-connected.
+### Sensor monitor host tests
 
 Host tests for the portable acquisition logic (IMU retry and supervisors,
 report decoding, SPI headers, gyro windows and alignment) live in
@@ -100,7 +144,7 @@ cmake --build build/tests
 ctest --test-dir build/tests --output-on-failure
 ```
 
-## Local USB sensor monitor
+### Local USB sensor monitor
 
 The Pico runs without a USB host, Pi, Brain, or robot XML. Flash the selected
 IMU variant, connect the Pico's USB to your computer with a data cable, and

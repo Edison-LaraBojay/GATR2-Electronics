@@ -86,7 +86,8 @@ std::optional<feed::RobotBox> robotOf(const std::string& text) {
 bool takesValue(std::string_view flag) {
     for (const std::string_view name :
          {"--source", "--port", "--sim", "--rate", "--seed", "--replay", "--replay-rate-bps",
-          "--http-port", "--bind", "--field", "--web", "--fields", "--stale-ms", "--robot"}) {
+          "--http-port", "--bind", "--field", "--web", "--fields", "--stale-ms", "--robot",
+          "--user-read-length", "--pipeline"}) {
         if (flag == name) {
             return true;
         }
@@ -135,6 +136,18 @@ std::string apply(Options& options, const std::string& flag, const std::string& 
             return "--replay-rate-bps: bytes per second, at least 1";
         }
         options.replay_rate_bps = *rate;
+    } else if (flag == "--user-read-length") {
+        const std::optional<long long> length = parseInteger(value);
+        if (!length || *length < 0 || *length > 255) {
+            return "--user-read-length: 0 to 255";
+        }
+        options.user_read_length = static_cast<int>(*length);
+    } else if (flag == "--pipeline") {
+        const std::optional<long long> depth = parseInteger(value);
+        if (!depth || *depth < 1 || *depth > 4) {
+            return "--pipeline: 1 to 4";
+        }
+        options.pipeline = static_cast<int>(*depth);
     } else if (flag == "--http-port") {
         const std::optional<long long> port = parseInteger(value);
         if (!port || *port < 0 || *port > 65535) {
@@ -186,7 +199,8 @@ ParsedCommandLine parseCommandLine(const std::vector<std::string>& args) {
             options.help = true;
             continue;
         }
-        if (flag == "--list-ports" || flag == "--no-browser" || flag == "--loop") {
+        if (flag == "--list-ports" || flag == "--no-browser" || flag == "--loop" ||
+            flag == "--debug-link" || flag == "--radio-download") {
             if (inline_value) {
                 parsed.error = flag + " takes no value";
                 return parsed;
@@ -194,6 +208,8 @@ ParsedCommandLine parseCommandLine(const std::vector<std::string>& args) {
             options.list_ports   = options.list_ports || flag == "--list-ports";
             options.open_browser = options.open_browser && flag != "--no-browser";
             options.loop         = options.loop || flag == "--loop";
+            options.debug_link   = options.debug_link || flag == "--debug-link";
+            options.radio_download = options.radio_download || flag == "--radio-download";
             continue;
         }
         if (!takesValue(flag)) {
@@ -246,6 +262,15 @@ std::string usageText() {
            "                       a V5 controller if one is plugged in, else a Brain user port)\n"
            "  --port NAME          use this serial port (COM7, /dev/ttyACM1) instead of searching\n"
            "  --list-ports         print the VEX ports found and exit\n"
+           "  --debug-link         print controller link counters and pose delivery (rate, gaps,\n"
+           "                       lost lines, lag growth) to stderr once a second\n"
+           "  --user-read-length N controller USER_READ length byte, 0 to 255 (default 0: up to\n"
+           "                       224 bytes per reply; 64 limits replies to 64 bytes)\n"
+           "  --pipeline N         controller USER_READs kept outstanding, 1 to 4 (default 1;\n"
+           "                       over 1 is experimental)\n"
+           "  --radio-download     move a radio-linked controller to the download channel, back\n"
+           "                       to pit on exit. The Brain link drops for a few seconds while\n"
+           "                       it moves: robot disabled, practice only\n"
            "  --sim MODE           figure8|circle|square|attitude|restart|dropout (default "
            "figure8)\n"
            "  --rate HZ            sim poses per second, 1 to 50 (default 10)\n"

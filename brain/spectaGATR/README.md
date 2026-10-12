@@ -10,9 +10,10 @@ The caller owns localization and `initialize()`/`opcontrol()`.
 - `tests/`: host tests
 - Wire format: [spectaGATR/protocol](../../spectaGATR/protocol/include/spectagatr/protocol/pose_line.h)
 
-Example PROS project: [brain/spectaGATR-demo](../spectaGATR-demo/README.md).
-The active [encoder localization demo](../localization-demo/README.md) uses
-this publisher for its encoder and VEX IMU pose.
+The active [drive and localization demo](../localization-demo/README.md) is
+the example PROS project. It uses this publisher for its encoder and VEX IMU
+pose while its own controller loop commands the mecanum drive. The publisher
+library itself only publishes poses.
 
 ## Add it to a PROS project
 
@@ -81,8 +82,13 @@ and |x| or |y| over 2000 m are rejected and counted; the previous pose stays.
   (seqlock over atomic words plus a checksum). Overlapping calls from two tasks
   are safe; a torn slot is never sent and the next update repairs it.
 - The background task (priority `TASK_PRIORITY_DEFAULT - 1`) checks every
-  5 ms and writes a line only when a new pose arrived and the rate period has
-  passed. `t_ms` is `pros::millis()` when you called `updatePose`.
+  5 ms and writes a line only when a new pose arrived, the rate period has
+  passed, and the output has room: at most 128 bytes (about two lines) waiting
+  in the VEXos stdio FIFO (`vexSerialWriteFree(1)`). `t_ms` is
+  `pros::millis()` when you called `updatePose`.
+- A reader slower than the rate (the controller radio carries a few hundred
+  bytes per second) gets fewer lines, each carrying the newest pose, instead of
+  a growing queue of old ones. With no reader at all the task stops writing.
 - No new poses, no lines: the viewer marks the pose stale.
 - Fixed memory after construction; one task for the program's life.
 
@@ -96,10 +102,10 @@ calls `serctl`/`fdctl` and never changes COBS. Your own `printf` output can
 share stdout; the receiver skips text that is not a pose line.
 
 PROS blocks a stdout write while its 2047 byte output buffer is full, and then
-every `printf` in the program waits too. The library writes only from its own
-task, so a control loop that only calls `updatePose` never waits for the
-laptop. Whether VEXos keeps
-draining the output with no host attached is not verified.
+every `printf` in the program waits too. The publisher avoids that by waiting
+for room in the VEXos FIFO, which the PROS buffer drains into every 2 ms; it
+does not see the PROS buffer itself. Your own `printf` output shares the FIFO:
+heavy printing now delays pose lines instead of blocking the publisher task.
 
 ## Encoder localization demo
 

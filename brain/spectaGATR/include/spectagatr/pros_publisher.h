@@ -10,8 +10,9 @@
 //   viz.updatePose(x, y, heading);          // any task, never blocks
 //   viz.updatePose(x, y, spectagatr::Attitude{roll, pitch, yaw});
 //
-// Only the background task ever waits on stdout: PROS blocks a write while its
-// 2047 B output buffer is full, and then every other stdout writer too.
+// The background task writes a line only while at most about two packets wait in
+// the VEXos stdio FIFO, so a slow reader gets fresh poses, not a queue of old
+// ones, and with no reader the task stops writing instead of blocking.
 
 #pragma once
 #include <atomic>

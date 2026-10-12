@@ -19,6 +19,10 @@ struct Options {
     SourceChoice               source = SourceChoice::kAuto;
     std::optional<std::string> port; // forces a serial port
     bool                       list_ports = false;
+    bool                       debug_link = false;
+    int                        user_read_length = 0; // controller USER_READ length byte
+    bool                       radio_download   = false;
+    int                        pipeline         = 1; // controller USER_READs outstanding
 
     sim::SimMode sim_mode = sim::SimMode::kFigure8;
     double       rate_hz  = 10.0;

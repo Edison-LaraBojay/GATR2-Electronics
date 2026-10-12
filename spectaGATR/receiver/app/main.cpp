@@ -14,6 +14,8 @@
 #include "receiver/app/command_line.h"
 #include "receiver/app/live_feed.h"
 #include "receiver/app/run_source.h"
+#include "receiver/feed/delivery_meter.h"
+#include "receiver/feed/pose_feed.h"
 #include "receiver/platform/browser.h"
 #include "receiver/platform/process.h"
 #include "receiver/platform/stop_signal.h"
@@ -68,6 +70,49 @@ void printChanges(const feed::FeedStatus& now, std::optional<feed::FeedStatus>& 
     }
     std::fflush(stdout);
     printed = now;
+}
+
+void printLinkStats(const sources::TransportStats& stats) {
+    char rtt[32] = "--";
+    char channel[8] = "--";
+    if (stats.rtt_us) {
+        std::snprintf(rtt, sizeof(rtt), "%.1f", static_cast<double>(*stats.rtt_us) / 1000.0);
+    }
+    if (stats.radio) {
+        std::snprintf(channel, sizeof(channel), "%u", static_cast<unsigned>(stats.radio->channel));
+    }
+    std::fprintf(stderr,
+                 "spectagatr: controller polls=%lu empty_polls=%lu timeouts=%lu "
+                 "bad_replies=%lu late_replies=%lu stray_bytes=%lu padding_bytes=%lu "
+                 "data_bytes=%lu channel_switches=%lu rtt_ms=%s radio_channel=%s\n",
+                 static_cast<unsigned long>(stats.polls),
+                 static_cast<unsigned long>(stats.empty_polls),
+                 static_cast<unsigned long>(stats.timeouts),
+                 static_cast<unsigned long>(stats.bad_replies),
+                 static_cast<unsigned long>(stats.late_replies),
+                 static_cast<unsigned long>(stats.stray_bytes),
+                 static_cast<unsigned long>(stats.padding_bytes),
+                 static_cast<unsigned long>(stats.data_bytes),
+                 static_cast<unsigned long>(stats.channel_switches), rtt, channel);
+    std::fflush(stderr);
+}
+
+// corrupt: lines dropped by the parser this window (bad CRC, truncated, malformed, too long).
+void printDelivery(const feed::DeliveryWindow& w, uint64_t corrupt) {
+    const double per_reply = w.chunks > 0 ? static_cast<double>(w.poses) / w.chunks : 0.0;
+    std::fprintf(stderr,
+                 "spectagatr: delivery poses=%lu rate_hz=%.1f max_gap_ms=%.0f seq_lost=%lu "
+                 "corrupt=%llu stale_gaps=%lu lag_growth_ms=%.0f bytes_per_s=%.0f "
+                 "replies_with_data=%lu poses_per_reply=%.1f\n",
+                 static_cast<unsigned long>(w.poses), w.rate_hz, w.max_gap_ms,
+                 static_cast<unsigned long>(w.seq_lost), static_cast<unsigned long long>(corrupt),
+                 static_cast<unsigned long>(w.stale_gaps), w.max_lag_ms, w.bytes_per_s,
+                 static_cast<unsigned long>(w.chunks), per_reply);
+    std::fflush(stderr);
+}
+
+uint64_t corruptLines(const feed::FeedCounts& c) {
+    return c.bad_crc + c.truncated + c.malformed + c.too_long;
 }
 
 int run(const app::Options& options) {
@@ -135,9 +180,35 @@ int run(const app::Options& options) {
 
     platform::StopSignal stop;
     sources::SourceHooks hooks;
+    SteadyClock::time_point next_link_debug{}; // source thread only
     hooks.clock     = receiverUs;
-    hooks.on_chunk  = [&live](const sources::SourceChunk& chunk) { live.onChunk(chunk); };
-    hooks.on_status = [&live](const sources::SourceStatus& status) { live.onStatus(status); };
+    // --debug-link: a second parse of the same bytes measures what the viewer receives.
+    feed::PoseFeed      meter_feed;              // source thread only
+    feed::DeliveryMeter meter(options.stale_ms); // source thread only
+    uint64_t            corrupt_printed = 0;     // source thread only
+    hooks.on_chunk = [&](const sources::SourceChunk& chunk) {
+        live.onChunk(chunk);
+        if (options.debug_link) {
+            meter.onBytes(chunk.bytes.size());
+            meter_feed.push(chunk.bytes.data(), chunk.bytes.size(),
+                            static_cast<double>(chunk.rx_us) / 1000.0,
+                            [&](const feed::TrackedPose& pose) { meter.onPose(pose); });
+        }
+    };
+    hooks.on_status = [&](const sources::SourceStatus& status) {
+        live.onStatus(status);
+        if (!options.debug_link || status.src != sources::SourceKind::kController) {
+            return;
+        }
+        const SteadyClock::time_point now = SteadyClock::now();
+        if (now >= next_link_debug) {
+            printLinkStats(status.stats);
+            const uint64_t corrupt = corruptLines(meter_feed.counts());
+            printDelivery(meter.take(receiverMs()), corrupt - corrupt_printed);
+            corrupt_printed = corrupt;
+            next_link_debug = now + std::chrono::seconds(1);
+        }
+    };
     std::atomic<bool> source_done{false};
     std::thread       source_thread([&] {
         app::runSource(options, hooks, stop);

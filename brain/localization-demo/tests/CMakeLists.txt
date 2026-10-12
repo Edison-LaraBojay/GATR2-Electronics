@@ -1,4 +1,4 @@
-# Localization demo host tests: the portable odometry and record handling, and
+# Localization demo host tests: portable drive, odometry and record handling, and
 # the data path through the Pi relay forwarder.
 #   cmake -S brain/localization-demo/tests -B build-localization-demo
 #   cmake --build build-localization-demo && ctest --test-dir build-localization-demo
@@ -35,6 +35,7 @@ get_filename_component(RELAY_DIR ${DEMO_DIR}/../../pi/encoder-relay ABSOLUTE)
 
 # Sources under test.
 set(CODE_UNDER_TEST
+    ${DEMO_DIR}/src/mecanum.cpp
     ${DEMO_DIR}/src/odometry.cpp
     ${DEMO_DIR}/src/encoder_tracker.cpp
     ${DEMO_DIR}/src/localization.cpp
@@ -44,6 +45,7 @@ set(CODE_UNDER_TEST
 
 # Test files.
 set(TEST_SOURCES
+    mecanum_gtest.cpp
     odometry_gtest.cpp
     localization_gtest.cpp
     end_to_end_gtest.cpp

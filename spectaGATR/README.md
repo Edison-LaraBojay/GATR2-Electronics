@@ -23,17 +23,17 @@ including its visualization routes and hardware limitations.
 | [`fields/`](fields/README.md) | Field definitions: `override.json` (V5RC Override, from the archived field.xml), `empty.json` |
 | [`tools/`](tools/) | `mock_feed.py` (browser-only mock), `ws_probe.py` (feed checker) |
 | [`../brain/spectaGATR/`](../brain/spectaGATR/README.md) | Brain publisher library |
-| [`../brain/spectaGATR-demo/`](../brain/spectaGATR-demo/README.md) | Example PROS program; never moves motors |
-| [`../brain/localization-demo/`](../brain/localization-demo/README.md) | Encoder and VEX IMU odometry from the active Pico and Pi relay path; never moves motors |
+| [`../brain/localization-demo/`](../brain/localization-demo/README.md) | Active PROS program: manual eight-motor mecanum drive and encoder/VEX IMU odometry from the Pico and Pi relay path |
 
-## Status (2026-10-09)
+## Status (2026-10-10)
 
 | Part | Checked |
 |---|---|
-| Wire format, Brain publisher core, receiver | Host tests on Windows: protocol 9, receiver 158, publisher 30, 0 warnings |
+| Wire format, Brain publisher core, receiver | Host tests on Windows: protocol 9, receiver 178, publisher 30, 0 warnings |
+| Controller radio | Measured on the bench 2026-10-10 (table under Connection limits). With `--radio-download`: 10 Hz, one pose per reply, 110-180 ms gaps, no loss. The Brain's output gating is built but not yet uploaded to the Brain |
 | Publisher -> receiver -> browser | Host run: the real publisher core's output, as PROS COBS packets with console text, garbage, truncation, a pose reset and a program restart, replayed through the real receiver into headless Chrome. 584 of 600 lines shown; the other 16 were truncated on purpose. Ordering, restarts and counters correct |
 | Browser | 27 assertion tests (axes, heading sign and wrap, roll/pitch signs, trail breaks, stale logic); screenshots of every state |
-| PROS demo, publisher adapter | Build with the PROS 4.2.2 toolchain, 0 warnings. Not run on a Brain |
+| Publisher adapter | Builds with the PROS 4.2.2 toolchain, 0 warnings. Not run on a Brain |
 | Controller, radio, Brain USB, VEX IMU signs | **Not tested on hardware.** Controller and Brain USB sources pass tests against fakes only |
 | Linux, macOS receiver | Cross-compiled only, never run |
 
@@ -109,30 +109,31 @@ void opcontrol() {
 - Call `viz.resetTrail()` after re-placing the robot or resetting odometry.
   `viz.stats()` reports lines, rejected, overwritten and write errors.
 - The publisher writes only stdout, one `write()` per line (about 60 bytes on
-  the wire). It never reads stdin and never changes PROS serial settings.
+  the wire), and only while the Brain's output queue is short. It never reads
+  stdin and never changes PROS serial settings.
   Library details: [brain/spectaGATR](../brain/spectaGATR/README.md).
 
-The example program `brain/spectaGATR-demo` builds and uploads with:
+The active example is [brain/localization-demo](../brain/localization-demo/README.md).
+It publishes pose from two tracking wheels and a VEX IMU while the controller
+commands eight mecanum-drive motors. Left stick Y drives forward/backward,
+left stick X strafes, and right stick X turns. Configure the eight signed
+motor ports in `include/drive_config.h` before driving; they default to zero
+and keep drive disabled until filled in correctly. Follow the demo guide for
+the PROS kernel, build, upload, startup and motor checks.
 
-```sh
-cd brain/spectaGATR-demo
-pros make
-pros upload --slot 3 --name spectaGATR-demo --after screen
-```
-
-The demo never commands a motor. It has three pose sources, cycled with
-LEFT/RIGHT, and each one labels where x/y come from:
-
-| Source | x/y | Orientation |
-|---|---|---|
-| SYNTHETIC | A figure eight computed on the Brain | Alternates between heading only and full attitude |
-| VEX IMU | Fixed point, because an IMU gives no position | Real attitude from the IMU on port 20 |
-| CALLER ODOMETRY | Your `currentPose()` in `src/pose_source.cpp` | From your code |
-
-Buttons: A resets the trail, B pauses (the viewer goes stale), X recalibrates
-the IMU.
+Drive waits for IMU calibration, a first fresh encoder baseline and centered
+sticks. A later localization-link loss holds the displayed pose while
+robot-relative manual drive remains usable. Controller disconnect/read errors,
+disabled mode and autonomous mode stop the motors; center the sticks before
+resuming control. A motor-command fault stops drive until the program is
+restarted. There is no autonomous driving or path following.
 
 ## Connect and view
+
+For the active localization demo, leave the Pi attached to Brain USB and
+follow its [visualization steps](../brain/localization-demo/README.md#9-visualization).
+The following receiver options also apply to other programs that use the
+publisher library.
 
 1. Start the Brain program.
 2. Connect the laptop in one of two ways:
@@ -150,6 +151,10 @@ the IMU.
 | `--field override` / `--field empty` | Field shown first; the Field menu in the page switches, and the choice is remembered |
 | `--robot F,B,L,R[,H]` | Robot box in meters from the pose point (default 0.1685, 0.1685, 0.1465, 0.1465, 0.25) |
 | `--stale-ms 750` | Age after which the pose is marked stale |
+| `--debug-link` | Once a second: controller transport counters and pose delivery (rate, gaps, lost seq) |
+| `--radio-download` | Practice only: move a radio-linked controller to the faster download channel, back to the pit channel on exit |
+| `--user-read-length N` | Controller read length byte (default 0: replies of up to 224 B; 64 caps replies at 64 B) |
+| `--pipeline N` | Controller reads kept outstanding, 1 to 4 (default 1); experimental |
 
 Ports are picked by USB id, never by COM number.
 - Through a controller, the receiver only sends read-only queries (identity,
@@ -204,9 +209,9 @@ robot's forward/left/up markers, and repeats this list in its side panel.
 
 ## Connection limits
 
-With `spectaGATR-demo`, the laptop reads the Brain through the controller or
-the Brain's USB. With `localization-demo`, the Pi relay occupies Brain USB.
-Simultaneous controller viewing is untested: the Pi may consume stdout bytes
+The standalone publisher can be read through the controller or Brain USB.
+With `localization-demo`, the Pi relay occupies Brain USB. Simultaneous
+controller viewing is untested: the Pi may consume stdout bytes
 before the controller receives them. The
 [localization demo guide](../brain/localization-demo/README.md#9-visualization)
 describes how to check that route and forward the output through the Pi with
@@ -218,56 +223,65 @@ been tested on hardware.
   the receiver (Ctrl+C) first.
 - **Uploading over Brain USB** uses the Brain's other (system) port. Running
   the receiver at the same time is untested.
-- **Radio throughput is unknown.**
-  - The default of 10 lines/s is about 0.6 kB/s.
-  - The only official V5 radio figure found is for VEXlink: about
-    0.5-1 kB/s.
-  - Start at 10 Hz. If the receive age jumps or the stale banner flickers over
-    the radio, lower the rate.
+- **The radio channel decides the update rate.** 10 lines/s needs about
+  0.6 kB/s. On the default pit channel each controller read costs about
+  235 ms of dead time plus about 0.7 ms per byte. Bench measurements,
+  2026-10-10, publisher at 10 Hz:
+
+  | Setup | Delivered |
+  |---|---|
+  | Pit channel, read length 64 (old default) | About 200-230 B/s, about 3 Hz, backlog and loss |
+  | Pit channel, read length 0 (current default) | About 520 B/s, 6-7 Hz in bursts of about 4 poses every 425 ms, 4-7 lost seq/s |
+  | Pit channel, length 0, `--pipeline 2` | About 570 B/s, 10 Hz with no loss, still bursts every about 400 ms |
+  | Download channel (`--radio-download`) | 10 Hz, one pose per reply, 28-47 ms round trips, 110-180 ms gaps, no loss |
+
+  - For smooth viewing in practice, use `--radio-download`. It stays opt-in:
+    the link drops for a few seconds during the switch, and its effect on
+    driving latency and its legality under field control are unverified.
+  - On the pit channel, lowering the publisher rate (`ProsPublisher viz(5)`)
+    avoids the loss.
+  - The publisher writes a line only while at most about 128 B wait in the
+    Brain's VEXos output FIFO, whose empty size it learns from the largest
+    free count seen. A slow link then gets the newest pose instead of a
+    growing queue. This gating is built but not yet run on a Brain; the
+    measurements above predate it.
   - Direct USB is much faster, but that says nothing about the radio.
-- **The Brain's stdout is shared.** Every `printf` in the program shares the
-  2047-byte PROS output buffer. PROS blocks writers while it is full; the
-  publisher's writes happen only in its own task.
+- **The Brain's stdout is shared.** Every `printf` in the program shares that
+  FIFO. Heavy `printf` output delays pose lines, because the publisher waits
+  for the queue to drain instead of adding to it. If the Brain ever reports an
+  invalid FIFO count, the publisher falls back to plain writes, which PROS
+  blocks while its 2047-byte buffer is full. That only ever blocks the
+  publisher's own task.
 - **Unverified on hardware:**
-  - The VEX IMU roll/pitch signs in the demo; `kImuRollSign` and
-    `kImuPitchSign` flip them.
-  - Whether PROS output with no laptop attached ever fills that buffer.
+  - The localization demo's encoder and VEX IMU signs.
+  - The output gating's FIFO counts with radio, USB and no host attached.
   - The controller's reply padding.
 
-## Hardware check (first time, about 10 minutes)
+## Hardware check for the active demo
 
-1. **Upload and connect.** Upload `spectaGATR-demo` and start it. The Brain
-   screen shows `SYNTHETIC x/y`, a session id, and "Lines" growing by about 10
-   per second. Plug the laptop into the Brain's USB, then run
-   `spectagatr --source brain`.
-   - **Expect:** the page turns LIVE.
-   - **Expect:** the robot runs a figure eight with its forward marker along
-     the path.
-   - **Expect:** "roll/pitch" switches between "heading only" and values
-     every 10 s.
-   - **Expect:** the receive age stays under about 150 ms.
-2. **Pause.** Press B on the controller.
-   - **Expect:** within 0.75 s the banner reads STALE and counts up, and the
-     robot is dimmed and frozen.
-   - **Expect:** B again returns to LIVE, with a new trail piece.
-3. **Unplug and replug.** Unplug the USB cable.
-   - **Expect:** STALE, then "Searching for VEX device".
-   - **Expect:** on replug, LIVE again with the same session id.
-   - Also note whether the Brain's "Lines" kept growing while unplugged.
-4. **Restart.** Restart the program on the Brain.
-   - **Expect:** a new session id on the Brain and in the page, and a new
-     trail.
-5. **Controller.** Stop the receiver, plug the laptop into the controller
-   (linked to the Brain), and run `spectagatr --source controller`.
-   - **Expect:** the same as step 1, with status detail "Brain linked by
-     radio".
-   - Note the receive age and whether `counts` show drops.
-   - Try `ProsPublisher viz(5)` and `viz(20)` to find what the radio sustains.
-6. **IMU.** Switch to VEX IMU with LEFT/RIGHT and keep the robot still while it
-   calibrates.
-   - **Expect:** turning the robot counterclockwise (seen from above)
-     increases the heading.
-   - **Expect:** lifting the left side gives positive roll.
-   - **Expect:** lifting the nose gives negative pitch.
-   - If a sign is wrong, flip `kImuRollSign` or `kImuPitchSign` in
-     `include/demo_config.h`.
+The complete route has not been tested on hardware. Start with the
+[demo guide](../brain/localization-demo/README.md) for wiring, port and motor
+direction configuration, calibration and the first motor checks.
+
+1. Place the robot at its configured start pose and keep the controller
+   sticks centered. Start the Pico, Pi relay and Brain program. Wait for IMU
+   calibration and the first fresh encoder baseline; the Brain's
+   `spectaGATR: lines` counter should then grow at about 10 per second.
+2. With the Pi still on Brain USB, try `spectagatr --source controller` from
+   a laptop connected to the linked controller. Expect LIVE and a heading-only
+   pose at the configured start position. If the Brain's line counter grows
+   but the viewer is empty or intermittent, use the guide's `--echo-brain`
+   SSH route. That route leaves the controller available for manual drive.
+3. With sticks centered, perform the guide's hand-push sign tests: forward
+   at heading 0 increases x, left increases y, and counterclockwise turning
+   increases heading. Verify the same values on the Brain and viewer before
+   relying on the position during manual driving.
+4. While stationary, stop the relay briefly. Expect the Brain to hold its
+   pose and the viewer to become STALE. Restart the relay: odometry rebases
+   and the viewer returns to LIVE with a trail break. Travel during the gap
+   is lost. Manual drive remains available after successful startup, so keep
+   the sticks centered during this check.
+5. Restart the Brain program at the configured start pose. Expect startup
+   calibration again, a new publisher session, and a new trail. Check
+   controller disconnect and competition-mode motor stops separately as
+   part of the demo's motor checks.

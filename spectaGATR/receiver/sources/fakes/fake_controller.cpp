@@ -137,7 +137,8 @@ void FakeController::answer(const Bytes& request) {
         return;
     }
     if (request == systemVersionRequest()) {
-        queueReply(systemVersionReply(options_.product, options_.flags));
+        const Byte flags = clock_.now() < link_down_until_ ? Byte{0} : options_.flags;
+        queueReply(systemVersionReply(options_.product, flags));
         return;
     }
     const std::optional<ExtendedRequest> parsed = parseExtended(request);
@@ -152,6 +153,17 @@ void FakeController::answer(const Bytes& request) {
         queueReply(userReadReply(parsed->payload[1]));
     } else if (parsed->ecmd == kExtendedRadioStatus && options_.answer_radio) {
         queueReply(radioReply());
+    } else if (parsed->ecmd == kExtendedFileControl && parsed->payload.size() == 2 &&
+               parsed->payload[0] == 0x01) {
+        const Byte download = parsed->payload[1];
+        channel_switches_.push_back(download);
+        if (!options_.ack_switch) {
+            queueReply(extendedReply(kExtendedFileControl, 0xFF, Bytes{}));
+            return;
+        }
+        queueReply(extendedReply(kExtendedFileControl, kAck, Bytes{}));
+        link_down_until_     = clock_.now() + options_.switch_drop_us;
+        options_.radio.channel = download != 0 ? Byte{5} : Byte{55};
     }
 }
 
@@ -162,7 +174,8 @@ Bytes FakeController::userReadReply(Byte length) {
         return extendedReply(kExtendedUserRead, code, Bytes{});
     }
     const std::size_t count =
-        std::min({static_cast<std::size_t>(length), options_.max_data, fifo_.size()});
+        std::min({length == 0 ? kUserReadMaxBytes : static_cast<std::size_t>(length),
+                  options_.max_data, fifo_.size()});
     Bytes payload = {kUserChannel};
     for (std::size_t i = 0; i < count; ++i) {
         payload.push_back(fifo_.front());

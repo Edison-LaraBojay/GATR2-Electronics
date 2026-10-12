@@ -1,5 +1,5 @@
-// encoder_demo_config.h
-// Encoder demo firmware (env hat2_encoder_demo): record rate, UART and pins.
+// encoder_config.h
+// Default encoder firmware (env hat2_encoder_demo): record rate, UART and pins.
 // Encoder pins are in board.h: channel 0 GP0/GP1, channel 1 GP2/GP3.
 
 #pragma once
@@ -8,7 +8,7 @@
 
 #include "board.h"
 
-namespace demo_cfg
+namespace encoder_cfg
 {
 
 // Encoder records to the Pi.
@@ -46,4 +46,4 @@ constexpr bool pinsUnique() {
 }
 static_assert(pinsUnique(), "pin assigned twice");
 
-} // namespace demo_cfg
+} // namespace encoder_cfg

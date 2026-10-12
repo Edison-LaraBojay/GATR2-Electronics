@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" failures="3" disabled="0" errors="0" time="0.001" timestamp="2026-10-10T02:01:52.376" name="AllTests">
+  <testsuite name="ControllerSource" tests="3" failures="3" disabled="0" skipped="0" errors="0" time="0." timestamp="2026-10-10T02:01:52.376">
+    <testcase name="UserReadSplitAcrossTimeoutIsPreserved" file="C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp" line="300" status="run" result="completed" time="0." timestamp="2026-10-10T02:01:52.376" classname="ControllerSource">
+      <failure message="C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp:314&#x0A;Expected equality of these values:&#x0A;  rig.received&#x0A;    Which is: {}&#x0A;  data&#x0A;    Which is: { &apos;A&apos; (65, 0x41), &apos;B&apos; (66, 0x42), &apos;C&apos; (67, 0x43), &apos;D&apos; (68, 0x44), &apos;E&apos; (69, 0x45), &apos;F&apos; (70, 0x46), &apos;G&apos; (71, 0x47), &apos;H&apos; (72, 0x48), &apos;I&apos; (73, 0x49), &apos;J&apos; (74, 0x4A), &apos;K&apos; (75, 0x4B), &apos;L&apos; (76, 0x4C), &apos;M&apos; (77, 0x4D), &apos;N&apos; (78, 0x4E), &apos;O&apos; (79, 0x4F), &apos;P&apos; (80, 0x50), &apos;Q&apos; (81, 0x51), &apos;R&apos; (82, 0x52), &apos;S&apos; (83, 0x53), &apos;T&apos; (84, 0x54) }&#x0A;" type=""><![CDATA[C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp:314
+Expected equality of these values:
+  rig.received
+    Which is: {}
+  data
+    Which is: { 'A' (65, 0x41), 'B' (66, 0x42), 'C' (67, 0x43), 'D' (68, 0x44), 'E' (69, 0x45), 'F' (70, 0x46), 'G' (71, 0x47), 'H' (72, 0x48), 'I' (73, 0x49), 'J' (74, 0x4A), 'K' (75, 0x4B), 'L' (76, 0x4C), 'M' (77, 0x4D), 'N' (78, 0x4E), 'O' (79, 0x4F), 'P' (80, 0x50), 'Q' (81, 0x51), 'R' (82, 0x52), 'S' (83, 0x53), 'T' (84, 0x54) }
+]]></failure>
+      <failure message="C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp:315&#x0A;Expected equality of these values:&#x0A;  rig.stats.stray_bytes&#x0A;    Which is: 15&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp:315
+Expected equality of these values:
+  rig.stats.stray_bytes
+    Which is: 15
+  0u
+    Which is: 0
+]]></failure>
+    </testcase>
+    <testcase name="LateUserReadDuringEmptyBackoffIsDelivered" file="C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp" line="318" status="run" result="completed" time="0." timestamp="2026-10-10T02:01:52.376" classname="ControllerSource">
+      <failure message="C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp:332&#x0A;Expected equality of these values:&#x0A;  rig.received&#x0A;    Which is: {}&#x0A;  data&#x0A;    Which is: { &apos;A&apos; (65, 0x41), &apos;B&apos; (66, 0x42), &apos;C&apos; (67, 0x43), &apos;D&apos; (68, 0x44), &apos;E&apos; (69, 0x45), &apos;F&apos; (70, 0x46), &apos;G&apos; (71, 0x47), &apos;H&apos; (72, 0x48), &apos;I&apos; (73, 0x49), &apos;J&apos; (74, 0x4A), &apos;K&apos; (75, 0x4B), &apos;L&apos; (76, 0x4C), &apos;M&apos; (77, 0x4D), &apos;N&apos; (78, 0x4E), &apos;O&apos; (79, 0x4F), &apos;P&apos; (80, 0x50), &apos;Q&apos; (81, 0x51), &apos;R&apos; (82, 0x52), &apos;S&apos; (83, 0x53), &apos;T&apos; (84, 0x54) }&#x0A;" type=""><![CDATA[C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp:332
+Expected equality of these values:
+  rig.received
+    Which is: {}
+  data
+    Which is: { 'A' (65, 0x41), 'B' (66, 0x42), 'C' (67, 0x43), 'D' (68, 0x44), 'E' (69, 0x45), 'F' (70, 0x46), 'G' (71, 0x47), 'H' (72, 0x48), 'I' (73, 0x49), 'J' (74, 0x4A), 'K' (75, 0x4B), 'L' (76, 0x4C), 'M' (77, 0x4D), 'N' (78, 0x4E), 'O' (79, 0x4F), 'P' (80, 0x50), 'Q' (81, 0x51), 'R' (82, 0x52), 'S' (83, 0x53), 'T' (84, 0x54) }
+]]></failure>
+      <failure message="C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp:333&#x0A;Expected equality of these values:&#x0A;  rig.stats.stray_bytes&#x0A;    Which is: 29&#x0A;  0u&#x0A;    Which is: 0&#x0A;" type=""><![CDATA[C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp:333
+Expected equality of these values:
+  rig.stats.stray_bytes
+    Which is: 29
+  0u
+    Which is: 0
+]]></failure>
+    </testcase>
+    <testcase name="LateUserReadDuringRadioQueryPreventsIdleRelink" file="C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp" line="336" status="run" result="completed" time="0." timestamp="2026-10-10T02:01:52.377" classname="ControllerSource">
+      <failure message="C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp:364&#x0A;Expected equality of these values:&#x0A;  rig.requestsOf(systemVersionRequest())&#x0A;    Which is: 2&#x0A;  1u&#x0A;    Which is: 1&#x0A;" type=""><![CDATA[C:\GATR2-Electronics\spectaGATR\receiver\tests\controller_gtest.cpp:364
+Expected equality of these values:
+  rig.requestsOf(systemVersionRequest())
+    Which is: 2
+  1u
+    Which is: 1
+]]></failure>
+    </testcase>
+  </testsuite>
+</testsuites>

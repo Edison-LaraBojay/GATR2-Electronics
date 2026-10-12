@@ -1,5 +1,6 @@
 // localization_config.h
-// Everything to edit for the localization demo. Rebuild and upload after a change.
+// Localization and viewer settings. Motor ports and controls are in drive_config.h.
+// Rebuild and upload after a change.
 //
 // Values come from the archived robot profile, brain/robot/gatr2_robot.h at
 // commit 10c568e.
@@ -20,6 +21,10 @@ namespace config
 {
 
 constexpr double kInch = 0.0254;
+
+// Controller/radio diagnostic: simulated pose only, no sensor reads or drive.
+// Set true and upload to a separate Brain slot; false restores normal localization.
+constexpr bool kControllerViewerTest = true;
 
 // VEX IMU, flat and right side up. Robot still while it calibrates.
 constexpr uint8_t kImuPort = 20;

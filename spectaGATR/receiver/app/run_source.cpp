@@ -73,6 +73,9 @@ void runSource(const Options& options, sources::SourceHooks hooks, platform::Sto
     case SourceChoice::kBrain: {
         sources::SerialSourceConfig config;
         config.searching_kind = searchingKindOf(options.source);
+        config.controller.read_length    = static_cast<sources::Byte>(options.user_read_length);
+        config.controller.radio_download = options.radio_download;
+        config.controller.pipeline       = static_cast<uint32_t>(options.pipeline);
         hooks.open_port = sources::makeVexPortOpener(portChoiceOf(options.source), options.port);
         sources::runSerialSource(config, hooks, stop);
         return;

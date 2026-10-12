@@ -45,6 +45,7 @@ endif()
 
 # Bytes to poses to JSON: protocol only, no OS code.
 spectagatr_library(spectagatr_receiver_feed
+    feed/delivery_meter.cpp
     feed/feed_json.cpp
     feed/feed_status.cpp
     feed/pose_feed.cpp
@@ -127,6 +128,7 @@ if(SPECTAGATR_BUILD_TESTS)
         tests/cdc2_gtest.cpp
         tests/command_line_gtest.cpp
         tests/controller_gtest.cpp
+        tests/delivery_meter_gtest.cpp
         tests/fakes_gtest.cpp
         tests/feed_json_gtest.cpp
         tests/feed_status_gtest.cpp

@@ -11,11 +11,15 @@
 
 #include "spectagatr/pros_publisher.h"
 
+#include <algorithm>
 #include <cstring>
 #include <unistd.h>
 
 #include "pros/misc.hpp"
 #include "pros/rtos.hpp"
+
+// VEXos SDK, exported by libpros.a.
+extern "C" int32_t vexSerialWriteFree(uint32_t channel);
 
 namespace spectagatr
 {
@@ -25,6 +29,24 @@ namespace
 constexpr uint32_t kPollMs     = 5;
 constexpr uint32_t kPriority   = TASK_PRIORITY_DEFAULT - 1;
 constexpr char     kTaskName[] = "spectagatr";
+
+// VEXos stdio FIFO (channel 1). A line is written only while at most about two
+// packets wait in it, so a slow reader (controller radio) gets the newest pose
+// instead of a queue of old ones, and with no reader the task stops writing
+// instead of blocking in write(). The empty size is the largest free count seen,
+// not assumed: PROS expects 2048, but a smaller FIFO must not close the gate for
+// good. A count that never moves leaves the gate open, as before the gate.
+constexpr uint32_t kStdioChannel   = 1;
+constexpr int32_t  kMaxQueuedBytes = 128;
+
+bool outputHasRoom(int32_t& empty_size) {
+    const int32_t free = vexSerialWriteFree(kStdioChannel);
+    if (free < 0) {
+        return true;
+    }
+    empty_size = std::max(empty_size, free);
+    return empty_size - free <= kMaxQueuedBytes;
+}
 
 Milliseconds prosMillis() { return pros::millis(); }
 
@@ -90,8 +112,9 @@ SessionId ProsPublisher::session() const { return publisher_.session(); }
 void ProsPublisher::run(void* self) {
     ProsPublisher& p = *static_cast<ProsPublisher*>(self);
     char           line[kLineCapacity];
+    int32_t        empty_size = 0;
     while (true) {
-        if (p.enabled_.load()) {
+        if (p.enabled_.load() && outputHasRoom(empty_size)) {
             const std::size_t length = p.publisher_.nextLine(pros::millis(), line, sizeof(line));
             if (length > 0) {
                 const ssize_t written = ::write(STDOUT_FILENO, line, length);

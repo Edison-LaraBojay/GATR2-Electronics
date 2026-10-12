@@ -26,6 +26,8 @@ struct FakeControllerOptions {
     bool        answer_radio       = true;
     RadioStatus radio              = RadioStatus{4, 90, -48, 55, 1};
     std::size_t max_bytes_per_read = std::numeric_limits<std::size_t>::max();
+    DurationUs  switch_drop_us     = 1000000; // Brain link down after a radio channel switch
+    bool        ack_switch         = true;
 };
 
 using Requests = std::vector<Bytes>;
@@ -52,6 +54,8 @@ class FakeController {
 
     const Requests& requests() const { return requests_; }
     std::size_t     pendingBrainBytes() const { return fifo_.size(); }
+    // FILE_CTRL channel values received, 1 download, 0 pit.
+    const std::vector<Byte>& channelSwitches() const { return channel_switches_; }
 
   private:
     struct PendingReply {
@@ -79,6 +83,8 @@ class FakeController {
     std::optional<Byte>      nack_;
     bool                     corrupt_   = false;
     bool                     unplugged_ = false;
+    std::vector<Byte>        channel_switches_;
+    ReceiverUs               link_down_until_ = 0;
 };
 
 // Extended reply bytes: AA 55 56 <size> <ecmd> <ack> <payload> <crc16 BE>.

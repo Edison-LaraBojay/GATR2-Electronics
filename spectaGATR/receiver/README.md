@@ -26,6 +26,10 @@ it runs without the ucrt64 DLLs on PATH. Nothing is fetched at runtime.
 | `--source auto\|controller\|brain\|sim\|file` | auto | where poses come from |
 | `--port NAME` | search | this serial port (COM7, /dev/ttyACM1) |
 | `--list-ports` | | print USB serial ports with their VEX role, then exit |
+| `--debug-link` | off | once a second to stderr: controller transport counters and pose delivery |
+| `--user-read-length N` | 0 | controller USER_READ length byte (0 to 255); 0 returns up to 224 bytes per reply, 64 at most 64 |
+| `--pipeline N` | 1 | controller USER_READs kept outstanding (1 to 4), experimental |
+| `--radio-download` | off | move a radio-linked controller to the download channel, back to pit on exit |
 | `--sim figure8\|circle\|square\|attitude\|restart\|dropout` | figure8 | sim motion (implies `--source sim`) |
 | `--rate HZ` / `--seed N` | 10 / 1 | sim rate (1..50) and session seed |
 | `--replay PATH` (`-` = stdin) | | replay raw bytes (implies `--source file`) |
@@ -39,12 +43,44 @@ it runs without the ucrt64 DLLs on PATH. Nothing is fetched at runtime.
 
 Ctrl+C stops it.
 
+For intermittent controller delivery, run `spectagatr --source controller --debug-link`. Two
+lines a second go to stderr:
+
+- `controller ...`: cumulative poll, empty-poll, timeout, bad-reply, late-reply, stray-byte,
+  padding-byte and delivered-byte counters, channel switches, the last round trip in ms and the
+  radio channel (`--` when unknown; 5 is download per vexide).
+- `delivery ...`: for the last second, poses accepted and their rate, the longest gap between
+  poses, lines lost in transport (seq gaps), gaps over `--stale-ms`, lag growth (poses arriving
+  older than the freshest ever seen, a sign of a queue), source bytes per second, lines the
+  parser dropped (`corrupt`), replies that carried data and poses per such reply.
+
+The controller radio carries about 64 bytes per USER_READ round trip. The Brain publisher only
+writes when its output queue is short, so a slow link gives fewer but fresh poses. Raising the
+rate needs more bytes per round trip:
+
+- Length 0 (the default, as vexide) returns up to 224 bytes per reply; measured on hardware: about
+  520 B/s with a 425 ms round trip, against about 200 B/s with pros-cli's 64. Full replies bring
+  several poses at once and the viewer shows the newest, so the screen updates once per reply.
+- `--pipeline 2` or `3` keeps more USER_READs outstanding for more, smaller replies per second.
+  Whether the controller answers overlapping requests is unverified; watch `timeouts`,
+  `replies_with_data` and `rate_hz`.
+- `--radio-download` moves the controller to the download channel, as `pros terminal` does.
+  Measured on hardware (2026-10-10): the pit channel costs about 235 ms of dead time per
+  USER_READ, so replies come about 3 times a second carrying 4 poses each, whatever the read
+  length or pipelining; on the download channel the round trip is 30 to 50 ms, 10 Hz arrives one
+  pose per reply with gaps of 110 to 180 ms and no loss. Use it for a demonstration. The Brain
+  link drops for a few seconds while the radio moves, so switch with the robot disabled; its
+  effect on joystick latency while driving and its legality under field control are unverified.
+  The controller goes back to pit when the receiver stops (Ctrl+C), or by itself about 10 s
+  after USB unplug.
+
 ## Sources
 
 - **auto**: a V5 controller if one is plugged in, else a Brain user port. Searches about once a
   second until one appears.
-- **controller**: CDC2 polling of the controller's port. It sends only SYSTEM_VERSION,
-  USER_READ (channel 1) and RADIO_STATUS: never stdin bytes, never a radio channel switch.
+- **controller**: CDC2 polling of the controller's port. It sends SYSTEM_VERSION, USER_READ
+  (channel 1) and RADIO_STATUS (every 10 s): never stdin bytes, and a radio channel switch only
+  with `--radio-download`.
   `status.detail` shows the link ("controller: Brain linked by radio, radio quality 90" or
   "controller: no Brain linked"). The RADIO_STATUS layout comes from vexide and is unverified.
   Trailing NUL bytes of each reply are dropped (the Brain may pad replies; a NUL inside a line
@@ -73,6 +109,11 @@ same or another device is opened again, without restarting the program. A line c
 disconnect is dropped, not joined to the next bytes. If the Brain program kept running, its
 poses continue (same session, newer seq) and the trail goes on; a new Brain program run (new
 session) or a pose reset (new epoch) breaks the trail. The browser reconnects by itself.
+
+Ordinary controller reply timeouts and retry backoff retain and parse late or split replies.
+A physical reconnect resets the scanner so bytes from different connections cannot join.
+The default stale threshold remains 750 ms: STALE means the pose is not fresh, and does not
+necessarily mean that USB or the radio has disconnected.
 
 ## Status, stale and age
 

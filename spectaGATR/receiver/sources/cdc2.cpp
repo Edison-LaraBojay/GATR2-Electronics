@@ -70,6 +70,10 @@ Bytes userReadRequest(Byte channel, Byte length) {
 
 Bytes radioStatusRequest() { return extendedRequest(kExtendedRadioStatus, Bytes{}); }
 
+Bytes radioChannelRequest(bool download) {
+    return extendedRequest(kExtendedFileControl, Bytes{0x01, static_cast<Byte>(download ? 1 : 0)});
+}
+
 CdcScan CdcReplyScanner::push(const Byte* data, std::size_t size) {
     CdcScan scan;
     buffer_.insert(buffer_.end(), data, data + size);

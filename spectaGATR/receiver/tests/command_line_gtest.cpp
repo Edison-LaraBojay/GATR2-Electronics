@@ -24,6 +24,7 @@ TEST(CommandLine, Defaults) {
     EXPECT_EQ(o.rate_hz, 10.0);
     EXPECT_EQ(o.sim_mode, sim::SimMode::kFigure8);
     EXPECT_TRUE(o.open_browser);
+    EXPECT_FALSE(o.debug_link);
     EXPECT_FALSE(o.port);
     EXPECT_EQ(o.robot.front, 0.1685);
     EXPECT_EQ(o.robot.left, 0.1465);
@@ -73,6 +74,39 @@ TEST(CommandLine, ReplayOptions) {
     EXPECT_EQ(parse({"--replay", "capture.bin"}).options->source, SourceChoice::kFile);
 }
 
+TEST(CommandLine, DebugLinkIsAFlag) {
+    const ParsedCommandLine parsed = parse({"--source", "controller", "--debug-link"});
+    ASSERT_TRUE(parsed.options) << parsed.error;
+    EXPECT_TRUE(parsed.options->debug_link);
+    const ParsedCommandLine with_value = parse({"--debug-link=true"});
+    EXPECT_FALSE(with_value.options);
+    EXPECT_EQ(with_value.error, "--debug-link takes no value");
+}
+
+TEST(CommandLine, ControllerBenchOptions) {
+    const ParsedCommandLine defaults = parse({"--source", "controller"});
+    ASSERT_TRUE(defaults.options) << defaults.error;
+    EXPECT_EQ(defaults.options->user_read_length, 0);
+    EXPECT_FALSE(defaults.options->radio_download);
+
+    const ParsedCommandLine set =
+        parse({"--source", "controller", "--user-read-length", "64", "--radio-download"});
+    ASSERT_TRUE(set.options) << set.error;
+    EXPECT_EQ(set.options->user_read_length, 64);
+    EXPECT_TRUE(set.options->radio_download);
+
+    EXPECT_FALSE(parse({"--user-read-length", "256"}).options);
+    EXPECT_FALSE(parse({"--user-read-length", "-1"}).options);
+    EXPECT_FALSE(parse({"--radio-download=yes"}).options);
+
+    EXPECT_EQ(defaults.options->pipeline, 1);
+    const ParsedCommandLine piped = parse({"--source", "controller", "--pipeline", "3"});
+    ASSERT_TRUE(piped.options) << piped.error;
+    EXPECT_EQ(piped.options->pipeline, 3);
+    EXPECT_FALSE(parse({"--pipeline", "0"}).options);
+    EXPECT_FALSE(parse({"--pipeline", "5"}).options);
+}
+
 TEST(CommandLine, Refusals) {
     EXPECT_FALSE(parse({"--source", "wifi"}).options);
     EXPECT_FALSE(parse({"--sim", "spiral"}).options);
@@ -100,6 +134,7 @@ TEST(CommandLine, HelpAndListPorts) {
     EXPECT_TRUE(parse({"-h"}).options->help);
     EXPECT_TRUE(parse({"--list-ports"}).options->list_ports);
     EXPECT_NE(usageText().find("--source auto|controller|brain|sim|file"), std::string::npos);
+    EXPECT_NE(usageText().find("--debug-link"), std::string::npos);
 }
 
 } // namespace

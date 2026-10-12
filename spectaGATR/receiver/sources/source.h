@@ -48,6 +48,8 @@ struct TransportStats {
     uint32_t                   late_replies     = 0; // answers to earlier, timed-out polls
     uint32_t                   stray_bytes      = 0; // outside any reply
     uint32_t                   padding_bytes    = 0; // controller: trailing NULs dropped
+    uint32_t                   data_bytes       = 0; // controller: Brain bytes delivered
+    uint32_t                   channel_switches = 0; // controller: radio moved to download
     std::optional<DurationUs>  rtt_us;               // last USER_READ round trip
     std::optional<RadioStatus> radio;                // last RADIO_STATUS
 };
