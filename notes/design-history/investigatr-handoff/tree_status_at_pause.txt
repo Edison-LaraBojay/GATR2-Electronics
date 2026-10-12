@@ -1,0 +1,35 @@
+ M common/frame_codec.cpp
+ M common/frame_codec.h
+ M common/frames.h
+ M common/tests/CMakeLists.txt
+ M common/tests/frame_codec_gtest.cpp
+ M common/tests/frames_gtest.cpp
+ M pcb/PiHat/PiHat_v2/RP4Hat/RP4Hat.kicad_sch
+ M pi/navigatr/CMakeLists.txt
+ M pi/navigatr/src/impl/resources/serial_links.cpp
+ M pi/navigatr/src/impl/resources/serial_links.h
+ M pi/navigatr/src/resources/serial_link.h
+ M pi/navigatr/src/transport/serial_port.cpp
+ M pi/navigatr/src/transport/serial_port.h
+ M pi/navigatr/tests/CMakeLists.txt
+?? brain/
+?? pi/navigatr/docs/printables/
+?? pi/navigatr/src/transport/half_duplex.cpp
+?? pi/navigatr/src/transport/half_duplex.h
+brain/CMakeLists.txt
+brain/investiGATR/CMakeLists.txt
+brain/investiGATR/include/investigatr/drive.h
+brain/investiGATR/include/investigatr/geometry.h
+brain/investiGATR/include/investigatr/input.h
+brain/investiGATR/include/investigatr/navigator.h
+brain/investiGATR/include/investigatr/odometry_source.h
+brain/investiGATR/include/investigatr/pid.h
+brain/investiGATR/sim/differential_drive_sim.cpp
+brain/investiGATR/sim/differential_drive_sim.h
+brain/investiGATR/sim/simulated_source.cpp
+brain/investiGATR/sim/simulated_source.h
+brain/investiGATR/src/drive.cpp
+brain/investiGATR/src/geometry.cpp
+brain/investiGATR/src/navigator.cpp
+brain/investiGATR/src/odometry_source.cpp
+brain/investiGATR/src/pid.cpp

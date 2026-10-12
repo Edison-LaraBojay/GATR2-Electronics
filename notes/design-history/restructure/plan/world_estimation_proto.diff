@@ -1,0 +1,740 @@
+diff -ruN orig/pi/naviGATR/src/impl/target_resolution/configured_targets.cpp clean/pi/naviGATR/src/impl/target_resolution/configured_targets.cpp
+--- orig/pi/naviGATR/src/impl/target_resolution/configured_targets.cpp	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/src/impl/target_resolution/configured_targets.cpp	2026-09-28 14:07:37.900078000 -0400
+@@ -8,6 +8,7 @@
+ #include "math/angles.h"
+ #include "payloads/field_object_evidence.h"
+ #include "resources/resource_store.h"
++#include "state/landmark_error.h"
+ 
+ namespace navigatr
+ {
+@@ -73,21 +74,24 @@
+     return resolver;
+ }
+ 
+-// Policy none: the current committed estimate, which is the nominal map
+-// pose or a previously committed observation, never in-flight evidence.
++// Policy none: the nominal target moved with the landmark's committed
++// error (zero while unobserved), never in-flight evidence.
+ Pose2D ConfiguredTargetResolution::estimateTargetPose(
+     const TargetDecl& decl, const TargetResolutionInput& in) const {
+-    Pose2D T_field_landmark;
++    Pose2D        landmark_nominal;
++    LandmarkError error;
+     if (const auto* lm = field_->find(decl.landmark)) {
+-        T_field_landmark = lm->nominal;
++        landmark_nominal = lm->nominal;
+     }
+     const auto it = in.field.objects.find(decl.landmark);
+     if (it != in.field.objects.end() && it->second.valid) {
+-        T_field_landmark = it->second.pose.pose;
+-    }
+-    const auto T_odom_landmark =
+-        compose(inverse(in.robot.field_from_odom), T_field_landmark);
+-    return decl.resolveFromLandmark(T_odom_landmark);
++        // an estimate without a map nominal is its own nominal
++        landmark_nominal = it->second.nominal.value_or(it->second.pose.pose);
++        error            = it->second.error;
++    }
++    const Pose2D T_field_target =
++        applyLandmarkError(error, landmark_nominal, decl.resolveFromLandmark(landmark_nominal));
++    return compose(inverse(in.robot.field_from_odom), T_field_target);
+ }
+ 
+ // Timeout fallback: strictly the immutable field map nominal. "Use nominal
+diff -ruN orig/pi/naviGATR/src/impl/world_estimation/landmark_estimator.cpp clean/pi/naviGATR/src/impl/world_estimation/landmark_estimator.cpp
+--- orig/pi/naviGATR/src/impl/world_estimation/landmark_estimator.cpp	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/src/impl/world_estimation/landmark_estimator.cpp	2026-09-28 14:07:37.899078900 -0400
+@@ -11,6 +11,17 @@
+ namespace navigatr
+ {
+ 
++namespace
++{
++
++// field pose and its error from nominal, always written together
++void setFieldPose(FieldObjectState& obj, const Pose2D& pose) {
++    obj.pose.pose = pose;
++    obj.error     = obj.nominal ? landmarkError(*obj.nominal, pose) : LandmarkError{};
++}
++
++} // namespace
++
+ std::optional<LandmarkEstimator> LandmarkEstimator::create(const ConfigNode& node,
+                                                            std::shared_ptr<const FieldMap> field,
+                                                            std::string& err) {
+@@ -52,7 +63,8 @@
+         }
+         FieldObjectState obj;
+         obj.pose.frame      = FrameId{"field"};
+-        obj.pose.pose       = decl.nominal;
++        obj.nominal         = decl.nominal;
++        setFieldPose(obj, decl.nominal);
+         obj.pose.measuredAt = now;
+         obj.confidence      = 0.5;
+         obj.valid           = true;
+@@ -73,14 +85,14 @@
+             obj.confidence           = 0.5;
+             obj.valid                = decl != nullptr;
+             if (decl != nullptr) {
+-                obj.pose.pose = decl->nominal;
++                setFieldPose(obj, decl->nominal);
+             }
+             obj.pose.measuredAt = now;
+             continue;
+         }
+         if (obj.anchor_revision != robot.anchor_revision) {
+             // a re-anchor re-expresses the same measurement consistently
+-            obj.pose.pose       = compose(robot.field_from_odom, obj.T_odom_object);
++            setFieldPose(obj, compose(robot.field_from_odom, obj.T_odom_object));
+             obj.anchor_revision = robot.anchor_revision;
+         }
+     }
+@@ -149,7 +161,7 @@
+                 wrapAngle(fused.heading_rad - obj.T_odom_object.heading_rad) * blend_);
+         }
+         obj.pose.frame           = FrameId{"field"};
+-        obj.pose.pose            = compose(robot.field_from_odom, obj.T_odom_object);
++        setFieldPose(obj, compose(robot.field_from_odom, obj.T_odom_object));
+         obj.pose.measuredAt      = a.newest;
+         obj.lastObservedAt       = a.newest;
+         obj.valid                = true;
+diff -ruN orig/pi/naviGATR/src/impl/world_estimation/tag_association_trace.h clean/pi/naviGATR/src/impl/world_estimation/tag_association_trace.h
+--- orig/pi/naviGATR/src/impl/world_estimation/tag_association_trace.h	1969-12-31 19:00:00.000000000 -0500
++++ clean/pi/naviGATR/src/impl/world_estimation/tag_association_trace.h	2026-09-28 14:07:37.897068300 -0400
+@@ -0,0 +1,60 @@
++// tag_association_trace.h
++// The tag mount association's decision made visible: every decoded tag with
++// its candidates, the accepted mount or the reason it was rejected, for
++// inspection. It never feeds estimation.
++
++#pragma once
++#include <cstddef>
++#include <cstdint>
++#include <string>
++#include <vector>
++
++#include "core/ids.h"
++#include "core/time.h"
++#include "math/transforms.h"
++#include "state/pose_history.h"
++
++namespace navigatr
++{
++
++namespace payload_names
++{
++constexpr const char* kTagAssociationTraceSet = "association.tag_association_trace_set";
++} // namespace payload_names
++
++struct TagAssociationCandidate {
++    FieldObjectId object;
++    std::string   mount;
++    Pose2D        implied;   // T_odom_object
++    double        translation_error_m = 0.0;
++    double        heading_error_rad   = 0.0;
++    double        score               = 0.0;
++};
++
++struct TagAssociationTrace {
++    std::size_t tag_index   = 0;   // index into the observation set's tags
++    std::string family;
++    int         observed_id = -1;
++    bool        accepted    = false;
++    std::string rejection;   // empty when accepted
++    FieldObjectId object;    // accepted object
++    std::string   mount;     // accepted mount
++    std::vector<TagAssociationCandidate> candidates;
++};
++
++struct TagAssociationTraceSet {
++    SensorId      camera;
++    uint32_t      frame_sequence = 0;
++    uint64_t      frame_epoch    = 0;
++    MonotonicTime exposureAt;
++    std::string   frame_note;   // whole-frame rejection, e.g. no pose at exposure
++    std::vector<TagAssociationTrace> tags;
++
++    // Preserve the exact lookup used by association for frame inspection.
++    bool has_exposure_context = false;
++    PoseSampleLookupResult exposure_context;
++    Pose2D field_from_odom;
++    uint64_t anchor_revision = 0;
++};
++
++} // namespace navigatr
+diff -ruN orig/pi/naviGATR/src/impl/world_estimation/tag_mount_association.cpp clean/pi/naviGATR/src/impl/world_estimation/tag_mount_association.cpp
+--- orig/pi/naviGATR/src/impl/world_estimation/tag_mount_association.cpp	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/src/impl/world_estimation/tag_mount_association.cpp	2026-09-28 14:07:37.904071000 -0400
+@@ -6,6 +6,7 @@
+ #include <typeindex>
+ 
+ #include "math/angles.h"
++#include "impl/world_estimation/tag_association_trace.h"
+ #include "payloads/field_object_evidence.h"
+ #include "payloads/tag_observations.h"
+ #include "resources/resource_store.h"
+diff -ruN orig/pi/naviGATR/src/inspection/inspection_document.cpp clean/pi/naviGATR/src/inspection/inspection_document.cpp
+--- orig/pi/naviGATR/src/inspection/inspection_document.cpp	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/src/inspection/inspection_document.cpp	2026-09-28 14:07:37.901076800 -0400
+@@ -1195,18 +1195,6 @@
+     w.field("diagnostic", field->diagnostic);
+     w.endObject();
+ 
+-    // nominal poses come from the configured maps, for heading error
+-    std::map<std::string, Pose2D> nominal;
+-    for (const ResourceStore::Record& r : system.resources().records()) {
+-        std::string err;
+-        auto        map = r.value.require<const FieldMap>(err);
+-        if (map == nullptr) {
+-            continue;
+-        }
+-        for (const LandmarkDecl& lm : map->landmarks) {
+-            nominal.emplace(lm.id.value, lm.nominal);
+-        }
+-    }
+     w.key("field_objects");
+     w.beginArray();
+     {
+@@ -1227,14 +1215,10 @@
+             w.field("confidence", o.confidence);
+             w.field("frame", o.pose.frame.value);
+             pose2(w, "pose", o.pose.pose);
+-            const auto n = nominal.find(kv->first.value);
+-            if (n != nominal.end()) {
+-                pose2(w, "nominal", n->second);
+-                w.field("heading_error_deg",
+-                        radToDeg(wrapAngle(o.pose.pose.heading_rad - n->second.heading_rad)));
+-                w.field("displacement_m",
+-                        std::hypot(o.pose.pose.x_m - n->second.x_m,
+-                                   o.pose.pose.y_m - n->second.y_m));
++            if (o.nominal) {
++                pose2(w, "nominal", *o.nominal);
++                w.field("heading_error_deg", radToDeg(o.error.dtheta));
++                w.field("displacement_m", std::hypot(o.error.dx, o.error.dy));
+             } else {
+                 w.fieldNull("nominal");
+                 w.fieldNull("heading_error_deg");
+diff -ruN orig/pi/naviGATR/src/math/units.h clean/pi/naviGATR/src/math/units.h
+--- orig/pi/naviGATR/src/math/units.h	1969-12-31 19:00:00.000000000 -0500
++++ clean/pi/naviGATR/src/math/units.h	2026-09-28 14:07:37.894093800 -0400
+@@ -0,0 +1,12 @@
++// units.h
++// Unit aliases.
++
++#pragma once
++
++namespace navigatr
++{
++
++using Meters  = double;
++using Radians = double;
++
++} // namespace navigatr
+diff -ruN orig/pi/naviGATR/src/payloads/field_object_evidence.h clean/pi/naviGATR/src/payloads/field_object_evidence.h
+--- orig/pi/naviGATR/src/payloads/field_object_evidence.h	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/src/payloads/field_object_evidence.h	2026-09-28 14:07:37.903083200 -0400
+@@ -9,10 +9,6 @@
+ // consumers can deduplicate per exposure; navigation intent (generations,
+ // preferred sources, allowed features) is deliberately absent - filtering
+ // by intent belongs to target resolution.
+-//
+-// The trace set is the same decision made visible: every decoded tag with
+-// its candidates, the accepted mount or the reason it was rejected, for
+-// inspection. It never feeds estimation.
+ 
+ #pragma once
+ #include <cstdint>
+@@ -22,7 +18,6 @@
+ #include "core/ids.h"
+ #include "core/time.h"
+ #include "math/transforms.h"
+-#include "state/pose_history.h"
+ 
+ namespace navigatr
+ {
+@@ -31,7 +26,6 @@
+ {
+ constexpr const char* kFieldObjectPoseEvidenceSet =
+     "association.field_object_pose_evidence_set";
+-constexpr const char* kTagAssociationTraceSet = "association.tag_association_trace_set";
+ } // namespace payload_names
+ 
+ struct FieldObjectPoseEvidence {
+@@ -51,39 +45,5 @@
+     std::vector<FieldObjectPoseEvidence> entries;
+ };
+ 
+-struct TagAssociationCandidate {
+-    FieldObjectId object;
+-    std::string   mount;
+-    Pose2D        implied;   // T_odom_object
+-    double        translation_error_m = 0.0;
+-    double        heading_error_rad   = 0.0;
+-    double        score               = 0.0;
+-};
+-
+-struct TagAssociationTrace {
+-    std::size_t tag_index   = 0;   // index into the observation set's tags
+-    std::string family;
+-    int         observed_id = -1;
+-    bool        accepted    = false;
+-    std::string rejection;   // empty when accepted
+-    FieldObjectId object;    // accepted object
+-    std::string   mount;     // accepted mount
+-    std::vector<TagAssociationCandidate> candidates;
+-};
+-
+-struct TagAssociationTraceSet {
+-    SensorId      camera;
+-    uint32_t      frame_sequence = 0;
+-    uint64_t      frame_epoch    = 0;
+-    MonotonicTime exposureAt;
+-    std::string   frame_note;   // whole-frame rejection, e.g. no pose at exposure
+-    std::vector<TagAssociationTrace> tags;
+-
+-    // Preserve the exact lookup used by association for frame inspection.
+-    bool has_exposure_context = false;
+-    PoseSampleLookupResult exposure_context;
+-    Pose2D field_from_odom;
+-    uint64_t anchor_revision = 0;
+-};
+ 
+ } // namespace navigatr
+diff -ruN orig/pi/naviGATR/src/runtime/inspection_state.h clean/pi/naviGATR/src/runtime/inspection_state.h
+--- orig/pi/naviGATR/src/runtime/inspection_state.h	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/src/runtime/inspection_state.h	2026-09-28 14:07:37.904071000 -0400
+@@ -15,8 +15,8 @@
+ #include "core/ids.h"
+ #include "core/records.h"
+ #include "core/time.h"
++#include "impl/world_estimation/tag_association_trace.h"
+ #include "payloads/camera_frames.h"
+-#include "payloads/field_object_evidence.h"
+ #include "payloads/tag_observations.h"
+ #include "state/pose_history.h"
+ 
+diff -ruN orig/pi/naviGATR/src/state/field_state.h clean/pi/naviGATR/src/state/field_state.h
+--- orig/pi/naviGATR/src/state/field_state.h	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/src/state/field_state.h	2026-09-28 14:07:37.899078900 -0400
+@@ -10,14 +10,19 @@
+ // re-expresses every estimate consistently while an odometry epoch change
+ // invalidates it back to the map nominal. A map-seeded entry is field
+ // geometry and has no odometry-frame value.
++//
++// A mapped entry also carries its map nominal and the LandmarkError of
++// its field pose from it, written together with the pose.
+ 
+ #pragma once
+ #include <cstdint>
++#include <optional>
+ #include <string>
+ #include <unordered_map>
+ 
+ #include "core/ids.h"
+ #include "math/transforms.h"
++#include "state/landmark_error.h"
+ 
+ namespace navigatr
+ {
+@@ -43,6 +48,8 @@
+     // targeting, so a pose outside the nominal field boundary is never
+     // clamped or rejected for that reason alone.
+     FramedPose2D pose;   // frame is field, derived under anchor_revision
++    std::optional<Pose2D> nominal;   // estimator's map pose, empty when not in its map
++    LandmarkError         error;     // pose minus nominal, field axes; zero without one
+     double         confidence = 0.0;
+     bool           valid      = false;
+     bool           observed   = false;   // updated by evidence this invocation
+diff -ruN orig/pi/naviGATR/src/state/landmark_error.h clean/pi/naviGATR/src/state/landmark_error.h
+--- orig/pi/naviGATR/src/state/landmark_error.h	1969-12-31 19:00:00.000000000 -0500
++++ clean/pi/naviGATR/src/state/landmark_error.h	2026-09-28 14:07:37.895074700 -0400
+@@ -0,0 +1,41 @@
++// landmark_error.h
++// A landmark's error from its map nominal pose, in field axes. (0, 0, 0) is
++// the field as built; the map's heading zero is only an authoring convention.
++
++#pragma once
++#include <cmath>
++
++#include "math/angles.h"
++#include "math/transforms.h"
++#include "math/units.h"
++
++namespace navigatr
++{
++
++struct LandmarkError {
++    Meters  dx     = 0.0;
++    Meters  dy     = 0.0;
++    Radians dtheta = 0.0;
++};
++
++// estimated minus nominal
++inline LandmarkError landmarkError(const Pose2D& nominal, const Pose2D& estimated) {
++    return LandmarkError{estimated.x_m - nominal.x_m, estimated.y_m - nominal.y_m,
++                         wrapAngle(estimated.heading_rad - nominal.heading_rad)};
++}
++
++// A nominal target relative to a landmark, moved with the landmark's error:
++// its offset from the nominal landmark rotates by dtheta, then shifts by
++// (dx, dy). Written as target plus correction so zero error is exact.
++inline Pose2D applyLandmarkError(const LandmarkError& error, const Pose2D& landmark_nominal,
++                                 const Pose2D& target_nominal) {
++    const Meters ox = target_nominal.x_m - landmark_nominal.x_m;
++    const Meters oy = target_nominal.y_m - landmark_nominal.y_m;
++    const double c  = std::cos(error.dtheta);
++    const double s  = std::sin(error.dtheta);
++    return Pose2D{target_nominal.x_m + error.dx + (c - 1.0) * ox - s * oy,
++                  target_nominal.y_m + error.dy + s * ox + (c - 1.0) * oy,
++                  wrapAngle(target_nominal.heading_rad + error.dtheta)};
++}
++
++} // namespace navigatr
+diff -ruN orig/pi/naviGATR/tests/capture_transform_gtest.cpp clean/pi/naviGATR/tests/capture_transform_gtest.cpp
+--- orig/pi/naviGATR/tests/capture_transform_gtest.cpp	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/tests/capture_transform_gtest.cpp	2026-09-28 14:07:37.905074800 -0400
+@@ -16,6 +16,7 @@
+ #include "math/angles.h"
+ #include "math/quaternion.h"
+ #include "math/se3.h"
++#include "impl/world_estimation/tag_association_trace.h"
+ #include "payloads/field_object_evidence.h"
+ #include "payloads/tag_observations.h"
+ #include "resources/resource_store.h"
+diff -ruN orig/pi/naviGATR/tests/CMakeLists.txt clean/pi/naviGATR/tests/CMakeLists.txt
+--- orig/pi/naviGATR/tests/CMakeLists.txt	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/tests/CMakeLists.txt	2026-09-28 14:07:37.908070800 -0400
+@@ -42,6 +42,7 @@
+     brain_profile_gtest.cpp
+     stationary_window_gtest.cpp
+     world_estimation_gtest.cpp
++    landmark_error_gtest.cpp
+     vision_targets_gtest.cpp
+     system_build_gtest.cpp
+     profiles_gtest.cpp
+diff -ruN orig/pi/naviGATR/tests/inspection_document_gtest.cpp clean/pi/naviGATR/tests/inspection_document_gtest.cpp
+--- orig/pi/naviGATR/tests/inspection_document_gtest.cpp	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/tests/inspection_document_gtest.cpp	2026-09-28 14:07:37.927186100 -0400
+@@ -14,9 +14,11 @@
+ #include <memory>
+ #include <string>
+ 
++#include "config/field_map.h"
+ #include "core/host_clock.h"
+ #include "inspection/inspection_document.h"
+ #include "inspection/json_writer.h"
++#include "math/angles.h"
+ #include "runtime/register_all.h"
+ #include "runtime/system.h"
+ #include "translaGATR/frame_codec.h"
+@@ -576,6 +578,41 @@
+ 
+ } // namespace
+ 
++TEST(InspectionDocuments, FieldObjectErrorsAreThePoseMinusNominal) {
++    FunctionRegistry functions;
++    registerAll(functions);
++    std::string             err;
++    std::unique_ptr<System> system = System::buildFromString(kRig, functions, err);
++    ASSERT_NE(system, nullptr) << err;
++    int64_t now = 1;
++    for (int i = 0; i < 180; ++i) {
++        now += 10;
++        system->step(hostTime(now));
++    }
++    const FieldObjectState goal = system->field().objects.at(FieldObjectId{"goal"});
++    ASSERT_EQ(goal.source, EstimateSource::kObserved);
++    const auto map = system->resources().require<const FieldMap>(ResourceId{"field"}, err);
++    ASSERT_NE(map, nullptr) << err;
++    const Pose2D nominal = map->find(FieldObjectId{"goal"})->nominal;
++
++    // the fields as written before the error existed
++    JsonWriter w;
++    w.beginObject();
++    w.field("heading_error_deg",
++            radToDeg(wrapAngle(goal.pose.pose.heading_rad - nominal.heading_rad)));
++    w.field("displacement_m",
++            std::hypot(goal.pose.pose.x_m - nominal.x_m, goal.pose.pose.y_m - nominal.y_m));
++    w.endObject();
++    const std::string legacy = w.str().substr(1, w.str().size() - 2);
++
++    const std::string snap = snapshotDocument(*system, InspectionServiceStats{}, hostTime(now));
++    const std::size_t at   = snap.find("\"field_objects\":[{\"id\":\"goal\"");
++    ASSERT_NE(at, std::string::npos) << snap;
++    const std::string object = balancedObject(snap, snap.find('{', at));
++    EXPECT_NE(object.find(legacy), std::string::npos) << object << "\n" << legacy;
++    EXPECT_EQ(object.find("\"heading_error_deg\":0,"), std::string::npos) << object;
++}
++
+ TEST(InspectionDocuments, StateHistoryAndDiagSplitTheSnapshot) {
+     FunctionRegistry functions;
+     auto             system = buildRig(functions);
+diff -ruN orig/pi/naviGATR/tests/landmark_error_gtest.cpp clean/pi/naviGATR/tests/landmark_error_gtest.cpp
+--- orig/pi/naviGATR/tests/landmark_error_gtest.cpp	1969-12-31 19:00:00.000000000 -0500
++++ clean/pi/naviGATR/tests/landmark_error_gtest.cpp	2026-09-28 14:07:37.898074500 -0400
+@@ -0,0 +1,131 @@
++// landmark_error_gtest.cpp
++// LandmarkError against the full-pose composition it replaces.
++
++#include <gtest/gtest.h>
++
++#include <random>
++
++#include "math/angles.h"
++#include "math/se3.h"
++#include "math/transforms.h"
++#include "resources/target_set.h"
++#include "state/landmark_error.h"
++
++using namespace navigatr;
++
++namespace
++{
++
++constexpr double kTol = 1e-12;
++
++// the chain of vision_targets_gtest
++TargetDecl visionTarget() {
++    TargetDecl decl;
++    decl.kind                           = TargetKind::kLandmarkRelative;
++    decl.T_landmark_approach            = makeTransform3(-0.14, 0, 0, 0, 0, kPi);
++    decl.T_robot_controlled             = makeTransform3(-0.40, 0, 0.05, 0, 0, kPi);
++    decl.desired_controlled_in_approach = Pose2D{0.05, 0.0, kPi};
++    return decl;
++}
++
++// Random poses; every fourth heading within 1e-9 of +-pi.
++struct Cases {
++    std::mt19937_64                        rng{20260928};
++    std::uniform_real_distribution<double> pos{-5.0, 5.0}, err{-0.5, 0.5}, ang{-kPi, kPi},
++        near{-1e-9, 1e-9}, dth{-0.6, 0.6}, off{-0.6, 0.6}, tilt{-0.2, 0.2};
++    int i = 0;
++
++    double heading() {
++        ++i;
++        return i % 4 == 0 ? wrapAngle((i % 8 == 0 ? kPi : -kPi) + near(rng)) : ang(rng);
++    }
++    Pose2D pose() {
++        const double x = pos(rng), y = pos(rng);
++        return Pose2D{x, y, heading()};
++    }
++    // displaced from nominal, heading error anywhere
++    Pose2D estimate(const Pose2D& nominal) {
++        const double x = nominal.x_m + err(rng), y = nominal.y_m + err(rng);
++        return Pose2D{x, y, i % 3 == 0 ? heading() : wrapAngle(nominal.heading_rad + dth(rng))};
++    }
++    TargetDecl tilted() {
++        TargetDecl decl;
++        decl.kind = TargetKind::kLandmarkRelative;
++        decl.T_landmark_approach =
++            makeTransform3(off(rng), off(rng), 0.1, tilt(rng), tilt(rng), ang(rng));
++        decl.T_robot_controlled =
++            makeTransform3(off(rng), off(rng), 0.05, tilt(rng), tilt(rng), ang(rng));
++        decl.desired_controlled_in_approach = Pose2D{off(rng), off(rng), ang(rng)};
++        return decl;
++    }
++};
++
++void expectSamePose(const Pose2D& a, const Pose2D& b, double tol) {
++    EXPECT_NEAR(a.x_m, b.x_m, tol);
++    EXPECT_NEAR(a.y_m, b.y_m, tol);
++    EXPECT_NEAR(wrapAngle(a.heading_rad - b.heading_rad), 0.0, tol);
++}
++
++} // namespace
++
++TEST(LandmarkError, ZeroIsTheIdentity) {
++    Cases cases;
++    for (int n = 0; n < 10000; ++n) {
++        const Pose2D landmark = cases.pose();
++        const Pose2D target   = cases.pose();
++        const Pose2D moved    = applyLandmarkError(LandmarkError{}, landmark, target);
++        EXPECT_EQ(moved.x_m, target.x_m);
++        EXPECT_EQ(moved.y_m, target.y_m);
++        EXPECT_EQ(moved.heading_rad, target.heading_rad);
++
++        const LandmarkError none = landmarkError(landmark, landmark);
++        EXPECT_EQ(none.dx, 0.0);
++        EXPECT_EQ(none.dy, 0.0);
++        EXPECT_EQ(none.dtheta, 0.0);
++    }
++}
++
++TEST(LandmarkError, RotatesTheOffsetAboutTheNominalLandmarkInFieldAxes) {
++    const Pose2D landmark{1.0, 2.0, kPi / 2.0};
++    const Pose2D target{1.5, 2.0, kPi / 2.0};   // 0.5 m along field +x
++    const Pose2D moved =
++        applyLandmarkError(LandmarkError{0.1, -0.2, kPi / 2.0}, landmark, target);
++    EXPECT_NEAR(moved.x_m, 1.1, kTol);
++    EXPECT_NEAR(moved.y_m, 2.3, kTol);
++    EXPECT_NEAR(moved.heading_rad, kPi, kTol);
++}
++
++TEST(LandmarkError, HelperEqualsTheFullPoseComposition) {
++    Cases            cases;
++    const TargetDecl vision = visionTarget();
++    for (int n = 0; n < 100000; ++n) {
++        const Pose2D nominal         = cases.pose();
++        const Pose2D estimated       = cases.estimate(nominal);
++        const Pose2D field_from_odom = cases.pose();
++        const TargetDecl& decl       = n % 2 == 0 ? vision : cases.tilted();
++
++        const Pose2D old = decl.resolveFromLandmark(compose(inverse(field_from_odom), estimated));
++        const Pose2D now = compose(inverse(field_from_odom),
++                                   applyLandmarkError(landmarkError(nominal, estimated), nominal,
++                                                      decl.resolveFromLandmark(nominal)));
++        expectSamePose(now, old, kTol);
++    }
++}
++
++TEST(LandmarkError, RoundTripsWithTheFieldPose) {
++    Cases cases;
++    for (int n = 0; n < 100000; ++n) {
++        const Pose2D        nominal   = cases.pose();
++        const Pose2D        estimated = cases.estimate(nominal);
++        const LandmarkError error     = landmarkError(nominal, estimated);
++
++        // nominal plus error
++        expectSamePose(applyLandmarkError(error, nominal, nominal), estimated, kTol);
++
++        const LandmarkError again =
++            landmarkError(nominal, applyLandmarkError(error, nominal, nominal));
++        EXPECT_NEAR(again.dx, error.dx, kTol);
++        EXPECT_NEAR(again.dy, error.dy, kTol);
++        EXPECT_NEAR(wrapAngle(again.dtheta - error.dtheta), 0.0, kTol);
++    }
++}
+diff -ruN orig/pi/naviGATR/tests/synthetic_rig_gtest.cpp clean/pi/naviGATR/tests/synthetic_rig_gtest.cpp
+--- orig/pi/naviGATR/tests/synthetic_rig_gtest.cpp	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/tests/synthetic_rig_gtest.cpp	2026-09-28 14:07:37.906079300 -0400
+@@ -14,7 +14,7 @@
+ #include "impl/resources/synthetic_rig.h"
+ #include "impl/resources/tag_detectors.h"
+ #include "math/angles.h"
+-#include "payloads/field_object_evidence.h"
++#include "impl/world_estimation/tag_association_trace.h"
+ #include "payloads/tag_observations.h"
+ #include "runtime/register_all.h"
+ #include "runtime/system.h"
+diff -ruN orig/pi/naviGATR/tests/vision_targets_gtest.cpp clean/pi/naviGATR/tests/vision_targets_gtest.cpp
+--- orig/pi/naviGATR/tests/vision_targets_gtest.cpp	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/tests/vision_targets_gtest.cpp	2026-09-28 14:07:37.925098700 -0400
+@@ -20,7 +20,7 @@
+ #include "impl/resources/cameras.h"
+ #include "math/angles.h"
+ #include "math/se3.h"
+-#include "payloads/field_object_evidence.h"
++#include "impl/world_estimation/tag_association_trace.h"
+ #include "payloads/tag_observations.h"
+ #include "resources/camera.h"
+ #include "resources/tag_detector.h"
+@@ -754,6 +754,42 @@
+                 1e-9);
+ }
+ 
++TEST(VisionTargets, PolicyNoneMovesTheNominalTargetWithTheLandmarkError) {
++    // a displaced, turned goal committed under a non-identity anchor
++    Fixture f;
++    f.robot->odom            = Pose2D{0.9, 1.7832, 0.0};
++    f.robot->field_from_odom = Pose2D{0.1, -0.05, 0.1};
++    const Pose2D displaced{kCenterGoal.x_m + 0.05, kCenterGoal.y_m - 0.03, 0.08};
++    f.pushFrame({f.detectionFor(displaced, kCenterMount, 0)});
++    f.stepOnce();
++    ASSERT_EQ(f.system->field().objects.at(FieldObjectId{"center_goal"}).source,
++              EstimateSource::kObserved);
++
++    f.select(3);   // policy none
++    f.stepOnce();
++    ASSERT_EQ(f.system->target().status, TargetStatus::kLockedNominal);
++    const Pose2D latched   = f.system->target().T_odom_robot_target;
++    const Pose2D goal_pose = f.system->field().objects.at(FieldObjectId{"center_goal"}).pose.pose;
++
++    std::string err;
++    const auto  targets =
++        f.system->resources().require<const TargetSet>(ResourceId{"targets"}, err);
++    ASSERT_NE(targets, nullptr) << err;
++    const TargetDecl* decl = targets->findByWireId(3);
++    ASSERT_NE(decl, nullptr);
++    const Pose2D T_odom_field = inverse(f.robot->field_from_odom);
++
++    // the full-pose composition this replaced
++    const Pose2D expected = decl->resolveFromLandmark(compose(T_odom_field, goal_pose));
++    EXPECT_NEAR(latched.x_m, expected.x_m, 1e-9);
++    EXPECT_NEAR(latched.y_m, expected.y_m, 1e-9);
++    EXPECT_NEAR(wrapAngle(latched.heading_rad - expected.heading_rad), 0.0, 1e-9);
++
++    // and not the nominal target
++    const Pose2D nominal = decl->resolveFromLandmark(compose(T_odom_field, kCenterGoal));
++    EXPECT_GT(std::hypot(latched.x_m - nominal.x_m, latched.y_m - nominal.y_m), 0.03);
++}
++
+ TEST(VisionTargets, OdometryEpochResetCancelsLatchedTarget) {
+     Fixture f;
+     f.robot->odom = Pose2D{0.9, 1.7832, 0.0};
+diff -ruN orig/pi/naviGATR/tests/world_estimation_gtest.cpp clean/pi/naviGATR/tests/world_estimation_gtest.cpp
+--- orig/pi/naviGATR/tests/world_estimation_gtest.cpp	2026-09-28 10:08:58.000000000 -0400
++++ clean/pi/naviGATR/tests/world_estimation_gtest.cpp	2026-09-28 14:07:37.909070100 -0400
+@@ -472,6 +472,61 @@
+     EXPECT_NEAR(goal.confidence, 0.5, 1e-12);
+ }
+ 
++TEST(LandmarkEstimator, SeededLandmarksCarryTheirNominalAndZeroError) {
++    LandmarkFixture f;
++    std::string     err;
++    auto            estimator = f.make(kNever, err);
++    ASSERT_TRUE(estimator.has_value()) << err;
++    f.run(*estimator);
++
++    const Pose2D nominal = f.map->find(FieldObjectId{"center_goal"})->nominal;
++    const auto&  goal    = f.field.objects.at(FieldObjectId{"center_goal"});
++    ASSERT_TRUE(goal.nominal.has_value());
++    EXPECT_EQ(goal.nominal->x_m, nominal.x_m);
++    EXPECT_EQ(goal.nominal->y_m, nominal.y_m);
++    EXPECT_EQ(goal.nominal->heading_rad, nominal.heading_rad);
++    EXPECT_EQ(goal.error.dx, 0.0);
++    EXPECT_EQ(goal.error.dy, 0.0);
++    EXPECT_EQ(goal.error.dtheta, 0.0);
++}
++
++TEST(LandmarkEstimator, ErrorIsDerivedWithTheFieldPoseUnderEveryAnchor) {
++    LandmarkFixture f;
++    std::string     err;
++    auto            estimator = f.make(kAlways, err);
++    ASSERT_TRUE(estimator.has_value()) << err;
++    const Pose2D nominal = f.map->find(FieldObjectId{"center_goal"})->nominal;
++    const auto   expectDerived = [&] {
++        const FieldObjectState& goal     = f.field.objects.at(FieldObjectId{"center_goal"});
++        const LandmarkError     expected = landmarkError(nominal, goal.pose.pose);
++        EXPECT_EQ(goal.error.dx, expected.dx);
++        EXPECT_EQ(goal.error.dy, expected.dy);
++        EXPECT_EQ(goal.error.dtheta, expected.dtheta);
++    };
++
++    f.robot.field_from_odom = Pose2D{0.3, -0.2, 0.25};
++    f.run(*estimator);
++    const auto set = LandmarkFixture::one("center_goal", 1.6, 1.9, kPi / 2.0 - 0.3, 0.9);
++    f.run(*estimator, &set);
++    expectDerived();
++    const LandmarkError moved = f.field.objects.at(FieldObjectId{"center_goal"}).error;
++    EXPECT_GT(std::hypot(moved.dx, moved.dy), 0.1);
++
++    // a re-anchor re-derives pose and error together
++    f.robot.anchor_revision += 1;
++    f.robot.field_from_odom = Pose2D{-0.4, 0.1, -1.0};
++    f.run(*estimator);
++    expectDerived();
++
++    // a new odometry epoch is back to exactly as built
++    f.robot.odometry_epoch += 1;
++    f.run(*estimator);
++    const LandmarkError reset = f.field.objects.at(FieldObjectId{"center_goal"}).error;
++    EXPECT_EQ(reset.dx, 0.0);
++    EXPECT_EQ(reset.dy, 0.0);
++    EXPECT_EQ(reset.dtheta, 0.0);
++}
++
+ TEST(LandmarkEstimator, StrictSchema) {
+     LandmarkFixture f;
+     std::string     err;
