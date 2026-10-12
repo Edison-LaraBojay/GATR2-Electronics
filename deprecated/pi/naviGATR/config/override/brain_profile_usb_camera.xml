@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- brain_profile_usb.xml plus a live camera preview in the viewer. The
+     localization, the Brain link over USB, the Pico link and the field are
+     exactly those of brain_profile_usb.xml; the camera only adds pictures.
+
+     PREVIEW ONLY. The camera has no intrinsic calibration and no measured
+     mounting, the world estimator is noop, no tag is decoded or associated,
+     and nothing from the camera corrects the pose or the field: the field
+     stays at its nominal definition and the pose comes from the wheels and
+     the IMU alone. Calibrated field estimation is a separate configuration
+     (docs/camera_preview.md, "Later: calibrated estimation").
+
+     A camera that is absent, unplugged or fails to start is a build warning
+     and an unavailable camera sensor; localization and the Brain link run
+     on. Preview size and rate stay bounded: 640x480 Y8 at 15 Hz capture,
+     and the viewer's per-client preview budget (preview_hz, preview_max_width).
+
+     Needs a binary built with -DNAVIGATR_WITH_LIBCAMERA=ON. A binary built
+     without it refuses this configuration at startup, naming the missing
+     backend; run brain_profile_usb.xml there. The capture mode is a
+     selection, not a measurement: pick a mode the camera lists
+     (rpicam-hello list-cameras) if libcamera refuses this one. Not yet run
+     with the physical camera. -->
+<Configuration id="brain_profile_usb_camera">
+    <ConfigurationName>Brain profile: USB Brain link, Pico encoders, camera preview (no field correction)</ConfigurationName>
+    <Loop rate_hz="100"/>
+    <Inspection enabled="true" bind="127.0.0.1" port="8765" snapshot_hz="20"
+                preview_hz="5" preview_quality="70" preview_max_width="640"/>
+    <Field file="field.xml"/>
+    <Robot>
+        <Resources>
+            <Resource id="pico_uart" type="linux_serial_link">
+                <Device path="/dev/ttyAMA0" required="true"/>
+                <Baud value="115200"/>
+            </Resource>
+            <!-- every Pico channel, so a profile only selects ports -->
+            <Resource id="pico_telemetry" type="pico_telemetry">
+                <Serial resource_id="pico_uart"/>
+                <Output id="encoder_0" channel="0"/>
+                <Output id="encoder_1" channel="1"/>
+                <Output id="encoder_2" channel="2"/>
+                <Output id="imu_0" channel="imu"/>
+                <!-- optional Pico diagnostic frames for the viewer -->
+                <Diagnostics hz="1"/>
+            </Resource>
+            <Resource id="brain_usb" type="pros_usb_link">
+                <Device path="auto"/>
+            </Resource>
+            <Resource id="brain_imu" type="brain_imu_bench"/>
+            <!-- no Calibration element: frames carry null intrinsics and the
+                 viewer labels metric output unavailable -->
+            <Resource id="front_camera_device" type="libcamera_camera">
+                <Device index="0"/>
+                <Capture width_px="640" height_px="480" pixel_format="Y8"
+                         frame_rate_hz="15"/>
+            </Resource>
+        </Resources>
+        <Sensors>
+            <!-- preview source only; no localization or world model reads it -->
+            <Sensor id="front_camera" type="camera_frame">
+                <Source resource_id="front_camera_device" output_id="frame"/>
+            </Sensor>
+        </Sensors>
+    </Robot>
+    <Pipeline>
+        <CommandCollection type="brain_link">
+            <Serial resource_id="brain_usb"/>
+            <BenchImu resource_id="brain_imu"/>
+            <Pico resource_id="pico_telemetry"/>
+        </CommandCollection>
+        <Localization>
+            <BrainProfile>
+                <Encoders resource_id="pico_telemetry" stale_after_ms="250">
+                    <Port index="0" output_id="encoder_0"/>
+                    <Port index="1" output_id="encoder_1"/>
+                    <Port index="2" output_id="encoder_2"/>
+                </Encoders>
+                <Imu port="0" resource_id="pico_telemetry" output_id="imu_0" stale_after_ms="250"/>
+                <BrainImu resource_id="brain_imu"/>
+                <Calibration bias_samples="20" window_ms="2000" max_gap_ms="250"
+                             still_travel_m="0.001" still_rate_dps="1" max_rate_dps="5"
+                             evidence_gap_ms="100" attempt_s="60"/>
+                <Timing interval_tolerance_ms="20" max_pending_ms="500" sensor_loss_ms="250"
+                        on_sensor_loss="unplace"/>
+                <!-- PLACEHOLDER noise, as in brain_profile_usb.xml -->
+                <Fusion max_wait_ms="100">
+                    <MotionNoise translation_floor_m="0.0005" translation_per_m="0.02"
+                                 rotation_floor_rad="0.001" rotation_per_rad="0.02"
+                                 rotation_per_m="0.01"/>
+                    <HeadingNoise angle_random_walk_rad_per_sqrt_s="0.002" bias_rad_per_s="0.0005"/>
+                </Fusion>
+                <History retention_s="5" capacity="1024" max_interpolation_gap_ms="150"/>
+            </BrainProfile>
+        </Localization>
+        <!-- noop: camera frames are published raw for the preview; nothing is
+             detected, associated or corrected -->
+        <WorldEstimation><Estimator id="none" type="noop"/></WorldEstimation>
+        <TargetResolution type="noop"/>
+        <Publishing type="brain_link">
+            <Serial resource_id="brain_usb"/>
+            <Health fresh_ms="150"/>
+            <Field resource_id="override_field" estimate_period_ms="200"/>
+            <Pico resource_id="pico_telemetry"/>
+        </Publishing>
+    </Pipeline>
+</Configuration>

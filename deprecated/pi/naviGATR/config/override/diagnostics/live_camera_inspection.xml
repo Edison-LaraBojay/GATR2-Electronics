@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Live camera inspection before calibration: the front camera streams
+through the AprilTag detector and the inspection service serves the viewer
+on loopback. Metric output is explicitly unavailable (no intrinsics, no
+mount); the viewer shows images, 2D decodes and the nominal field.
+
+    ./build/navigatr config/override/diagnostics/live_camera_inspection.xml
+    (from the viewing computer)  ssh -N -L 8765:127.0.0.1:8765 <user>@<pi-host>
+    browser                      http://127.0.0.1:8765/
+
+Needs a binary built with -DNAVIGATR_WITH_LIBCAMERA=ON; elsewhere the
+build fails naming the missing backend. The field map uses nominal CAD
+geometry. Not yet run on the Pi.
+-->
+<Configuration id="override_live_camera_inspection">
+    <ConfigurationName>Override live camera inspection (uncalibrated)</ConfigurationName>
+    <Loop rate_hz="30"/>
+    <Inspection enabled="true" bind="127.0.0.1" port="8765"
+                snapshot_hz="20" preview_hz="5" preview_quality="70" preview_max_width="640"/>
+    <Robot file="../../shared/robots/gatr2_front_camera_uncalibrated.xml"/>
+    <Field file="../field.xml"/>
+    <Pipeline file="../../shared/pipelines/camera_inspection_only.xml"/>
+</Configuration>

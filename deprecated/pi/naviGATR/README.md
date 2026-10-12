@@ -1,0 +1,278 @@
+# navigatr
+
+`navigatr` is the Raspberry Pi sensing runtime for the GATR2 VEX robot. It
+combines measurements into a robot pose and field-object estimates. Configured
+target resolution can turn a requested target into a desired robot pose; the
+Brain owns movement control and motor commands.
+
+Robot position and reported landmark position use the configured field
+coordinates. Robot heading is its orientation in that field. The landmark's
+inspection `heading_error` is its estimated rotation away from nominal, wrapped
+to `(-180, 180]` degrees. The brain link answers Brain requests only. Its field
+documents carry every configured object: the map with collision boxes, and the
+estimates as physical poses with full field heading, labeled nominal or
+observed. Configured targets stay on the Pi.
+
+**Robot configuration comes from the Brain.** The primary configs,
+[`config/override/brain_profile_usb.xml`](config/override/brain_profile_usb.xml)
+and [`brain_profile_rs485.xml`](config/override/brain_profile_rs485.xml), hold
+only the Pi's devices, wired ports and tuning; the Brain sends the tracking
+wheels, encoders, IMU source and footprint as a typed robot profile, and the
+Pi builds its localization from it. See [Brain robot profiles](docs/brain_profile.md).
+
+## Runtime design
+
+**First setup:** [Set up and run Navigatr](docs/setup.md) starts with the
+Brain-profiled robot, then covers Pi/Pico provisioning, build commands, camera
+calibration software, robot and camera geometry, the XML-configured
+three-wheel IMU + camera templates, launch commands, and output locations. The
+two parallel wheels + BNO08X XML profiles have their own
+[bring-up guide](docs/parallel_wheel_bringup.md). The current bench (USB, VEX
+IMU, forward and sideways wheels) is in [USB bench](docs/usb_localization_bench.md);
+[Pi setup and automatic startup](../../docs/pi_setup.md) covers Ethernet
+access, building, and starting naviGATR on every boot.
+
+These documents describe the implemented runtime and data contracts. Hardware
+integration still needs the checks recorded in the deployment documents.
+
+| Document | Responsibility |
+|---|---|
+| [Brain robot profiles](docs/brain_profile.md) | The Brain-profiled configs: who owns what, apply and continuity, supported setups and refusals, corrections applied once, calibration and stationary handling, CONTROL, sensor loss and recovery. |
+| [USB bench](docs/usb_localization_bench.md), [VEX IMU bench](docs/vex_imu_bench.md) | The current bench: USB link, forward and sideways wheels, the Brain VEX IMU. |
+| [Pico link](docs/pico_link.md) | Pico identity, status, commands and the serial reopen. |
+| [Configuration](docs/configuration.md) | Run commands, the compiled default file, inline XML, and nested file references. |
+| [Architecture](docs/architecture.md) | Captured resource/sensor functions, ResourceMap and SensorMap result contracts, all runtime paths, nested stage I/O, workers, and pose history. |
+| [Coordinates](docs/coordinates.md) | Field and robot axes, heading, camera mounting, attitude, and measurement-time transforms. |
+| [Landmarks](docs/landmarks.md) | Nominal and observed field state, association, target resolution, and Brain output. |
+| [Inspection](docs/inspection.md) | The `navigatr.inspect/2` feed, flow control and latency terms, the service, and the spectaGATR browser viewer. |
+| [Capture](docs/capture.md) | Bounded Pi-side diagnostic recording, triggers, the ZIP/CSV bundle and its metadata. |
+| [Camera preview](docs/camera_preview.md) | The camera shown on the Brain-profile USB setup with no field correction. |
+| [Perf harness](tools/perf/README.md) | Inspection and viewer latency measurements: baseline, rerun, compare. |
+| [Localization fusion](docs/localization_fusion.md) | Noise units, the weighted step, covariance propagation, and what the fusion estimator does not model. |
+| [Field assets](docs/field_assets.md) | Official Override CAD source, revision, units, axis conversion, planning data (boundary, wire ids, collision boxes), and what the field file was checked against. |
+| [Calibration inventory](docs/calibration_inventory.md) | Every remaining measurement, where it goes, and what it gates. |
+| [Pi camera setup](docs/pi_camera_setup.md) | libcamera stack, build flag, capture mode, exposure timing convention, hardware checks still to run. |
+| [Attitude follow-up](docs/attitude_firmware_followup.md) | What the Pico firmware would have to send for live tilt. |
+
+## What runs
+
+One executable, built once from a configuration, with two workers and an
+optional inspection service:
+
+```text
+construction   parse -> make_resources -> make_sensors -> make_localization
+               -> make_world_estimation -> target resolution, publishing slots
+               -> freeze (any failure destroys the candidate)
+
+estimation     resources -> sensors -> commands -> localization
+worker         -> target resolution + publishing against the newest field snapshot
+(loop rate)    -> hands the sensor snapshot to the field worker (latest wins)
+
+field worker   world estimation (apriltag: extraction -> association -> landmarks)
+(event driven) -> publishes an immutable FieldSnapshot and the detection frame
+               bound to its exact image identity
+
+inspection     reads snapshots only; JSON + JPEG over loopback HTTP/WebSocket
+service        at its own rate; a slow browser is skipped, never waited for
+```
+
+Localization is a self-contained component: configured robot-observation
+functions grouped by measurement model (`tracking_wheel_motion`,
+`imu_heading_increment`, `attitude_reference`, and the Brain VEX IMU bench
+models `brain_imu_planar_bench` and `brain_imu_parallel_bench`), one state estimator
+(`planar_motion_integrator`, or `weighted_planar_fusion` with an explicit
+uncertainty model and a pose covariance), and a history ring of recent poses that only
+localization writes. Readers get copied snapshots or synchronized timestamped
+lookups (`RobotStateFeed`). Every mutable state has one writer; `reset()` stops
+both workers, resets every stage once, and restarts them.
+
+## Implementation coverage
+
+Implemented and covered by host tests:
+
+- Aggregate stages `make_resources`, `make_sensors`, `make_localization`,
+  `make_world_estimation` with captured executors; typed result maps with receipt, provenance, sequence and
+  epoch preserved through derived records.
+- Tracking-wheel odometry with gyro heading, per-source interval alignment,
+  encoder rebase on a source restart, rejection of nonpositive intervals, no
+  endpoint bridging of invalid spans; optional attitude (quaternion) reconciled
+  with the planar heading, aged separately, level fallback labeled assumed.
+- Covariance-weighted fusion (`weighted_planar_fusion`): three wheels plus an
+  independent gyro blended by configured noise, translation re-solved through
+  the wheel geometry, pose covariance propagated; the checked-in
+  `config/demo/synthetic_fusion_demo.xml` runs it against the rig.
+- Pose history ring (binary search, shortest-arc yaw interpolation, attitude
+  slerp, gap and epoch gates, explicit lookup statuses).
+- Real AprilTag detection (vendored AprilRobotics detector, `tagCircle21h7` and
+  the other supported families) with 2D decoding without calibration, metric
+  poses only with intrinsics and a configured corner size, distortion undone
+  before the solve, every decoded tag visible with its association decision.
+- Capture-time transform chain with the camera offset, mounting rotation and
+  measured tilt; association by full pose against every mount sharing an id.
+- Two-worker scheduling with a bounded latest-frame handoff, per-worker rate
+  and drop counters, orderly shutdown.
+- Inspection feed `navigatr.inspect/2` (latest-state delivery with ping/pong
+  flow control, separate state and diag messages; the full `inspect/1`
+  snapshot stays at `GET /api/snapshot`), the service, and the spectaGATR
+  three.js viewer (field, robot and attitude, trail, nominal vs estimated
+  landmarks, camera image with identity-bound overlays, status badges,
+  diagnostics, latency panel, live graphs, transport instrumentation,
+  capture controls and ZIP replay).
+- Diagnostics: a bounded `DiagnosticsHub` fed by the runtime's producers,
+  always-on link counters, and a Pi-side capture service with triggers that
+  writes a store-only ZIP of CSVs.
+- A synthetic rig resource that drives the real pipeline without hardware:
+  encoder counts, gyro with bias, attitude (measured or unavailable), rendered
+  camera frames of the configured field, a displaced landmark.
+
+Implemented but not run on hardware (see the Pi camera setup document for the
+exact checks): the libcamera capture backend (`libcamera_camera`, built only
+with `-DNAVIGATR_WITH_LIBCAMERA=ON` on the Pi) including exposure timestamp
+mapping and buffer ownership.
+
+Implemented and host tested, not run on hardware:
+
+- The brain link (`brain_link` command collection and publishing, Brain link
+  v4 sessions, per-session dedupe, placement acknowledged only once applied)
+  over the half-duplex `linux_serial_link` (`DriverEnable`) or the Brain USB
+  port (`pros_usb_link`). The hardware checks are in
+  [Connect the Brain](docs/setup.md#hardware-checks-still-to-do).
+- Brain robot profiles: staging, validation, capability checks, the candidate
+  built from Pi templates, the controlled boundary and its continuity rules,
+  every supported topology and IMU source, each correction applied once.
+- Field documents for Brain planning (map with collision boxes, estimates of
+  every object), chunked and retained.
+- One stationary window for every IMU bias path, bounded calibration with
+  gated bias upkeep, zero velocity while stationary; CONTROL recalibrate,
+  reinitialize, Pico IMU reinit and acquisition restart; READ_WHEELS.
+- Recovery: a used source that drops ends pose continuity (the Brain places
+  again); Pico identity and restarts; serial reopen; a bounded event log.
+- Inspection of all of it: the Brain link state, profile, wheels, calibration,
+  Pico link, events and path, and the field's planning data in the viewer.
+
+Deferred, deliberately:
+
+- Live tilt from the Pico: the firmware sends gyro Z alongside encoders; the
+  protocol has optional accel XY fields, but the firmware does not populate
+  them, so Pico IMU profiles show attitude `assumed_level`. Brain VEX IMU
+  profiles get roll and pitch from Brain TELEMETRY for display and recording
+  (`measured`, then `stale` 250 ms after the last report); VEX sign
+  conventions are not yet checked on hardware. The estimator attitude path is
+  exercised by the synthetic rig.
+- Manual exposure and gain control for the camera (auto exposure is used).
+- Measured calibration values for the GATR2 robot: the robot templates stay
+  `.xml.in` until measured (see the calibration inventory).
+
+Synthetic tests and desktop browser checks do not establish Pi camera
+performance or physical alignment accuracy.
+
+## Configuration and calibration
+
+XML selects registered implementations and supplies their configuration. IDs are
+opaque references. Startup checks reject missing producers, incompatible payloads,
+duplicate outputs, and invalid calibration.
+
+- [`config/shared/robots/`](config/shared/robots/): the GATR2 robot templates
+  (`.xml.in`, measured values required), the uncalibrated camera fragment for
+  live inspection, and the synthetic rig fragments.
+- [`config/shared/pipelines/`](config/shared/pipelines/): the parallel-wheel
+  pipelines and their shared localization, three-wheel diagnostic pipelines, the
+  synthetic demo pipeline, and the camera-only inspection pipeline.
+- [`config/override/brain_profile_usb.xml`](config/override/brain_profile_usb.xml),
+  [`brain_profile_rs485.xml`](config/override/brain_profile_rs485.xml): the
+  primary robot configs; the Brain supplies the robot profile.
+- [`config/override/field.xml`](config/override/field.xml): nominal Override
+  geometry for nine goals and their tag mounts, the planning data (boundary,
+  wire ids, collision boxes), plus display dimensions and static features.
+- [`config/override/diagnostics/`](config/override/diagnostics/): the
+  XML-configured profiles: the VEX IMU bench profiles, the parallel-wheel
+  profiles (runnable once their robot file is measured), composed three-wheel
+  profile templates, and the runnable live camera inspection profile.
+- [`config/demo/`](config/demo/): hardware-free demo profiles.
+- [`config/examples/modular/main.xml`](config/examples/modular/main.xml): a minimal
+  runnable scaffold with separate Resources, Sensors, Pipeline, and Localization files.
+
+Files ending in `.xml.in` contain unmeasured or unresolved values and cannot be
+loaded. `calibration_status` is an optional reader annotation that runtime
+does not interpret; actual parameter values and geometry are validated.
+Display metadata (`Dimensions`, `Feature`,
+`Visual`) never feeds an estimate.
+
+## Build
+
+Host (Windows, Git Bash, from `pi/naviGATR`):
+
+```text
+export PATH=/c/msys64/ucrt64/bin:$PATH
+cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j8
+ctest --test-dir build --output-on-failure
+```
+
+Pi (Raspberry Pi OS, from `pi/naviGATR`; packages in the Pi camera setup
+document):
+
+```text
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNAVIGATR_WITH_LIBCAMERA=ON
+cmake --build build -j4
+ctest --test-dir build --output-on-failure
+```
+
+Without `NAVIGATR_WITH_LIBCAMERA`, selecting `libcamera_camera` is a
+configuration error naming the missing backend; nothing pretends to capture.
+
+## Run
+
+```text
+./build/navigatr [--config_file="profile.xml"] [--inspect-port <n>]
+                 [--cycles <n>] [--inline] [--replay <resource_id>=<capture.bin>]
+```
+
+- With no filename, the initial compiled default is
+  `config/demo/synthetic_field_demo.xml`. Select another at build time with
+  `cmake -S . -B build "-DNAVIGATR_DEFAULT_CONFIG=config/my_robot.xml"`, then rebuild.
+  The chosen path is baked in; XML contents are read on each startup.
+- `--config_file` overrides that choice for one run; `--config-file` and the
+  positional filename also work. `--help` prints the compiled default path.
+- Default execution: workers plus the inspection service when the profile enables it.
+  Ctrl-C stops the service, then the workers, then the system.
+- `--inline` runs every stage on one thread at the loop rate (replay, bench).
+  The brain link needs the default workers; `--inline` with it prints a warning.
+- `--inspect-port` enables the inspection service on loopback without editing
+  the profile.
+
+Hardware-free demo with the viewer:
+
+```text
+./build/navigatr
+./build/navigatr --config_file="config/demo/synthetic_field_demo_no_attitude.xml"
+./build/navigatr --config_file="config/demo/synthetic_fusion_demo.xml"
+```
+
+The robot, configured from the Brain (Pi; RS-485: `brain_profile_rs485.xml`):
+
+```text
+./build/navigatr --config_file="config/override/brain_profile_usb.xml"
+```
+
+It waits for the Brain's profile; `event: ...` lines log applies, refusals,
+sensor loss and recovery.
+
+Live camera inspection before metric calibration (Pi, libcamera build):
+
+```text
+./build/navigatr --config_file="config/override/diagnostics/live_camera_inspection.xml"
+```
+
+From the viewing computer, forward the port and open the page:
+
+```text
+ssh -N -L 8765:127.0.0.1:8765 <user>@<pi-host>
+http://127.0.0.1:8765/
+```
+
+The browser smoke test (`tools/viewer_smoke.sh`) starts the demo, loads the
+page headless, and checks that states and a detection frame arrived. The
+full browser suite is `py -3 tools/viewer/viewer_tests.py all --binary
+build/navigatr.exe` (headless Chrome or Edge; unit, live, no-WebGL,
+reconnect, replay, record, slow client, capture failure).

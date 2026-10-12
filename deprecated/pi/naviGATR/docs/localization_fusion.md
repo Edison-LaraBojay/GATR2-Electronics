@@ -1,0 +1,199 @@
+# Localization fusion
+
+`weighted_planar_fusion` is the state estimator that blends the supported
+robot observations by explicit uncertainty and carries a pose covariance.
+`planar_motion_integrator` remains available; it applies the same rules
+without a noise model. Both fill the single `Estimator` slot of
+`Localization` and produce the authoritative `RobotState`; there is no second
+fusion layer after them.
+
+```text
+SensorMap
+  -> tracking_wheel_motion   BodyMotionIncrement (d_w, dtheta_w, coupling J)
+  -> imu_heading_increment   HeadingIncrement    (dtheta_g)
+  -> attitude_reference      AttitudeObservation (tilt)
+  -> RobotObservationMap
+  -> weighted_planar_fusion  RobotState + odom_covariance + history
+```
+
+## Configuration
+
+```xml
+<Estimator type="weighted_planar_fusion">
+    <Motion observation_id="tracking_motion">
+        <Noise translation_floor_m="0.0005" translation_per_m="0.02"
+               rotation_floor_rad="0.001" rotation_per_rad="0.02"
+               rotation_per_m="0.01"/>
+    </Motion>
+    <Heading observation_id="imu_heading" max_wait_ms="100">                optional
+        <Noise angle_random_walk_rad_per_sqrt_s="0.002" bias_rad_per_s="0.0005"/>
+    </Heading>
+    <Attitude observation_id="attitude" max_age_ms="250"/>                  optional
+</Estimator>
+```
+
+Exactly one `Motion`, at most one `Heading`, at most one `Attitude`. Every
+reference must be a declared localization output of the matching payload;
+anything else, including landmark evidence, fails the build. `Noise` is
+required where present and every attribute is required: an absent value is
+an error, never a default. Floors must be positive. All values are one sigma.
+
+| Attribute | Units | Meaning |
+|---|---|---|
+| `translation_floor_m` | m | translation noise per step, per body axis, at zero travel |
+| `translation_per_m` | m/m | translation noise proportional to the distance of the step |
+| `rotation_floor_rad` | rad | wheel-solved rotation noise per step at zero motion |
+| `rotation_per_rad` | rad/rad | rotation noise proportional to the solved rotation |
+| `rotation_per_m` | rad/m | rotation noise proportional to the distance of the step |
+| `angle_random_walk_rad_per_sqrt_s` | rad/sqrt(s) | gyro angle random walk, must be positive |
+| `bias_rad_per_s` | rad/s | residual gyro bias after the model's calibration |
+
+The checked-in values in `config/shared/pipelines/synthetic_fusion_demo.xml`
+are placeholders. Nothing on the robot has been measured; the numbers are
+assumptions in the stated units. Replace them from stationary and known-path
+recordings before trusting the covariance.
+
+A Brain profile with three wheels and the Pico IMU selects this estimator: the
+Pi builds `tracking_wheel_motion` without a heading constraint,
+`imu_heading_increment` and `weighted_planar_fusion`, with the noise from
+`<BrainProfile><Fusion>` in the Pi config (also placeholders). See
+[Brain robot profiles](brain_profile.md#supported-setups).
+
+## Gyro bias
+
+`imu_heading_increment` publishes nothing until its bias is calibrated from a
+qualified stationary window, the same `StationaryWindow` every IMU bias path
+uses: `bias_samples` gyro samples spanning `window_ms` of sample time (2 s
+unless configured; never zero, so a burst of samples is no window), the rate
+steady and small, no gap over `evidence_gap_ms`, and every listed
+`<Calibration><Wheel sensor_id radius_m/>` still within `still_travel_m`. The
+wheels only gate the window; they are no part of the heading's lineage, so
+the gyro is still one independent contributor. No qualified window within
+`attempt_s` fails the calibration until a recalibrate; later windows adjust
+the bias in bounded steps; a gyro restart invalidates it. `bias_rad_per_s`
+above is the residual after that calibration.
+
+## Algorithm
+
+Per accepted step over an interval `dt` with body-frame wheel translation
+`d_w`, wheel rotation `dtheta_w`, and, when present, gyro rotation `dtheta_g`
+over the same interval:
+
+```text
+s_d^2 = floor_m^2 + (per_m |d_w|)^2                          per body axis
+s_w^2 = floor_rad^2 + (per_rad |dtheta_w|)^2 + (per_m |d_w|)^2
+s_g^2 = ARW^2 dt + (bias dt)^2
+
+w       = s_w^2 / (s_w^2 + s_g^2)
+dtheta  = dtheta_w + w (dtheta_g - dtheta_w)                 precision weighted
+var(dtheta) = s_w^2 s_g^2 / (s_w^2 + s_g^2)
+
+d       = d_w + J (dtheta - dtheta_w)                        J = d(d)/d(dtheta)
+var(d)  = s_d^2 I + J J' w^2 (s_w^2 + s_g^2)
+```
+
+`J` is the geometric coupling the wheel model publishes with every
+increment: for wheels with unit directions `U` and lever arms `k`,
+`d = (U'U)^-1 U' (m - k dtheta)`, so `J = -(U'U)^-1 U' k`. Revising the
+rotation with independent evidence re-solves the translation through the
+same measurements; a rear wheel's travel that the wheel-only solve blamed on
+rotation becomes translation when the gyro says the robot turned less.
+Without a coupling the published translation stands.
+
+The body increment `(d, dtheta)` becomes the chord of the constant-curvature
+arc `l = C(dtheta) d`, with the Jacobian of `C` applied to the covariance,
+and enters the odometry pose as
+
+```text
+x' = x + R(h) l,  h' = h + dtheta
+P' = F P F' + G Q G'      F = [[1, 0, -g_y], [0, 1, g_x], [0, 0, 1]],  G = [[R(h), 0], [0, 1]]
+```
+
+`F` carries the coupling of heading uncertainty into position: after a
+straight run, lateral uncertainty grows with the heading variance times the
+distance, which is what dead reckoning actually does. The covariance starts
+at zero at the odometry origin, which is exact by definition, and restarts
+there on reset. A placement re-anchors the field frame and leaves the
+odometry covariance alone.
+
+Cases:
+
+- Motion with rotation, no usable heading: wheel rotation with `s_w^2`.
+- Motion with rotation and an aligned, independent heading: the weighted
+  step above. The diagnostic reports the gyro weight.
+- Motion without observed rotation (`has_rotation` false) and an aligned
+  heading: the heading supplies the rotation, and through `J` the
+  translation `d = d_w + J dtheta_g` with the cross term `J s_g^2`. Without
+  a heading the step is refused; nothing is fabricated.
+- No motion: hold, effective time unchanged, attitude still folded.
+
+## Rules preserved from the integrator
+
+- Clock identity is a name, never a domain. A device stamp lives on the
+  clock its provenance names (the acquiring link, `pico_uart`); a host stamp
+  lives on the host clock. Two stamps compare only on one verified clock: a
+  motion whose sources name different clocks is a fault, a heading on a
+  different or unnamed clock is rejected with the clocks in the diagnostic,
+  and a motion whose clock identity changes is a discontinuity handled like
+  a source reboot (epoch advanced, step not integrated). Device stamps map
+  to the host clock through the receipt-based `DeviceToHostClock`; an
+  attitude on another device never borrows the wheel clock offset.
+- Heading support must equal the motion window exactly on that clock.
+  Angles are summed, never scaled by duration: a rate that changes inside
+  a window makes a scaled aggregate wrong even when the durations match.
+  Headings that start at the motion start and continue contiguously
+  accumulate inside the estimator (each accepted as it arrives) until the
+  support reaches the motion end; the motion stays pending meanwhile,
+  which the wheel model tolerates by retaining later travel. A heading
+  that starts elsewhere or overruns the window is rejected with the
+  reason. Every held motion window has a deadline of `max_wait_ms` (host
+  clock) from the invocation that first saw it, checked on every
+  invocation whether or not headings keep arriving: past it, any partial
+  support is dropped and the motion goes on with the wheel rotation alone,
+  or is rejected when it has none. This covers a stream of headings that
+  never continue the window, an oversized heading offered every cycle,
+  and no heading at all; nothing blocks the pipeline. The old
+  `interval_tolerance_ms` is refused at build.
+- Independence is decided by measurement lineage, not by sensor id.
+  `Provenance.measurement` names the acquisition output
+  (`pico_telemetry.imu`) and is carried through every derived record; two
+  sensors configured on the same output are one measurement, while the
+  encoders and the gyro of one Pico stay distinct. A heading that shares a
+  measurement with the motion is rejected and never counted twice. A wheel
+  profile with a `HeadingConstraint` already folds that gyro under
+  whatever id it was configured, so a `Heading` from the same output does
+  nothing but log the rejection, and the wheel profiles with a heading
+  constraint keep working unchanged. Sensor ids stay in `Provenance.source` for diagnostics.
+- Source time regression bumps the odometry epoch and integrates nothing.
+  A repeated effective time is rejected as already consumed, together with
+  a heading offered for that same window. Every offered observation is
+  accepted or rejected exactly once through `settle`.
+- The attitude is tilt only. Its yaw is discarded; the planar heading comes
+  from wheels and gyro. It ages on its own host time and falls back to an
+  explicitly assumed level attitude.
+- `confidence` stays a producer score. The covariance is `odom_covariance`
+  with `has_covariance`; the inspection snapshot carries it.
+
+## Not modeled
+
+- Correlation between wheel translation and wheel rotation inside one solve
+  (the real `(A'A)^-1` structure); the two are modeled independent in the
+  body frame with the coupling `J` re-solving translation.
+- Correlation between consecutive steps beyond what the pose covariance
+  carries (no bias state; gyro bias is a per-step term).
+- Any correction of the pose from landmarks. Landmark evidence is derived
+  through this pose and must not be fed back as a robot observation; the
+  build refuses its payload.
+- More than one motion or heading contributor.
+
+## Verification
+
+`tests/localization_fusion_gtest.cpp` covers the expected weighted result,
+uncertainty-dependent influence, the coupling re-solve, partial
+observations, the covariance recurrence against an independent restatement,
+shared sources, mismatched intervals, repeated samples, dropouts, holds,
+time regression, reset, placement, tilt-only attitude, the real wheel and
+gyro models through `make_localization` (three wheels plus an independent
+gyro, and two wheels with the constraint plus the same gyro), and the
+checked-in `config/demo/synthetic_fusion_demo.xml` against the rig's truth.
+None of it establishes the noise values; those are placeholders.

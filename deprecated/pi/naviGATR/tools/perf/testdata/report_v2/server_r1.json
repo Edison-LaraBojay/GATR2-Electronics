@@ -1,0 +1,12 @@
+{"tool":"navigatr_inspect_bench","conditions":{"contract":"navigatr.inspect/2","state_hz":30,"diag_hz":4,"reliable_kb":256,"send_buffer_kb":0,"snapshot_hz":20},
+ "scenarios":{
+  "build":{"state_build_us":{"n":10,"min":50,"p50":60,"p95":80,"p99":90,"max":90,"mean":62}},
+  "slow":{"clients":[
+    {"name":"fast","state":{"per_s":30,"publish_to_receive_ms":{"n":600,"min":0.3,"p50":0.46,"p95":0.67,"p99":1,"max":2.6,"mean":0.5}}},
+    {"name":"slow","state":{"per_s":8,"publish_to_receive_ms":{"n":160,"min":700,"p50":837,"p95":930,"p99":940,"max":950,"mean":840}},
+     "ping_offset_estimate":{"estimates":160,"too_wide":160,"publish_to_receive_ms":{"n":0,"min":0,"p50":0,"p95":0,"p99":0,"max":0,"mean":0},"half_width_ms":{"n":0,"min":0,"p50":0,"p95":0,"p99":0,"max":0,"mean":0}},
+     "server_view":{"queued_bytes":{"n":80,"min":0,"p50":21000,"p95":40000,"p99":41000,"max":41000,"mean":20000},
+                    "channels":{"state":{"sent":171,"replaced":229,"refused":0},"diag":{"sent":40,"replaced":38,"refused":0}},
+                    "preview_total":{"sent":12,"replaced":88,"refused":0},"reliable_total":{"sent":90}}}],
+   "server_workers_before":{"inspection":{"snapshots_skipped":0,"messages_replaced":0,"messages_refused":0,"closed_stalled":0,"closed_reliable_overflow":0}},
+   "server_workers_after":{"inspection":{"snapshots_skipped":229,"messages_replaced":355,"messages_refused":0,"closed_stalled":0,"closed_reliable_overflow":0}}}}}

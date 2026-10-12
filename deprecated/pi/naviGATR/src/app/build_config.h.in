@@ -1,0 +1,7 @@
+#pragma once
+
+namespace navigatr
+{
+// The chosen path is compiled in; XML contents are read when the app starts.
+inline constexpr const char* kDefaultConfigFile = "@NAVIGATR_DEFAULT_CONFIG_ESCAPED@";
+}

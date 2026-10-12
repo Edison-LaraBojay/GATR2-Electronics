@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Hardware-free fusion demo: the synthetic rig drives the whole runtime with
+three tracking wheels solving planar motion on their own plus a separate
+gyro heading observation, blended by weighted_planar_fusion. The AprilTag
+world estimator and the inspection service run as in synthetic_field_demo.
+
+    ./build/navigatr config/demo/synthetic_fusion_demo.xml
+    (from the viewing computer)  ssh -N -L 8765:127.0.0.1:8765 <user>@<pi-host>
+    browser                      http://127.0.0.1:8765/
+
+Every measurement in this run is synthetic truth produced by the rig, and
+every Noise value in the pipeline is a placeholder assumption, not a
+measured sensor property.
+-->
+<Configuration id="demo_synthetic_fusion">
+    <ConfigurationName>Synthetic fusion demo (three wheels + independent gyro)</ConfigurationName>
+    <Loop rate_hz="100"/>
+    <Inspection enabled="true" bind="127.0.0.1" port="8765"
+                snapshot_hz="20" preview_hz="5" preview_quality="70" preview_max_width="640">
+        <RobotBody length_m="0.40" width_m="0.36" height_m="0.25" origin_x_m="0" origin_y_m="0"/>
+    </Inspection>
+    <Robot file="../shared/robots/synthetic_rig.xml"/>
+    <Field file="../override/field.xml"/>
+    <Pipeline file="../shared/pipelines/synthetic_fusion_demo.xml"/>
+</Configuration>

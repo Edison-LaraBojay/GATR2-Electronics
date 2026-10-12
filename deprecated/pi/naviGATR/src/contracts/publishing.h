@@ -1,0 +1,61 @@
+// publishing.h
+// Publishing slot: the boundary encoder. It sees every product of the cycle
+// and decides what leaves the Pi. Wire formats, wire object ids, and fixed
+// point units are owned here, never by the states being published. The
+// no-op publishes nothing, successfully.
+
+#pragma once
+#include <functional>
+#include <memory>
+#include <optional>
+
+#include "translaGATR/frames.h"
+#include "config/config_node.h"
+#include "contracts/slot_init.h"
+#include "core/diagnostics.h"
+#include "core/function_status.h"
+#include "core/records.h"
+#include "state/command_state.h"
+#include "state/field_state.h"
+#include "state/robot_state.h"
+#include "state/robot_state_feed.h"
+#include "state/target_state.h"
+
+namespace navigatr
+{
+
+struct PublishingInput {
+    const SensorMap&          sensors;
+    const ObservationMap&     observations;
+    const AssociationMap&     associations;
+    const RobotState&         robot;
+    const LocalizationStatus& localization;
+    const FieldState&         field;
+    const CommandState&       command;
+    const TargetState&        target;
+    MonotonicTime             now;   // host clock
+    Diagnostics*              diagnostics = nullptr;
+};
+
+struct PublishingOutput {
+    FunctionStatus status = FunctionStatus::kOk;
+
+    // The state block a Brain GET_STATE would read now, for inspection. The
+    // brain_link publisher fills it every cycle; others leave it empty.
+    std::optional<translagatr::BrainState> brain_state;
+};
+
+class Publishing
+{
+public:
+    virtual ~Publishing() = default;
+
+    virtual PublishingOutput run(const PublishingInput& in) = 0;
+
+    virtual void reset() {}
+};
+
+using PublishingMakeFunction = std::function<std::unique_ptr<Publishing>(
+    const ConfigNode&, SlotInitializationContext&, std::string& err)>;
+
+} // namespace navigatr

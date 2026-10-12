@@ -15,10 +15,6 @@ desktop.ini
 secrets.local
 *.secret
 
-# Retired software and architecture references stay local, outside Git.
-# PCB design history remains tracked under pcb/.
-/deprecated/
-
 # ---------------------------------------------------------------------------
 # PlatformIO
 # ---------------------------------------------------------------------------
@@ -72,6 +68,9 @@ production/
 *.stp
 *.STEP
 *.wrl
+
+# Python
+__pycache__/
 
 # ---------------------------------------------------------------------------
 # Build output. The gate is: does it build and do the gtests pass.
